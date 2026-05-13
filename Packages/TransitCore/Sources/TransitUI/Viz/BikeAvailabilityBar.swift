@@ -60,7 +60,6 @@ public struct BikeAvailabilityBar: View {
                 Spacer()
                 Text(statusLabel)
                     .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(fillColor)
             }

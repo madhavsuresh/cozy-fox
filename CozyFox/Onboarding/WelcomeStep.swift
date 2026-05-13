@@ -15,12 +15,10 @@ struct WelcomeStep: View {
             VStack(spacing: ChicagoSpacing.xs) {
                 Text("Cozy Fox")
                     .font(ChicagoTypography.displayXL())
-                    .textCase(.uppercase)
                     .tracking(1)
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Text("Chicago Transit, Glanceable")
                     .font(ChicagoTypography.displayMD())
-                    .textCase(.uppercase)
                     .tracking(1)
                     .foregroundStyle(ChicagoPalette.bahama)
                     .multilineTextAlignment(.center)
@@ -48,7 +46,6 @@ struct WelcomeStep: View {
             Button(action: next) {
                 Text("Get Started")
                     .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                    .textCase(.uppercase)
                     .tracking(1)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)

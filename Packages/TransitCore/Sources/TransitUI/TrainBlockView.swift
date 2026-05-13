@@ -62,7 +62,6 @@ public struct TrainBlockView: View {
             } else {
                 Text("No data")
                     .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.Gray.light)
             }

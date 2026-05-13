@@ -75,7 +75,6 @@ public struct BigNumber: View {
             if let unit {
                 Text(unit)
                     .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(color.opacity(0.75))
                     .accessibilityHidden(true)

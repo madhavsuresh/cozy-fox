@@ -58,7 +58,6 @@ public struct ChicagoCard<Content: View>: View {
             if let eyebrow {
                 Text(eyebrow)
                     .font(ChicagoTypography.displaySM())
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.bahama)
                     .accessibilityLabel(eyebrow)
@@ -68,7 +67,6 @@ public struct ChicagoCard<Content: View>: View {
                     ornamentView
                     Text(title)
                         .font(ChicagoTypography.displayLG())
-                        .textCase(.uppercase)
                         .tracking(0.5)
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .accessibilityLabel(title)

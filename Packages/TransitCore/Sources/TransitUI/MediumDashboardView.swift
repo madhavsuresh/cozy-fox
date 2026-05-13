@@ -84,7 +84,6 @@ public struct MediumDashboardView: View {
                 if isStale {
                     Text("Stale")
                         .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                        .textCase(.uppercase)
                         .tracking(0.5)
                         .foregroundStyle(ChicagoPalette.Gray.light)
                         .padding(.horizontal, ChicagoSpacing.xs)
@@ -107,7 +106,6 @@ public struct MediumDashboardView: View {
                 .foregroundStyle(ChicagoPalette.Gray.light)
             Text(message)
                 .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         }

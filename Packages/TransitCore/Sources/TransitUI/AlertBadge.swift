@@ -19,7 +19,6 @@ public struct AlertBadge: View {
                     .accessibilityHidden(true)
                 Text("\(alerts.count) \(alerts.count == 1 ? "alert" : "alerts")")
                     .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                    .textCase(.uppercase)
                     .tracking(0.5)
             }
             .padding(.horizontal, ChicagoSpacing.sm)
