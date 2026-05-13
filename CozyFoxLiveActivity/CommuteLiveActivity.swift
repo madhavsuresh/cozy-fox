@@ -18,6 +18,59 @@ import WidgetKit
 
 private let activityBackground = Color(red: 0.10, green: 0.10, blue: 0.12)
 
+// Live Activity content is pushed on a background-refresh cadence, so the
+// `nextArrival` Date captured at update time will routinely age into the
+// past between pushes. `Text(_, style: .relative)` keeps ticking past
+// the target — it'll happily count up after zero — and `HeadwayDotStrip`
+// filters past entries (`delta >= 0`) — so the big number and the dot
+// strip can disagree. We re-derive the countdown from `upcomingArrivals`
+// against `TimelineView`'s `context.date` so the view body re-evaluates
+// at each arrival's moment and swaps the live-ticking `Text` over to
+// the next future arrival instead of counting up past zero.
+private enum Countdown {
+    case future(Date)
+    case none
+
+    var futureDate: Date? {
+        if case .future(let date) = self { return date }
+        return nil
+    }
+}
+
+private extension Array where Element == Date {
+    func firstFuture(now: Date, fallback: Date?) -> Countdown {
+        if let next = first(where: { $0 > now }) {
+            return .future(next)
+        }
+        if let fallback, fallback > now {
+            return .future(fallback)
+        }
+        return .none
+    }
+}
+
+@ViewBuilder
+private func countdownView(_ countdown: Countdown) -> some View {
+    switch countdown {
+    case .future(let date):
+        Text(date, style: .relative)
+    case .none:
+        Text(verbatim: "—")
+    }
+}
+
+// Dates at which we want the view body to re-evaluate so the countdown
+// can swap to the next future arrival instead of letting `Text(_,
+// style: .relative)` tick past zero. `upcomingArrivals` is the rich
+// list; `fallbackNext` covers older saved state. Sorted ascending,
+// duplicates removed — SwiftUI requires explicit schedules in
+// chronological order.
+private func timelineEntries(upcoming: [Date], fallback: Date) -> [Date] {
+    let now = Date.now
+    let combined = (upcoming.isEmpty ? [fallback] : upcoming) + [fallback]
+    return Array(Set(combined.filter { $0 > now })).sorted()
+}
+
 struct CommuteLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: CommuteAttributes.self) { context in
@@ -38,10 +91,12 @@ struct CommuteLiveActivity: Widget {
             } compactLeading: {
                 compactMarks(state: context.state)
             } compactTrailing: {
-                if let date = soonestDate(state: context.state) {
-                    Text(date, style: .relative)
-                        .font(ChicagoTypography.bigNumber(13, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                TimelineView(.explicit(compactTimelineEntries(state: context.state))) { timeline in
+                    countdownView(
+                        soonestCountdown(state: context.state, now: timeline.date)
+                    )
+                    .font(ChicagoTypography.bigNumber(13, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
                 }
             } minimal: {
                 compactMarks(state: context.state)
@@ -67,10 +122,18 @@ struct CommuteLiveActivity: Widget {
     private func expandedTrailing(state: CommuteAttributes.ContentState) -> some View {
         VStack(alignment: .trailing, spacing: ChicagoSpacing.xs) {
             if let train = state.train {
-                arrivalStack(next: train.nextArrival, following: train.followingArrival)
+                arrivalStack(
+                    upcoming: train.upcomingArrivals,
+                    fallbackNext: train.nextArrival,
+                    fallbackFollowing: train.followingArrival
+                )
             }
             if let bus = state.bus {
-                arrivalStack(next: bus.nextArrival, following: bus.followingArrival)
+                arrivalStack(
+                    upcoming: bus.upcomingArrivals,
+                    fallbackNext: bus.nextArrival,
+                    fallbackFollowing: bus.followingArrival
+                )
             }
         }
     }
@@ -137,24 +200,87 @@ struct CommuteLiveActivity: Widget {
         }
     }
 
-    private func arrivalStack(next: Date, following: Date?) -> some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            Text(next, style: .relative)
-                .font(ChicagoTypography.bigNumber(18, relativeTo: .subheadline))
-                .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
-            if let following {
-                Text(following, style: .relative)
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                    .monospacedDigit()
-                    .foregroundStyle(ChicagoPalette.OnDarkSafe.tertiary)
+    private func arrivalStack(
+        upcoming: [Date],
+        fallbackNext: Date,
+        fallbackFollowing: Date?
+    ) -> some View {
+        let entries = timelineEntries(upcoming: upcoming, fallback: fallbackNext)
+        return TimelineView(.explicit(entries)) { timeline in
+            let primary = upcoming.firstFuture(now: timeline.date, fallback: fallbackNext)
+            let secondary = secondaryFutureArrival(
+                upcoming: upcoming,
+                now: timeline.date,
+                fallback: fallbackFollowing
+            )
+            VStack(alignment: .trailing, spacing: 0) {
+                countdownView(primary)
+                    .font(ChicagoTypography.bigNumber(18, relativeTo: .subheadline))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                if let secondary {
+                    Text(secondary, style: .relative)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .monospacedDigit()
+                        .foregroundStyle(ChicagoPalette.OnDarkSafe.tertiary)
+                }
             }
         }
     }
 
-    private func soonestDate(state: CommuteAttributes.ContentState) -> Date? {
-        [state.train?.nextArrival, state.bus?.nextArrival]
-            .compactMap { $0 }
-            .min()
+    private func soonestCountdown(
+        state: CommuteAttributes.ContentState,
+        now: Date
+    ) -> Countdown {
+        let dates = [
+            state.train?.countdown(now: now),
+            state.bus?.countdown(now: now)
+        ].compactMap { $0?.futureDate }
+        if let soonest = dates.min() {
+            return .future(soonest)
+        }
+        return .none
+    }
+
+    private func compactTimelineEntries(
+        state: CommuteAttributes.ContentState
+    ) -> [Date] {
+        var dates: [Date] = []
+        if let train = state.train {
+            dates += train.upcomingArrivals
+            dates.append(train.nextArrival)
+        }
+        if let bus = state.bus {
+            dates += bus.upcomingArrivals
+            dates.append(bus.nextArrival)
+        }
+        let now = Date.now
+        return Array(Set(dates.filter { $0 > now })).sorted()
+    }
+}
+
+// Second future arrival after the primary, looking first at the
+// `upcoming` list, then at `fallback`. Used for the secondary line in
+// Dynamic Island's expanded trailing stack.
+private func secondaryFutureArrival(
+    upcoming: [Date],
+    now: Date,
+    fallback: Date?
+) -> Date? {
+    let futures = upcoming.filter { $0 > now }
+    if futures.count >= 2 { return futures[1] }
+    if let fallback, fallback > now { return fallback }
+    return nil
+}
+
+private extension CommuteAttributes.TrainLeg {
+    func countdown(now: Date) -> Countdown {
+        upcomingArrivals.firstFuture(now: now, fallback: nextArrival)
+    }
+}
+
+private extension CommuteAttributes.BusLeg {
+    func countdown(now: Date) -> Countdown {
+        upcomingArrivals.firstFuture(now: now, fallback: nextArrival)
     }
 }
 
@@ -243,47 +369,56 @@ private struct LegRow: View {
     let alert: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-            HStack(spacing: ChicagoSpacing.sm) {
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(accentColor)
-                    .frame(width: 4)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: ChicagoSpacing.xs) {
-                        badge
-                        Text(headline)
-                            .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                            .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+        // Wrap the whole leg in a TimelineView so the countdown text and
+        // the dot strip both re-evaluate at each arrival's moment —
+        // otherwise the countdown swaps to the next arrival while the
+        // dot strip stays frozen on the passed one.
+        TimelineView(.explicit(timelineEntries(upcoming: upcomingArrivals, fallback: nextArrival))) { timeline in
+            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                HStack(spacing: ChicagoSpacing.sm) {
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(accentColor)
+                        .frame(width: 4)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: ChicagoSpacing.xs) {
+                            badge
+                            Text(headline)
+                                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                                .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                                .lineLimit(1)
+                        }
+                        Text(subhead)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                            .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
                             .lineLimit(1)
+                        if let alert {
+                            Label(alert, systemImage: "exclamationmark.triangle.fill")
+                                .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                                .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
+                                .lineLimit(2)
+                        }
                     }
-                    Text(subhead)
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
-                        .lineLimit(1)
-                    if let alert {
-                        Label(alert, systemImage: "exclamationmark.triangle.fill")
-                            .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                            .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
-                            .lineLimit(2)
-                    }
-                }
-                Spacer(minLength: ChicagoSpacing.sm)
-                Text(nextArrival, style: .relative)
+                    Spacer(minLength: ChicagoSpacing.sm)
+                    countdownView(
+                        upcomingArrivals.firstFuture(now: timeline.date, fallback: nextArrival)
+                    )
                     .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
                     .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
-            }
+                }
 
-            // Headway dot-strip across the full row width — the same
-            // distribution the dashboard shows, so you can read the next
-            // arrivals *and* the bunching pattern at a glance from the
-            // lock screen.
-            if !dotStripArrivals.isEmpty {
-                HeadwayDotStrip(
-                    arrivals: dotStripArrivals,
-                    accent: accentColor,
-                    style: .onDark
-                )
-                .padding(.leading, 4 + ChicagoSpacing.sm)  // align with the text column
+                // Headway dot-strip across the full row width — the same
+                // distribution the dashboard shows, so you can read the next
+                // arrivals *and* the bunching pattern at a glance from the
+                // lock screen.
+                if !dotStripArrivals.isEmpty {
+                    HeadwayDotStrip(
+                        arrivals: dotStripArrivals,
+                        accent: accentColor,
+                        now: timeline.date,
+                        style: .onDark
+                    )
+                    .padding(.leading, 4 + ChicagoSpacing.sm)  // align with the text column
+                }
             }
         }
     }
@@ -311,43 +446,48 @@ private struct LegColumn: View {
     let alert: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
-            RoundedRectangle(cornerRadius: 2.5)
-                .fill(accentColor)
-                .frame(width: 4)
-            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                HStack(spacing: ChicagoSpacing.xs) {
-                    badge
-                    Text(headline)
-                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                        .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+        TimelineView(.explicit(timelineEntries(upcoming: upcomingArrivals, fallback: nextArrival))) { timeline in
+            HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(accentColor)
+                    .frame(width: 4)
+                VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                    HStack(spacing: ChicagoSpacing.xs) {
+                        badge
+                        Text(headline)
+                            .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                            .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Text(subhead)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Text(subhead)
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                    .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
-                    .lineLimit(1)
-                Text(nextArrival, style: .relative)
+                    countdownView(
+                        upcomingArrivals.firstFuture(now: timeline.date, fallback: nextArrival)
+                    )
                     .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
                     .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                if !dotStripArrivals.isEmpty {
-                    HeadwayDotStrip(
-                        arrivals: dotStripArrivals,
-                        accent: accentColor,
-                        style: .onDark
-                    )
+                    if !dotStripArrivals.isEmpty {
+                        HeadwayDotStrip(
+                            arrivals: dotStripArrivals,
+                            accent: accentColor,
+                            now: timeline.date,
+                            style: .onDark
+                        )
+                    }
+                    if let alert {
+                        Label(alert, systemImage: "exclamationmark.triangle.fill")
+                            .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
+                            .lineLimit(2)
+                    }
                 }
-                if let alert {
-                    Label(alert, systemImage: "exclamationmark.triangle.fill")
-                        .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                        .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
-                        .lineLimit(2)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

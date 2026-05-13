@@ -34,7 +34,10 @@ actor LiveActivityCoordinator {
 
         let identity = makeIdentity(prefs: prefs)
         let state = CommuteAttributes.ContentState(train: trainLeg, bus: busLeg)
-        let staleDate = soonestArrival(train: trainLeg, bus: busLeg).addingTimeInterval(120)
+        // Stale at the soonest arrival itself (no grace) so iOS marks the
+        // activity stale the moment its currently-published next arrival
+        // passes — the on-screen number is no longer authoritative.
+        let staleDate = soonestArrival(train: trainLeg, bus: busLeg)
 
         if let activity = current,
            activity.attributes.trainIdentity == identity.train,
@@ -97,7 +100,13 @@ actor LiveActivityCoordinator {
         if let destination = prefs.pinnedTrainDestination {
             arrivals = arrivals.filter { $0.destinationName == destination }
         }
-        let sorted = arrivals.sorted { $0.arrivalAt < $1.arrivalAt }
+        // Drop already-departed predictions so the published `nextArrival`
+        // and `upcomingArrivals` are all in the future — keeps the Live
+        // Activity countdown and dot strip in agreement at publish time.
+        let now = Date()
+        let sorted = arrivals
+            .filter { $0.arrivalAt > now }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
         let following = sorted.dropFirst().first
         return CommuteAttributes.TrainLeg(
@@ -123,7 +132,10 @@ actor LiveActivityCoordinator {
         if let direction = prefs.pinnedBusDirection {
             predictions = predictions.filter { $0.directionName == direction }
         }
-        let sorted = predictions.sorted { $0.arrivalAt < $1.arrivalAt }
+        let now = Date()
+        let sorted = predictions
+            .filter { $0.arrivalAt > now }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
         let following = sorted.dropFirst().first
         return CommuteAttributes.BusLeg(
@@ -154,9 +166,11 @@ actor LiveActivityCoordinator {
         await endCurrentIfNeeded()
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
+        let now = Date()
         let upcoming = snapshot.trainArrivals
             .filter { $0.line == preference.line }
             .filter { $0.stationId == preference.mapId || preference.mapId == 0 }
+            .filter { $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let first = upcoming.first
         let trainLeg = CommuteAttributes.TrainLeg(
@@ -164,7 +178,7 @@ actor LiveActivityCoordinator {
             lineColorRaw: preference.line.rawValue,
             stopName: preference.stationName,
             destination: first?.destinationName ?? preference.directionLabel,
-            nextArrival: first?.arrivalAt ?? Date().addingTimeInterval(600),
+            nextArrival: first?.arrivalAt ?? now.addingTimeInterval(600),
             followingArrival: upcoming.dropFirst().first?.arrivalAt,
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: preference.line, busRoute: nil)
@@ -173,7 +187,7 @@ actor LiveActivityCoordinator {
         )
 
         let state = CommuteAttributes.ContentState(train: trainLeg, bus: nil)
-        let staleDate = trainLeg.nextArrival.addingTimeInterval(120)
+        let staleDate = trainLeg.nextArrival
         await startInternal(
             identity: (train: "\(preference.mapId)-\(trainLeg.destination)", bus: nil),
             state: state,
