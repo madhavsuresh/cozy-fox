@@ -300,16 +300,17 @@ final class RefreshCoordinator {
             await store.recordStationSnapshots(stations)
 
             guard let origin else {
-                await store.replaceNearestBike(nil)
+                await store.replaceNearbyBikePicks([])
                 return
             }
-            let pick = resolver.pick(
+            let picks = resolver.picks(
+                top: 3,
                 from: (origin.latitude, origin.longitude),
                 stations: stations,
                 eBikes: ebikes,
                 includeFreeFloating: includeFreeFloating
             )
-            await store.replaceNearestBike(pick)
+            await store.replaceNearbyBikePicks(picks)
         } catch {
             // leave previous nearest bike in place
         }

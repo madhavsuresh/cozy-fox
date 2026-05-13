@@ -1,4 +1,5 @@
 import ChicagoTheme
+import MapKit
 import SwiftUI
 import TransitDomain
 import TransitModels
@@ -749,13 +750,43 @@ struct DashboardScreen: View {
     // MARK: - Bikes
 
     private var bikeCard: some View {
-        ChicagoCard(title: "Closest e-bike",
+        ChicagoCard(title: "Closest e-bikes",
                     eyebrow: "Divvy",
                     ornament: .icon(systemName: "bicycle")) {
-            BikeBlockView(pick: model.snapshot.nearestBike)
-                .frame(height: 130)
+            let picks = model.snapshot.nearbyBikePicks
+            if picks.isEmpty {
+                Text("No e-bikes within walking distance")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(spacing: ChicagoSpacing.xs) {
+                    ForEach(Array(picks.prefix(3).enumerated()), id: \.element.station.id) { index, pick in
+                        BikeStationRow(pick: pick)
+                        if index < min(picks.count, 3) - 1 {
+                            Rectangle()
+                                .fill(ChicagoPalette.cornflower.opacity(0.25))
+                                .frame(height: ChicagoSpacing.Stroke.hairline)
+                        }
+                    }
+                    if picks.count > 1 {
+                        Button {
+                            model.activeDetail = .bikeNearest
+                        } label: {
+                            HStack(spacing: ChicagoSpacing.xs) {
+                                Text("See all on map")
+                                Image(systemName: "chevron.right")
+                            }
+                            .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                            .foregroundStyle(ChicagoPalette.flagBlue)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.top, ChicagoSpacing.xs)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
-        .onTapGesture { model.activeDetail = .bikeNearest }
     }
 
     // MARK: - Near You (deduped by line / by route) — small multiples
@@ -1079,5 +1110,53 @@ private enum DistanceFormatter {
         } else {
             return String(format: "%.1f km", meters / 1_000)
         }
+    }
+}
+
+// MARK: - Bike station row
+
+private struct BikeStationRow: View {
+    let pick: NearestBikePick
+
+    var body: some View {
+        Button(action: openInAppleMaps) {
+            HStack(alignment: .center, spacing: ChicagoSpacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pick.station.name)
+                        .font(ChicagoTypography.displaySM())
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text("\(pick.walkingMinutes) min walk")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                }
+                Spacer(minLength: ChicagoSpacing.sm)
+                BigNumber(
+                    pick.station.eBikesAvailable,
+                    unit: pick.station.eBikesAvailable == 1 ? "e-bike" : "e-bikes",
+                    size: .md,
+                    tone: pick.station.isScarce ? .warning : .accent,
+                    accessibilityLabel: "\(pick.station.eBikesAvailable) e-bikes available"
+                )
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .padding(.vertical, ChicagoSpacing.xs)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(pick.station.name), \(pick.walkingMinutes) minute walk, \(pick.station.eBikesAvailable) e-bikes available")
+        .accessibilityHint("Opens this station in Apple Maps")
+    }
+
+    private func openInAppleMaps() {
+        let coord = CLLocationCoordinate2D(
+            latitude: pick.station.latitude,
+            longitude: pick.station.longitude
+        )
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: coord))
+        item.name = pick.station.name
+        item.openInMaps()
     }
 }

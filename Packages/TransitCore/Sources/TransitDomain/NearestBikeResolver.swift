@@ -31,6 +31,29 @@ public struct NearestBikeResolver: Sendable {
         includeFreeFloating: Bool,
         now: Date = .now
     ) -> NearestBikePick? {
+        picks(
+            top: 1,
+            from: origin,
+            stations: stations,
+            eBikes: eBikes,
+            includeFreeFloating: includeFreeFloating,
+            now: now
+        ).first
+    }
+
+    /// Returns up to `top` nearest stations (by walking distance) that each have
+    /// at least one usable e-bike. Sorted ascending by distance. Used by the
+    /// dashboard's "Closest e-bikes" list.
+    public func picks(
+        top: Int,
+        from origin: (lat: Double, lon: Double),
+        stations: [BikeStation],
+        eBikes: [EBike],
+        includeFreeFloating: Bool,
+        now: Date = .now
+    ) -> [NearestBikePick] {
+        guard top > 0 else { return [] }
+
         let usableBikes = eBikes.filter { !$0.isReserved && !$0.isDisabled
             && $0.currentRangeMeters >= minimumUsableRangeMeters }
 
@@ -67,14 +90,15 @@ public struct NearestBikeResolver: Sendable {
             )
         }
 
-        guard let winner = candidates.min(by: <) else { return nil }
-        return NearestBikePick(
-            station: winner.station,
-            walkingDistanceMeters: winner.walkingDistance,
-            bestRangeMeters: winner.bestRange,
-            freeFloatingNearby: winner.freeFloating,
-            computedAt: now
-        )
+        return candidates.sorted(by: <).prefix(top).map { winner in
+            NearestBikePick(
+                station: winner.station,
+                walkingDistanceMeters: winner.walkingDistance,
+                bestRangeMeters: winner.bestRange,
+                freeFloatingNearby: winner.freeFloating,
+                computedAt: now
+            )
+        }
     }
 }
 

@@ -34,28 +34,30 @@ public struct SnapshotReader: Sendable {
         let activeAlerts = alerts.map(\.asModel)
             .filter { $0.isActive(at: now) }
 
-        let nearest = nearestBikes.first.map { row -> NearestBikePick in
-            let station = BikeStation(
-                id: row.stationId,
-                name: row.stationName,
-                latitude: row.latitude,
-                longitude: row.longitude,
-                capacity: row.capacity,
-                eBikesAvailable: row.eBikesAvailable,
-                classicBikesAvailable: 0,
-                docksAvailable: max(0, row.capacity - row.eBikesAvailable),
-                isRenting: true,
-                isReturning: true,
-                lastReported: row.computedAt
-            )
-            return NearestBikePick(
-                station: station,
-                walkingDistanceMeters: row.walkingDistanceMeters,
-                bestRangeMeters: row.bestRangeMeters,
-                freeFloatingNearby: row.freeFloatingNearby,
-                computedAt: row.computedAt
-            )
-        }
+        let nearbyPicks = nearestBikes
+            .sorted { $0.rank < $1.rank }
+            .map { row -> NearestBikePick in
+                let station = BikeStation(
+                    id: row.stationId,
+                    name: row.stationName,
+                    latitude: row.latitude,
+                    longitude: row.longitude,
+                    capacity: row.capacity,
+                    eBikesAvailable: row.eBikesAvailable,
+                    classicBikesAvailable: 0,
+                    docksAvailable: max(0, row.capacity - row.eBikesAvailable),
+                    isRenting: true,
+                    isReturning: true,
+                    lastReported: row.computedAt
+                )
+                return NearestBikePick(
+                    station: station,
+                    walkingDistanceMeters: row.walkingDistanceMeters,
+                    bestRangeMeters: row.bestRangeMeters,
+                    freeFloatingNearby: row.freeFloatingNearby,
+                    computedAt: row.computedAt
+                )
+            }
 
         return TransitSnapshot(
             // 50 / 50 is enough headroom for: 3 nearest stations × ~5 trains
@@ -65,11 +67,12 @@ public struct SnapshotReader: Sendable {
             // stations once a busy primary station filled the budget.
             trainArrivals: Array(arrivals.prefix(50)),
             busPredictions: Array(predictions.prefix(50)),
-            nearestBike: nearest,
+            nearestBike: nearbyPicks.first,
+            nearbyBikePicks: nearbyPicks,
             activeAlerts: activeAlerts,
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
-            bikesFetchedAt: nearestBikes.first?.computedAt,
+            bikesFetchedAt: nearbyPicks.first?.computedAt,
             alertsFetchedAt: alerts.first?.fetchedAt
         )
     }

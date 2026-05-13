@@ -154,11 +154,13 @@ public final class CachedEBikeStation {
     }
 }
 
-/// Pre-computed "what to show on the widget right now". One row that the widget
-/// reads on every timeline refresh, written by `TransitStore.refreshAll()`.
+/// Pre-computed "what to show on the dashboard / widget right now". One row per
+/// rank (0 = closest), written together by `TransitStore.replaceNearbyBikePicks`.
+/// The widget reads `rank == 0`; the dashboard reads all rows sorted by `rank`.
 @Model
 public final class CachedNearestBike {
     @Attribute(.unique) public var key: String
+    public var rank: Int = 0
     public var stationId: String
     public var stationName: String
     public var latitude: Double
@@ -170,8 +172,9 @@ public final class CachedNearestBike {
     public var freeFloatingNearby: Int
     public var computedAt: Date
 
-    public init(pick: NearestBikePick) {
-        self.key = "singleton"
+    public init(pick: NearestBikePick, rank: Int = 0) {
+        self.key = "rank-\(rank)"
+        self.rank = rank
         self.stationId = pick.station.id
         self.stationName = pick.station.name
         self.latitude = pick.station.latitude
