@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitModels
 
@@ -12,25 +13,32 @@ public struct AlertBadge: View {
         if alerts.isEmpty {
             EmptyView()
         } else {
-            HStack(spacing: 4) {
+            HStack(spacing: ChicagoSpacing.xs) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption2)
-                Text("\(alerts.count) alert\(alerts.count == 1 ? "" : "s")")
-                    .font(.caption2.weight(.semibold))
+                    .accessibilityHidden(true)
+                Text("\(alerts.count) \(alerts.count == 1 ? "alert" : "alerts")")
+                    .font(ChicagoTypography.displaySM(relativeTo: .caption2))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(badgeColor.opacity(0.2), in: Capsule())
+            .padding(.horizontal, ChicagoSpacing.sm)
+            .padding(.vertical, 3)
+            .background(badgeColor.opacity(0.18),
+                        in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm))
             .foregroundStyle(badgeColor)
+            .accessibilityLabel(
+                "\(alerts.count) service \(alerts.count == 1 ? "alert" : "alerts")"
+            )
         }
     }
 
     private var badgeColor: Color {
         let highest = alerts.map(\.severity).max(by: severityOrder)
         switch highest ?? .low {
-        case .high: return .red
-        case .medium: return .orange
-        case .low: return .yellow
+        case .high:   return ChicagoPalette.starRed
+        case .medium: return ChicagoPalette.gold
+        case .low:    return ChicagoPalette.bahama
         }
     }
 

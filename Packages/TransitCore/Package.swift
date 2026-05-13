@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "TransitCache", targets: ["TransitCache"]),
         .library(name: "TransitLocation", targets: ["TransitLocation"]),
         .library(name: "TransitDomain", targets: ["TransitDomain"]),
+        .library(name: "ChicagoTheme", targets: ["ChicagoTheme"]),
         .library(name: "TransitUI", targets: ["TransitUI"]),
     ],
     dependencies: [],
@@ -36,8 +37,13 @@ let package = Package(
             dependencies: ["TransitModels", "TransitCache"]
         ),
         .target(
+            name: "ChicagoTheme",
+            dependencies: ["TransitModels"],
+            resources: [.process("Resources")]
+        ),
+        .target(
             name: "TransitUI",
-            dependencies: ["TransitModels", "TransitDomain"]
+            dependencies: ["TransitModels", "TransitDomain", "ChicagoTheme"]
         ),
         .testTarget(
             name: "TransitModelsTests",

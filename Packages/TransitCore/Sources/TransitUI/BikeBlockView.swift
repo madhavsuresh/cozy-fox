@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitModels
 
@@ -17,53 +18,44 @@ public struct BikeBlockView: View {
     }
 
     private func content(for pick: NearestBikePick) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "bicycle.circle.fill")
-                    .font(.subheadline)
-                    .foregroundStyle(.green)
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
+                Image(systemName: "bicycle")
+                    .font(.caption)
+                    .foregroundStyle(ChicagoPalette.flagBlue)
                 Text(pick.station.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            HStack(spacing: 4) {
-                Text("\(pick.walkingMinutes) min walk")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "battery.100.bolt")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text("×\(pick.station.eBikesAvailable)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 2)
-            if pick.bestRangeMeters > 0 {
-                Text("\(Int(pick.bestRangeMiles.rounded())) mi best")
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.primary)
-            }
-            if pick.station.isScarce {
-                Label("Low (\(pick.station.eBikesAvailable))",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            }
+            Spacer(minLength: 0)
+            BigNumber(
+                pick.walkingMinutes,
+                unit: "min walk",
+                size: .md,
+                tone: pick.station.isScarce ? .warning : .primary,
+                accessibilityLabel: "\(pick.walkingMinutes) minute walk to e-bikes"
+            )
+            BikeAvailabilityBar(
+                current: pick.station.eBikesAvailable,
+                capacity: max(1, pick.station.capacity),
+                scarce: pick.station.isScarce
+            )
         }
-        .padding(8)
+        .padding(ChicagoSpacing.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var empty: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Image(systemName: "bicycle.circle")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            Image(systemName: "bicycle")
+                .foregroundStyle(ChicagoPalette.Gray.light)
             Text("No e-bikes nearby")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
         }
-        .padding(8)
+        .padding(ChicagoSpacing.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

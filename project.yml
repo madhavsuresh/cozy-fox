@@ -84,6 +84,8 @@ targets:
       - package: TransitCore
         product: TransitDomain
       - package: TransitCore
+        product: ChicagoTheme
+      - package: TransitCore
         product: TransitUI
       - target: CozyFoxWidget
       - target: CozyFoxLiveActivity
@@ -119,6 +121,8 @@ targets:
       - package: TransitCore
         product: TransitDomain
       - package: TransitCore
+        product: ChicagoTheme
+      - package: TransitCore
         product: TransitUI
 
   CozyFoxLiveActivity:
@@ -146,6 +150,8 @@ targets:
     dependencies:
       - package: TransitCore
         product: TransitModels
+      - package: TransitCore
+        product: ChicagoTheme
       - package: TransitCore
         product: TransitUI
 

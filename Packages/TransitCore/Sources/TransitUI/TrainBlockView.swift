@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitModels
 import TransitDomain
@@ -6,58 +7,68 @@ public struct TrainBlockView: View {
     public let arrivals: [Arrival]
     public let title: String
     public let directionLabel: String?
+    public let now: Date
 
-    public init(arrivals: [Arrival], title: String, directionLabel: String?) {
+    public init(arrivals: [Arrival],
+                title: String,
+                directionLabel: String?,
+                now: Date = .now) {
         self.arrivals = arrivals
         self.title = title
         self.directionLabel = directionLabel
+        self.now = now
     }
 
     public var body: some View {
         let line = arrivals.first?.line ?? .red
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(line.swiftUIColor)
-                    .frame(width: 16, height: 16)
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
+                RouteBadge(line: line, size: .sm)
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
             if let directionLabel {
                 Text(directionLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
                     .lineLimit(1)
             }
-            Spacer(minLength: 2)
-            ForEach(arrivals.prefix(2), id: \.id) { arrival in
-                arrivalRow(for: arrival)
-            }
-            if arrivals.isEmpty {
+            Spacer(minLength: 0)
+            if let first = arrivals.first {
+                let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(now) / 60).rounded()))
+                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.xs) {
+                    BigNumber(
+                        minutes,
+                        unit: "min",
+                        size: .md,
+                        tone: first.isDelayed ? .alert : .primary,
+                        accessibilityLabel: "\(minutes) minutes to next \(line.displayName) train"
+                    )
+                    if first.isDelayed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(ChicagoPalette.starRed)
+                            .accessibilityHidden(true)
+                    }
+                }
+                HeadwayDotStrip(
+                    arrivals: arrivals.prefix(8).map(\.arrivalAt),
+                    accent: line.swiftUIColor,
+                    now: now
+                )
+            } else {
                 Text("No data")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                    .foregroundStyle(ChicagoPalette.Gray.light)
             }
         }
-        .padding(8)
+        .padding(ChicagoSpacing.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func arrivalRow(for arrival: Arrival) -> some View {
-        let label = ArrivalFormatter.label(for: arrival)
-        return HStack(spacing: 4) {
-            Text(label.shortText)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.primary)
-            if arrival.isDelayed {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            }
-            Spacer()
-        }
     }
 }
 
@@ -81,8 +92,8 @@ public struct TrainBlockView: View {
                 isApproaching: false, isDelayed: false, isFault: false, isScheduled: false
             ),
         ],
-        title: "Red Line",
+        title: "Clark/Division",
         directionLabel: "→ 95th"
     )
-    .frame(width: 130, height: 130)
+    .frame(width: 150, height: 150)
 }

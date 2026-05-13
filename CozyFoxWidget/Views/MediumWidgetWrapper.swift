@@ -31,7 +31,8 @@ struct MediumWidgetWrapper: View {
             },
             bike: entry.snapshot.nearestBike,
             alerts: alerts,
-            isStale: entry.snapshot.isAnythingStale()
+            isStale: entry.snapshot.isAnythingStale(),
+            now: entry.date
         )
         .widgetURL(URL(string: "cozyfox://dashboard"))
     }

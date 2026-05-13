@@ -1,6 +1,7 @@
-import WidgetKit
+import ChicagoTheme
 import SwiftUI
 import TransitUI
+import WidgetKit
 
 struct DashboardWidget: Widget {
     let kind = "CozyFoxDashboard"
@@ -13,15 +14,11 @@ struct DashboardWidget: Widget {
         ) { entry in
             DashboardEntryView(entry: entry)
                 .containerBackground(for: .widget) {
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.97, green: 0.97, blue: 0.99),
-                            Color(red: 0.92, green: 0.93, blue: 0.97),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    ChicagoPalette.Surface.card
                 }
+                // Clamp Dynamic Type so massive accessibility sizes don't
+                // overflow the widget container.
+                .dynamicTypeSize(.medium ... .accessibility2)
         }
         .configurationDisplayName("Cozy Fox")
         .description("Trains, buses, and Divvy e-bikes at a glance.")

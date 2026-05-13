@@ -1,6 +1,8 @@
+import ChicagoTheme
 import SwiftUI
 import TransitDomain
 import TransitModels
+import TransitUI
 
 struct BusDetailScreen: View {
     let route: String
@@ -8,32 +10,79 @@ struct BusDetailScreen: View {
     @Environment(AppViewModel.self) private var model
 
     var predictions: [BusPrediction] {
-        model.snapshot.busPredictions.filter {
-            ($0.route == route || route.isEmpty)
-            && ($0.stopId == stopId || stopId == 0)
-        }
+        model.snapshot.busPredictions
+            .filter {
+                ($0.route == route || route.isEmpty)
+                && ($0.stopId == stopId || stopId == 0)
+            }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                if predictions.isEmpty {
-                    Text("No predictions").foregroundStyle(.secondary)
-                }
-                ForEach(predictions, id: \.id) { p in
-                    HStack {
-                        Text("#\(p.route)").font(.subheadline.weight(.bold))
-                        VStack(alignment: .leading) {
-                            Text(p.destinationName).font(.subheadline)
-                            Text(p.stopName).font(.caption).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                    if predictions.isEmpty {
+                        Text("No predictions")
+                            .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .padding(ChicagoSpacing.md)
+                    } else if let first = predictions.first {
+                        let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
+                        ChicagoCard(title: "Route \(route)",
+                                    eyebrow: first.stopName,
+                                    ornament: .icon(systemName: "bus.fill")) {
+                            VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                                BigNumber(
+                                    minutes,
+                                    unit: "min",
+                                    size: .lg,
+                                    tone: first.isDelayed ? .alert : .primary,
+                                    accessibilityLabel: "\(minutes) minutes to next bus"
+                                )
+                                HeadwayDotStrip(
+                                    arrivals: predictions.prefix(8).map(\.arrivalAt),
+                                    accent: ChicagoPalette.flagBlue
+                                )
+                                Rectangle()
+                                    .fill(ChicagoPalette.cornflower.opacity(0.3))
+                                    .frame(height: ChicagoSpacing.Stroke.hairline)
+                                ForEach(predictions.prefix(8), id: \.id) { p in
+                                    predictionRow(p)
+                                }
+                            }
                         }
-                        Spacer()
-                        Text(ArrivalFormatter.label(for: p).shortText)
-                            .font(.callout.monospacedDigit())
                     }
                 }
+                .padding(ChicagoSpacing.md)
             }
-            .navigationTitle("#\(route)")
+            .background(ChicagoPalette.Surface.background)
+            .navigationTitle("Route \(route)")
+        }
+    }
+
+    private func predictionRow(_ p: BusPrediction) -> some View {
+        let minutes = max(0, Int((p.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
+        return HStack(spacing: ChicagoSpacing.sm) {
+            RouteBadge(bus: p.route, size: .sm)
+            VStack(alignment: .leading) {
+                Text("→ \(p.destinationName)")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                Text(p.stopName)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .lineLimit(1)
+            }
+            Spacer()
+            BigNumber(
+                minutes,
+                unit: "min",
+                size: .sm,
+                tone: p.isDelayed ? .alert : .primary,
+                accessibilityLabel: "\(minutes) minutes"
+            )
         }
     }
 }

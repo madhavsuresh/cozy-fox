@@ -1,8 +1,11 @@
+import ChicagoTheme
 import SwiftUI
 import TransitModels
 import TransitDomain
 
-/// The user's described medium widget: three blocks side-by-side.
+/// Three-block dashboard: train | bus | bike. Used inside the medium
+/// home-screen widget and the main app dashboard "Near You" surface,
+/// so a single rewrite refreshes both.
 public struct MediumDashboardView: View {
     public struct TrainPick: Sendable, Hashable {
         public let title: String
@@ -31,19 +34,22 @@ public struct MediumDashboardView: View {
     public let bike: NearestBikePick?
     public let alerts: [ServiceAlert]
     public let isStale: Bool
+    public let now: Date
 
     public init(
         train: TrainPick?,
         bus: BusPick?,
         bike: NearestBikePick?,
         alerts: [ServiceAlert],
-        isStale: Bool
+        isStale: Bool,
+        now: Date = .now
     ) {
         self.train = train
         self.bus = bus
         self.bike = bike
         self.alerts = alerts
         self.isStale = isStale
+        self.now = now
     }
 
     public var body: some View {
@@ -52,47 +58,60 @@ public struct MediumDashboardView: View {
                 TrainBlockView(
                     arrivals: train.arrivals,
                     title: train.title,
-                    directionLabel: train.directionLabel
+                    directionLabel: train.directionLabel,
+                    now: now
                 )
             } else {
                 emptyBlock("Pick a train")
             }
-            Divider()
+            divider
             if let bus {
                 BusBlockView(
                     predictions: bus.predictions,
                     routeLabel: bus.route,
-                    stopLabel: bus.stopLabel
+                    stopLabel: bus.stopLabel,
+                    now: now
                 )
             } else {
                 emptyBlock("Pick a bus")
             }
-            Divider()
+            divider
             BikeBlockView(pick: bike)
         }
         .overlay(alignment: .topTrailing) {
             VStack(alignment: .trailing, spacing: 2) {
                 AlertBadge(alerts: alerts)
                 if isStale {
-                    Text("stale")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
+                    Text("Stale")
+                        .font(ChicagoTypography.displaySM(relativeTo: .caption2))
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                        .foregroundStyle(ChicagoPalette.Gray.light)
+                        .padding(.horizontal, ChicagoSpacing.xs)
                 }
             }
-            .padding(6)
+            .padding(ChicagoSpacing.xs)
         }
     }
 
+    private var divider: some View {
+        Rectangle()
+            .fill(ChicagoPalette.cornflower.opacity(0.4))
+            .frame(width: ChicagoSpacing.Stroke.hairline)
+            .padding(.vertical, ChicagoSpacing.xs)
+    }
+
     private func emptyBlock(_ message: String) -> some View {
-        VStack {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             Image(systemName: "questionmark.circle")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ChicagoPalette.Gray.light)
             Text(message)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(ChicagoTypography.displaySM(relativeTo: .caption))
+                .textCase(.uppercase)
+                .tracking(0.5)
+                .foregroundStyle(ChicagoPalette.Gray.medium)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(ChicagoSpacing.sm)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
