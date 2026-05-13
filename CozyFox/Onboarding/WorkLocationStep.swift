@@ -15,7 +15,6 @@ struct WorkLocationStep: View {
             VStack(spacing: ChicagoSpacing.xs) {
                 Text("Where do you work?")
                     .font(ChicagoTypography.displayLG())
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Text("Optional — skip if you work from home. We'll fall back to time-of-day for direction.")
@@ -49,7 +48,6 @@ struct WorkLocationStep: View {
                 Button(action: { saveAndContinue(nil) }) {
                     Text("Skip")
                         .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                        .textCase(.uppercase)
                         .tracking(1)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, ChicagoSpacing.md)

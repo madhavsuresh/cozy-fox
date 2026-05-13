@@ -8,8 +8,10 @@ import UIKit
 /// Chicago Design System.
 ///
 /// - **Big Shoulders Display / Text** for headings, numbers, and labels.
-///   Always paired with `.textCase(.uppercase)` — the typeface is designed
-///   for caps and looks anaemic in mixed case.
+///   Used in sentence case throughout the app — CDS recommends caps
+///   for display, but in a phone UI all-caps reads as shouting. The
+///   municipal typeface itself + the palette + the Chicago star carry
+///   the civic identity without ALL-CAPS doing the heavy lifting.
 /// - **Roboto** for body and UI copy.
 ///
 /// All variants are returned as `Font` values built with

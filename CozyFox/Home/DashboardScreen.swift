@@ -45,7 +45,6 @@ struct DashboardScreen: View {
                             .frame(width: 18, height: 18)
                         Text("Cozy Fox")
                             .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                            .textCase(.uppercase)
                             .tracking(0.5)
                             .foregroundStyle(ChicagoPalette.Gray.darkest)
                     }
@@ -120,7 +119,6 @@ struct DashboardScreen: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Plan a trip")
                         .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                        .textCase(.uppercase)
                         .tracking(0.5)
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
                     Text("Search a destination and let Apple Maps pick the legs.")
@@ -156,7 +154,6 @@ struct DashboardScreen: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.liveUpdatesActive ? "Live updates on" : "Live updates off")
                     .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Text(liveStatusDescription)
@@ -361,7 +358,6 @@ struct DashboardScreen: View {
                     VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                         Text("→ \(dest)")
                             .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                            .textCase(.uppercase)
                             .tracking(0.5)
                             .foregroundStyle(ChicagoPalette.bahama)
                         HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
@@ -691,7 +687,6 @@ struct DashboardScreen: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(stop.directionLabel.isEmpty ? stop.name : stop.directionLabel)
                     .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.bahama)
                 Spacer()
@@ -951,7 +946,6 @@ struct DashboardScreen: View {
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
             .font(ChicagoTypography.displaySM(relativeTo: .caption))
-            .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(ChicagoPalette.bahama)
     }
@@ -984,7 +978,6 @@ private struct DirectionChip: View {
         Button(action: action) {
             Text(label)
                 .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
                 .padding(.horizontal, ChicagoSpacing.md)
