@@ -39,7 +39,14 @@ let package = Package(
         .target(
             name: "ChicagoTheme",
             dependencies: ["TransitModels"],
-            resources: [.process("Resources")]
+            // Fonts are .copy so they ship verbatim. `.process("Resources")`
+            // alone caused CTFontManagerRegisterFontsForURL to fail at
+            // launch — TTFs were flattened and the lookup couldn't find
+            // them. The asset catalog still needs .process so it's compiled.
+            resources: [
+                .process("Resources/ChicagoColors.xcassets"),
+                .copy("Resources/Fonts"),
+            ]
         ),
         .target(
             name: "TransitUI",
