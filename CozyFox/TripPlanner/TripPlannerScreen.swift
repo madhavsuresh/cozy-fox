@@ -465,16 +465,21 @@ struct TripPlannerScreen: View {
 
     private func pin(_ leg: TripLeg) {
         guard let transit = leg.transit else { return }
-        var prefs = model.preferences.loadRoutePreferences()
         switch transit.resolution {
         case .line(let color):
-            prefs.pinnedLine = color
+            model.saveManualRoutePreferences {
+                $0.pinnedLine = color
+                $0.pinnedStationId = nil
+                $0.pinnedTrainDestination = nil
+            }
         case .bus(let route):
-            prefs.pinnedBusRoute = route
+            model.saveManualRoutePreferences {
+                $0.pinnedBusRoute = route
+                $0.pinnedBusDirection = nil
+            }
         case .unknown:
             return
         }
-        model.preferences.saveRoutePreferences(prefs)
         dismiss()
         Task { @MainActor in
             await model.refreshIfNeeded(force: true)

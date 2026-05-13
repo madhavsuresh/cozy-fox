@@ -73,6 +73,18 @@ public enum CommuteDirection: String, Codable, Sendable, Hashable, CaseIterable 
     }
 }
 
+public enum RoutePinSource: String, Codable, Sendable, Hashable {
+    case manual
+    case automatic
+
+    public var label: String {
+        switch self {
+        case .manual: "Manual pin"
+        case .automatic: "Autopin"
+        }
+    }
+}
+
 /// Top-level user preferences, persisted in App Group UserDefaults.
 public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var trains: [TrainPreference]
@@ -108,6 +120,18 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// run every 15–45 min depending on commute window). iOS Low Power Mode
     /// overrides this to off regardless of the user setting.
     public var liveUpdatesEnabled: Bool
+    /// When enabled, the app may replace stale pins with an on-device commute
+    /// prediction. Manual pins block this for a short override window.
+    public var autopinEnabled: Bool
+    /// Records whether the current pinned line / bus route came from the user
+    /// or the local commute predictor.
+    public var pinSource: RoutePinSource
+    /// Last time the user directly changed a train or bus pin.
+    public var lastManualPinAt: Date?
+    /// Last time the local predictor changed the pin.
+    public var lastAutoPinAt: Date?
+    /// Direction the current automatic pin is intended to surface.
+    public var autoPinnedDirection: CommuteDirection?
 
     public init(
         trains: [TrainPreference] = [],
@@ -120,7 +144,12 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         pinnedTrainDestination: String? = nil,
         pinnedBusRoute: String? = nil,
         pinnedBusDirection: String? = nil,
-        liveUpdatesEnabled: Bool = true
+        liveUpdatesEnabled: Bool = true,
+        autopinEnabled: Bool = true,
+        pinSource: RoutePinSource = .manual,
+        lastManualPinAt: Date? = nil,
+        lastAutoPinAt: Date? = nil,
+        autoPinnedDirection: CommuteDirection? = nil
     ) {
         self.trains = trains
         self.buses = buses
@@ -133,6 +162,11 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedBusRoute = pinnedBusRoute
         self.pinnedBusDirection = pinnedBusDirection
         self.liveUpdatesEnabled = liveUpdatesEnabled
+        self.autopinEnabled = autopinEnabled
+        self.pinSource = pinSource
+        self.lastManualPinAt = lastManualPinAt
+        self.lastAutoPinAt = lastAutoPinAt
+        self.autoPinnedDirection = autoPinnedDirection
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
@@ -150,7 +184,28 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedBusRoute = try? c.decode(String.self, forKey: .pinnedBusRoute)
         self.pinnedBusDirection = try? c.decode(String.self, forKey: .pinnedBusDirection)
         self.liveUpdatesEnabled = (try? c.decode(Bool.self, forKey: .liveUpdatesEnabled)) ?? true
+        self.autopinEnabled = (try? c.decode(Bool.self, forKey: .autopinEnabled)) ?? true
+        self.pinSource = (try? c.decode(RoutePinSource.self, forKey: .pinSource)) ?? .manual
+        self.lastManualPinAt = try? c.decode(Date.self, forKey: .lastManualPinAt)
+        self.lastAutoPinAt = try? c.decode(Date.self, forKey: .lastAutoPinAt)
+        self.autoPinnedDirection = try? c.decode(CommuteDirection.self, forKey: .autoPinnedDirection)
     }
 
     public static let empty = UserRoutePreferences()
+
+    public var hasPinnedTransit: Bool {
+        pinnedLine != nil || pinnedBusRoute != nil
+    }
+
+    public mutating func markManualPin(at date: Date = .now) {
+        pinSource = .manual
+        lastManualPinAt = date
+        autoPinnedDirection = nil
+    }
+
+    public mutating func markAutomaticPin(direction: CommuteDirection, at date: Date = .now) {
+        pinSource = .automatic
+        lastAutoPinAt = date
+        autoPinnedDirection = direction
+    }
 }

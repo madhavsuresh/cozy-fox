@@ -60,6 +60,23 @@ public struct PreferencesStore: Sendable {
         }
     }
 
+    public func loadMobilityProfile() -> MobilityProfile {
+        guard let data = defaults.data(forKey: UserDefaultsKey.mobilityProfile) else {
+            return .empty
+        }
+        return (try? decoder.decode(MobilityProfile.self, from: data)) ?? .empty
+    }
+
+    public func saveMobilityProfile(_ profile: MobilityProfile) {
+        if let data = try? encoder.encode(profile) {
+            defaults.set(data, forKey: UserDefaultsKey.mobilityProfile)
+        }
+    }
+
+    public func clearMobilityProfile() {
+        defaults.removeObject(forKey: UserDefaultsKey.mobilityProfile)
+    }
+
     public var isOnboardingComplete: Bool {
         get { defaults.bool(forKey: UserDefaultsKey.onboardingComplete) }
         nonmutating set { defaults.set(newValue, forKey: UserDefaultsKey.onboardingComplete) }

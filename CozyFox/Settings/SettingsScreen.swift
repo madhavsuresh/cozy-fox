@@ -14,6 +14,7 @@ struct SettingsScreen: View {
     @State private var isVerifying: Bool = false
     @State private var trainSaveStatus: String = "—"
     @State private var busSaveStatus: String = "—"
+    @State private var learningDataVersion: Int = 0
 
     var body: some View {
         Form {
@@ -94,6 +95,11 @@ struct SettingsScreen: View {
                     get: { prefs.includeFreeFloatingBikes },
                     set: { prefs.includeFreeFloatingBikes = $0; save() }
                 ))
+                Toggle("Auto-pin commute routes",
+                       isOn: Binding(
+                        get: { prefs.autopinEnabled },
+                        set: { setAutopinEnabled($0) }
+                       ))
                 Toggle("Always show Live Activity",
                        isOn: Binding(
                         get: { prefs.alwaysShowLiveActivity },
@@ -108,7 +114,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Behavior")
             } footer: {
-                Text("With \"Always show\" on, the Live Activity stays in the Dynamic Island / Lock Screen and refreshes whenever the app updates. Tracked routes show first; if you haven't picked any, arrivals at the nearest L station are surfaced automatically.")
+                Text("Auto-pin predicts a commute direction locally from home/work context and coarse time patterns. Manual pins override it for 30 minutes. With \"Always show\" on, the Live Activity stays in the Dynamic Island / Lock Screen and refreshes whenever the app updates.")
                     .font(.footnote)
             }
 
@@ -156,6 +162,15 @@ struct SettingsScreen: View {
                 Text("Cozy Fox has no backend. Trains, buses, and Divvy data come from public Chicago APIs directly. Your API keys live in the iOS Keychain. Location is only used for region monitoring around home/work plus one-shot foreground reads.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                let profile = model.preferences.loadMobilityProfile()
+                Text("Local learning data: \(profile.observations.count) context observations, \(profile.routeObservations.count) route observations.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .id(learningDataVersion)
+                Button("Clear local learning data", role: .destructive) {
+                    model.clearLocalMobilityProfile()
+                    learningDataVersion += 1
+                }
             }
         }
         .navigationTitle("Settings")
@@ -207,6 +222,21 @@ struct SettingsScreen: View {
 
     private func save() {
         model.preferences.saveRoutePreferences(prefs)
+    }
+
+    private func setAutopinEnabled(_ enabled: Bool) {
+        prefs.autopinEnabled = enabled
+        if !enabled, prefs.pinSource == .automatic {
+            prefs.pinnedLine = nil
+            prefs.pinnedStationId = nil
+            prefs.pinnedTrainDestination = nil
+            prefs.pinnedBusRoute = nil
+            prefs.pinnedBusDirection = nil
+            prefs.autoPinnedDirection = nil
+            prefs.pinSource = .manual
+        }
+        save()
+        model.pinRevision += 1
     }
 
     // MARK: - API key verification
