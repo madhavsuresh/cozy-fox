@@ -20,6 +20,7 @@ struct DashboardScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
                     flagHeader
+                    alertsCard
                     liveUpdatesBar
                     contextBanner
                     linePickerCard
@@ -33,7 +34,6 @@ struct DashboardScreen: View {
                     tripPlannerCard
                     bikeCard
                     nearYouSection
-                    alertsCard
                 }
                 .padding(ChicagoSpacing.md)
             }
@@ -974,14 +974,9 @@ struct DashboardScreen: View {
                         ornament: .star) {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                     ForEach(alerts.prefix(3), id: \.id) { alert in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(alert.headline)
-                                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                                .foregroundStyle(ChicagoPalette.Gray.darkest)
-                            Text(alert.shortDescription)
-                                .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
-                                .foregroundStyle(ChicagoPalette.Gray.medium)
-                        }
+                        AlertRow(alert: alert,
+                                 pinnedLine: pinnedLine,
+                                 pinnedBusRoute: pinnedBusRoute)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -996,6 +991,72 @@ struct DashboardScreen: View {
             .font(ChicagoTypography.displaySM(relativeTo: .caption))
             .tracking(0.5)
             .foregroundStyle(ChicagoPalette.bahama)
+    }
+}
+
+// MARK: - Alert row
+
+private struct AlertRow: View {
+    let alert: ServiceAlert
+    let pinnedLine: LineColor?
+    let pinnedBusRoute: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundStyle(severityColor)
+                .accessibilityHidden(true)
+            badge
+            Text(alert.headline)
+                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(accessibilitySummary))
+    }
+
+    private var severityColor: Color {
+        switch alert.severity {
+        case .high:   return ChicagoPalette.starRed
+        case .medium: return ChicagoPalette.gold
+        case .low:    return ChicagoPalette.bahama
+        }
+    }
+
+    @ViewBuilder
+    private var badge: some View {
+        if let line = pinnedLine, alert.impactedLineColors.contains(line) {
+            RouteBadge(line: line, size: .sm)
+        } else if let route = pinnedBusRoute, alert.impactedRoutes.contains(route) {
+            RouteBadge(bus: route, size: .sm)
+        } else if let line = alert.impactedLineColors.first {
+            RouteBadge(line: line, size: .sm)
+        } else if let route = alert.impactedRoutes.first {
+            RouteBadge(bus: route, size: .sm)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private var accessibilitySummary: String {
+        let lineLabel: String
+        if let line = pinnedLine, alert.impactedLineColors.contains(line) {
+            lineLabel = "\(line.displayName) line"
+        } else if let route = pinnedBusRoute, alert.impactedRoutes.contains(route) {
+            lineLabel = "Route \(route)"
+        } else if let line = alert.impactedLineColors.first {
+            lineLabel = "\(line.displayName) line"
+        } else if let route = alert.impactedRoutes.first {
+            lineLabel = "Route \(route)"
+        } else {
+            lineLabel = "Service"
+        }
+        return "\(lineLabel) alert: \(alert.headline)"
     }
 }
 
