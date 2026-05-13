@@ -53,7 +53,6 @@ public struct RouteBadge: View {
     public var body: some View {
         Text(label)
             .font(badgeFont)
-            .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(textColor)
             .padding(.horizontal, size.horizontalPadding)

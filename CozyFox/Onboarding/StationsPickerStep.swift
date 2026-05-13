@@ -45,7 +45,6 @@ struct StationsPickerStep: View {
                 } label: {
                     Text("Finish setup")
                         .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                        .textCase(.uppercase)
                         .tracking(1)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)

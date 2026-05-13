@@ -17,7 +17,6 @@ struct HomeLocationStep: View {
             VStack(spacing: ChicagoSpacing.xs) {
                 Text("Where's home?")
                     .font(ChicagoTypography.displayLG())
-                    .textCase(.uppercase)
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Text("We use a small invisible region around this point to detect when you leave or arrive. No continuous tracking.")
@@ -99,7 +98,6 @@ func primaryButton(_ title: String, action: @escaping () -> Void, disabled: Bool
     Button(action: action) {
         Text(title)
             .font(ChicagoTypography.displayMD(relativeTo: .headline))
-            .textCase(.uppercase)
             .tracking(1)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)

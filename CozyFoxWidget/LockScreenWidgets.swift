@@ -88,7 +88,6 @@ struct CircularLockView: View {
                     .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
                 Text("MIN")
                     .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                    .textCase(.uppercase)
                     .tracking(0.5)
             }
         } else {

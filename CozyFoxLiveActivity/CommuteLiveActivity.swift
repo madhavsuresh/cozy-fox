@@ -2,6 +2,7 @@ import ActivityKit
 import ChicagoTheme
 import SwiftUI
 import TransitModels
+import TransitUI
 import WidgetKit
 
 // MARK: - Palette
@@ -173,6 +174,7 @@ private struct LockScreenView: View {
                     subhead: train.stopName,
                     nextArrival: train.nextArrival,
                     followingArrival: train.followingArrival,
+                    upcomingArrivals: train.upcomingArrivals,
                     alert: train.alertHeadline
                 )
             }
@@ -189,6 +191,7 @@ private struct LockScreenView: View {
                     subhead: bus.stopName,
                     nextArrival: bus.nextArrival,
                     followingArrival: bus.followingArrival,
+                    upcomingArrivals: bus.upcomingArrivals,
                     alert: bus.alertHeadline
                 )
             }
@@ -205,44 +208,59 @@ private struct LegRow: View {
     let subhead: String
     let nextArrival: Date
     let followingArrival: Date?
+    let upcomingArrivals: [Date]
     let alert: String?
 
     var body: some View {
-        HStack(spacing: ChicagoSpacing.sm) {
-            RoundedRectangle(cornerRadius: 2.5)
-                .fill(accentColor)
-                .frame(width: 4)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: ChicagoSpacing.xs) {
-                    badge
-                    Text(headline)
-                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                        .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
-                        .lineLimit(1)
-                }
-                Text(subhead)
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                    .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
-                    .lineLimit(1)
-                if let alert {
-                    Label(alert, systemImage: "exclamationmark.triangle.fill")
-                        .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                        .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
-                        .lineLimit(2)
-                }
-            }
-            Spacer(minLength: ChicagoSpacing.sm)
-            VStack(alignment: .trailing, spacing: 0) {
-                Text(nextArrival, style: .relative)
-                    .font(ChicagoTypography.bigNumber(20, relativeTo: .title3))
-                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
-                if let followingArrival {
-                    Text(followingArrival, style: .relative)
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(spacing: ChicagoSpacing.sm) {
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(accentColor)
+                    .frame(width: 4)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: ChicagoSpacing.xs) {
+                        badge
+                        Text(headline)
+                            .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                            .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                            .lineLimit(1)
+                    }
+                    Text(subhead)
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .monospacedDigit()
                         .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
+                        .lineLimit(1)
+                    if let alert {
+                        Label(alert, systemImage: "exclamationmark.triangle.fill")
+                            .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
+                            .lineLimit(2)
+                    }
                 }
+                Spacer(minLength: ChicagoSpacing.sm)
+                Text(nextArrival, style: .relative)
+                    .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+            }
+
+            // Headway dot-strip across the full row width — the same
+            // distribution the dashboard shows, so you can read the next
+            // arrivals *and* the bunching pattern at a glance from the
+            // lock screen.
+            if !dotStripArrivals.isEmpty {
+                HeadwayDotStrip(
+                    arrivals: dotStripArrivals,
+                    accent: accentColor,
+                    style: .onDark
+                )
+                .padding(.leading, 4 + ChicagoSpacing.sm)  // align with the text column
             }
         }
+    }
+
+    /// Use the rich list when shipped; fall back to the two scalar fields
+    /// (older saved state from the previous app version).
+    private var dotStripArrivals: [Date] {
+        if !upcomingArrivals.isEmpty { return upcomingArrivals }
+        return [nextArrival, followingArrival].compactMap { $0 }
     }
 }

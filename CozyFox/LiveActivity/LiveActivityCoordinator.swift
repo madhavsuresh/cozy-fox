@@ -109,7 +109,8 @@ actor LiveActivityCoordinator {
             followingArrival: following?.arrivalAt,
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: line, busRoute: nil)
-                .first?.headline
+                .first?.headline,
+            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
         )
     }
 
@@ -134,7 +135,8 @@ actor LiveActivityCoordinator {
             followingArrival: following?.arrivalAt,
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: nil, busRoute: route)
-                .first?.headline
+                .first?.headline,
+            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
         )
     }
 
@@ -166,7 +168,8 @@ actor LiveActivityCoordinator {
             followingArrival: upcoming.dropFirst().first?.arrivalAt,
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: preference.line, busRoute: nil)
-                .first?.headline
+                .first?.headline,
+            upcomingArrivals: upcoming.prefix(6).map(\.arrivalAt)
         )
 
         let state = CommuteAttributes.ContentState(train: trainLeg, bus: nil)

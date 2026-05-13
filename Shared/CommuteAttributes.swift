@@ -30,6 +30,9 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
         public var nextArrival: Date
         public var followingArrival: Date?
         public var alertHeadline: String?
+        /// Up to ~6 upcoming arrivals (including `nextArrival`), used to
+        /// drive the headway dot-strip on the Live Activity.
+        public var upcomingArrivals: [Date]
 
         public init(
             routeLabel: String,
@@ -38,7 +41,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             destination: String,
             nextArrival: Date,
             followingArrival: Date? = nil,
-            alertHeadline: String? = nil
+            alertHeadline: String? = nil,
+            upcomingArrivals: [Date] = []
         ) {
             self.routeLabel = routeLabel
             self.lineColorRaw = lineColorRaw
@@ -47,6 +51,24 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             self.nextArrival = nextArrival
             self.followingArrival = followingArrival
             self.alertHeadline = alertHeadline
+            self.upcomingArrivals = upcomingArrivals
+        }
+
+        /// Decode tolerates an absent `upcomingArrivals` from older state
+        /// (e.g., an activity that was started by the previous app version
+        /// and is still alive across an upgrade). Falls back to the two
+        /// scalar arrival fields.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            routeLabel = try c.decode(String.self, forKey: .routeLabel)
+            lineColorRaw = try c.decode(String.self, forKey: .lineColorRaw)
+            stopName = try c.decode(String.self, forKey: .stopName)
+            destination = try c.decode(String.self, forKey: .destination)
+            nextArrival = try c.decode(Date.self, forKey: .nextArrival)
+            followingArrival = try c.decodeIfPresent(Date.self, forKey: .followingArrival)
+            alertHeadline = try c.decodeIfPresent(String.self, forKey: .alertHeadline)
+            upcomingArrivals = (try? c.decode([Date].self, forKey: .upcomingArrivals))
+                ?? [nextArrival, followingArrival].compactMap { $0 }
         }
     }
 
@@ -58,6 +80,9 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
         public var nextArrival: Date
         public var followingArrival: Date?
         public var alertHeadline: String?
+        /// Up to ~6 upcoming arrivals (including `nextArrival`), used to
+        /// drive the headway dot-strip on the Live Activity.
+        public var upcomingArrivals: [Date]
 
         public init(
             routeLabel: String,
@@ -66,7 +91,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             destination: String,
             nextArrival: Date,
             followingArrival: Date? = nil,
-            alertHeadline: String? = nil
+            alertHeadline: String? = nil,
+            upcomingArrivals: [Date] = []
         ) {
             self.routeLabel = routeLabel
             self.stopName = stopName
@@ -75,6 +101,21 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             self.nextArrival = nextArrival
             self.followingArrival = followingArrival
             self.alertHeadline = alertHeadline
+            self.upcomingArrivals = upcomingArrivals
+        }
+
+        /// Same backwards-compat decoder as `TrainLeg`.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            routeLabel = try c.decode(String.self, forKey: .routeLabel)
+            stopName = try c.decode(String.self, forKey: .stopName)
+            directionLabel = try c.decode(String.self, forKey: .directionLabel)
+            destination = try c.decode(String.self, forKey: .destination)
+            nextArrival = try c.decode(Date.self, forKey: .nextArrival)
+            followingArrival = try c.decodeIfPresent(Date.self, forKey: .followingArrival)
+            alertHeadline = try c.decodeIfPresent(String.self, forKey: .alertHeadline)
+            upcomingArrivals = (try? c.decode([Date].self, forKey: .upcomingArrivals))
+                ?? [nextArrival, followingArrival].compactMap { $0 }
         }
     }
 

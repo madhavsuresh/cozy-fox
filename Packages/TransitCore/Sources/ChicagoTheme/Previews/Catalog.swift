@@ -13,15 +13,15 @@ struct ChicagoThemeCatalog: View {
             VStack(alignment: .leading, spacing: ChicagoSpacing.lg) {
                 section("Display typography (Big Shoulders)") {
                     Text("Display XXL").font(ChicagoTypography.displayXXL())
-                        .textCase(.uppercase).tracking(1)
+                        .tracking(0.5)
                     Text("Display XL").font(ChicagoTypography.displayXL())
-                        .textCase(.uppercase).tracking(1)
+                        .tracking(0.5)
                     Text("Display LG").font(ChicagoTypography.displayLG())
-                        .textCase(.uppercase).tracking(0.5)
+                        .tracking(0.5)
                     Text("Display MD").font(ChicagoTypography.displayMD())
-                        .textCase(.uppercase).tracking(0.5)
+                        .tracking(0.5)
                     Text("Display SM").font(ChicagoTypography.displaySM())
-                        .textCase(.uppercase).tracking(0.5)
+                        .tracking(0.5)
                 }
                 section("Body typography (Roboto)") {
                     Text("Roboto Regular — the quick brown fox jumps over the lazy dog.")
@@ -99,7 +99,6 @@ struct ChicagoThemeCatalog: View {
                 .frame(height: 44)
             Text(name)
                 .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                .textCase(.uppercase)
                 .tracking(0.3)
                 .foregroundStyle(ChicagoPalette.Gray.darkest)
         }
@@ -110,7 +109,6 @@ struct ChicagoThemeCatalog: View {
         VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
             Text(title)
                 .font(ChicagoTypography.displayMD())
-                .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(ChicagoPalette.bahama)
             content()
