@@ -17,21 +17,53 @@ import SwiftUI
 /// opacity. Later arrivals fade with distance. Past arrivals are
 /// clamped out. Caps at 6 dots to keep the strip from feeling busy.
 public struct HeadwayDotStrip: View {
+    public enum Style: Sendable {
+        /// Standard surface — light card or dashboard background.
+        case standard
+        /// Lock-screen / Live Activity / Dynamic Island. The asset-catalog
+        /// gray ramp can't be trusted here (the chrome is system-imposed
+        /// dark, not always reflected in `colorScheme`), so the strip
+        /// switches to explicit dark-safe colors.
+        case onDark
+    }
+
     private let arrivals: [Date]
     private let window: TimeInterval
     private let accent: Color
     private let now: Date
+    private let style: Style
 
     public init(
         arrivals: [Date],
         window: TimeInterval = 30 * 60,
         accent: Color,
-        now: Date = .now
+        now: Date = .now,
+        style: Style = .standard
     ) {
         self.arrivals = arrivals
         self.window = window
         self.accent = accent
         self.now = now
+        self.style = style
+    }
+
+    private var trackColor: Color {
+        switch style {
+        case .standard: ChicagoPalette.Gray.lighter.opacity(0.6)
+        case .onDark:   Color.white.opacity(0.20)
+        }
+    }
+    private var labelColor: Color {
+        switch style {
+        case .standard: ChicagoPalette.Gray.darkest
+        case .onDark:   ChicagoPalette.OnDarkSafe.primary
+        }
+    }
+    private var axisColor: Color {
+        switch style {
+        case .standard: ChicagoPalette.Gray.light
+        case .onDark:   ChicagoPalette.OnDarkSafe.tertiary
+        }
     }
 
     public var body: some View {
@@ -41,7 +73,7 @@ public struct HeadwayDotStrip: View {
             ZStack(alignment: .leading) {
                 // Track
                 Capsule()
-                    .fill(ChicagoPalette.Gray.lighter.opacity(0.6))
+                    .fill(trackColor)
                     .frame(height: 2)
                     .position(x: geo.size.width / 2, y: trackY)
 
@@ -52,7 +84,7 @@ public struct HeadwayDotStrip: View {
                                                      size: 11,
                                                      relativeTo: .caption2))
                         .monospacedDigit()
-                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                        .foregroundStyle(labelColor)
                         .position(x: dot.fraction * geo.size.width, y: labelY)
                 }
 
@@ -69,7 +101,7 @@ public struct HeadwayDotStrip: View {
                     .font(ChicagoTypography.body(.regular,
                                                  size: 9,
                                                  relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.Gray.light)
+                    .foregroundStyle(axisColor)
                     .position(x: geo.size.width - 18, y: 34)
             }
         }
