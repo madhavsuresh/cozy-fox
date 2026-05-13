@@ -369,11 +369,16 @@ private struct LegRow: View {
     let alert: String?
 
     var body: some View {
-        // Wrap the whole leg in a TimelineView so the countdown text and
-        // the dot strip both re-evaluate at each arrival's moment —
-        // otherwise the countdown swaps to the next arrival while the
-        // dot strip stays frozen on the passed one.
-        TimelineView(.explicit(timelineEntries(upcoming: upcomingArrivals, fallback: nextArrival))) { timeline in
+        // The dot strip *is* the time signal — the rightmost edge is 30 min
+        // out, dots show the next arrivals on a position scale, and the
+        // periodic schedule ticks the body every 30 s so the dots slide
+        // left smoothly as time passes (continuous fraction-based
+        // positioning; `HeadwayDotStrip` drops a dot when its delta goes
+        // negative). Previously a `Text(_, style: .relative)` counted
+        // alongside the dots, but it kept ticking past zero into
+        // "elapsed since the missed train" territory — confusing and, per
+        // the user, stressful.
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 HStack(spacing: ChicagoSpacing.sm) {
                     RoundedRectangle(cornerRadius: 2.5)
@@ -398,18 +403,9 @@ private struct LegRow: View {
                                 .lineLimit(2)
                         }
                     }
-                    Spacer(minLength: ChicagoSpacing.sm)
-                    countdownView(
-                        upcomingArrivals.firstFuture(now: timeline.date, fallback: nextArrival)
-                    )
-                    .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
-                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                    Spacer(minLength: 0)
                 }
 
-                // Headway dot-strip across the full row width — the same
-                // distribution the dashboard shows, so you can read the next
-                // arrivals *and* the bunching pattern at a glance from the
-                // lock screen.
                 if !dotStripArrivals.isEmpty {
                     HeadwayDotStrip(
                         arrivals: dotStripArrivals,
@@ -446,7 +442,7 @@ private struct LegColumn: View {
     let alert: String?
 
     var body: some View {
-        TimelineView(.explicit(timelineEntries(upcoming: upcomingArrivals, fallback: nextArrival))) { timeline in
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
             HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
                 RoundedRectangle(cornerRadius: 2.5)
                     .fill(accentColor)
@@ -464,13 +460,6 @@ private struct LegColumn: View {
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                         .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
                         .lineLimit(1)
-                    countdownView(
-                        upcomingArrivals.firstFuture(now: timeline.date, fallback: nextArrival)
-                    )
-                    .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
-                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
                     if !dotStripArrivals.isEmpty {
                         HeadwayDotStrip(
                             arrivals: dotStripArrivals,
