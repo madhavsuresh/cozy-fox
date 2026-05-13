@@ -164,12 +164,22 @@ private struct LockScreenView: View {
     let state: CommuteAttributes.ContentState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-            if let train = state.train {
-                let line = LineColor(rawValue: train.lineColorRaw) ?? .red
-                LegRow(
-                    accentColor: line.swiftUIColor,
-                    badge: AnyView(RouteBadge(line: line, size: .sm)),
+        content
+            .padding(.horizontal, ChicagoSpacing.md)
+            .padding(.vertical, ChicagoSpacing.sm)
+    }
+
+    // Two legs pinned → render side-by-side so the combined activity fits the
+    // ~160pt lock-screen height budget. One leg → use the original full-width
+    // row, which already breathes in that case.
+    @ViewBuilder
+    private var content: some View {
+        if let train = state.train, let bus = state.bus {
+            let trainLine = LineColor(rawValue: train.lineColorRaw) ?? .red
+            HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
+                LegColumn(
+                    accentColor: trainLine.swiftUIColor,
+                    badge: AnyView(RouteBadge(line: trainLine, size: .sm)),
                     headline: "→ \(train.destination)",
                     subhead: train.stopName,
                     nextArrival: train.nextArrival,
@@ -177,14 +187,13 @@ private struct LockScreenView: View {
                     upcomingArrivals: train.upcomingArrivals,
                     alert: train.alertHeadline
                 )
-            }
-            if state.train != nil, state.bus != nil {
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 Rectangle()
                     .fill(Color.white.opacity(0.18))
-                    .frame(height: ChicagoSpacing.Stroke.hairline)
-            }
-            if let bus = state.bus {
-                LegRow(
+                    .frame(width: ChicagoSpacing.Stroke.hairline)
+
+                LegColumn(
                     accentColor: ChicagoPalette.OnDarkSafe.gold,
                     badge: AnyView(RouteBadge(bus: bus.routeLabel, size: .sm)),
                     headline: bus.directionLabel,
@@ -194,10 +203,32 @@ private struct LockScreenView: View {
                     upcomingArrivals: bus.upcomingArrivals,
                     alert: bus.alertHeadline
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+        } else if let train = state.train {
+            let line = LineColor(rawValue: train.lineColorRaw) ?? .red
+            LegRow(
+                accentColor: line.swiftUIColor,
+                badge: AnyView(RouteBadge(line: line, size: .sm)),
+                headline: "→ \(train.destination)",
+                subhead: train.stopName,
+                nextArrival: train.nextArrival,
+                followingArrival: train.followingArrival,
+                upcomingArrivals: train.upcomingArrivals,
+                alert: train.alertHeadline
+            )
+        } else if let bus = state.bus {
+            LegRow(
+                accentColor: ChicagoPalette.OnDarkSafe.gold,
+                badge: AnyView(RouteBadge(bus: bus.routeLabel, size: .sm)),
+                headline: bus.directionLabel,
+                subhead: bus.stopName,
+                nextArrival: bus.nextArrival,
+                followingArrival: bus.followingArrival,
+                upcomingArrivals: bus.upcomingArrivals,
+                alert: bus.alertHeadline
+            )
         }
-        .padding(.horizontal, ChicagoSpacing.md)
-        .padding(.vertical, ChicagoSpacing.sm)
     }
 }
 
@@ -259,6 +290,67 @@ private struct LegRow: View {
 
     /// Use the rich list when shipped; fall back to the two scalar fields
     /// (older saved state from the previous app version).
+    private var dotStripArrivals: [Date] {
+        if !upcomingArrivals.isEmpty { return upcomingArrivals }
+        return [nextArrival, followingArrival].compactMap { $0 }
+    }
+}
+
+// Half-width column variant used when both legs are pinned. Same visual
+// vocabulary as `LegRow` — accent bar, badge, headline, ETA, dot-strip,
+// alert — rearranged vertically so two columns fit side-by-side in the
+// lock-screen height budget.
+private struct LegColumn: View {
+    let accentColor: Color
+    let badge: AnyView
+    let headline: String
+    let subhead: String
+    let nextArrival: Date
+    let followingArrival: Date?
+    let upcomingArrivals: [Date]
+    let alert: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(accentColor)
+                .frame(width: 4)
+            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                HStack(spacing: ChicagoSpacing.xs) {
+                    badge
+                    Text(headline)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                        .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Text(subhead)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
+                    .lineLimit(1)
+                Text(nextArrival, style: .relative)
+                    .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if !dotStripArrivals.isEmpty {
+                    HeadwayDotStrip(
+                        arrivals: dotStripArrivals,
+                        accent: accentColor,
+                        style: .onDark
+                    )
+                }
+                if let alert {
+                    Label(alert, systemImage: "exclamationmark.triangle.fill")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.OnDarkSafe.starRed)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     private var dotStripArrivals: [Date] {
         if !upcomingArrivals.isEmpty { return upcomingArrivals }
         return [nextArrival, followingArrival].compactMap { $0 }
