@@ -81,11 +81,17 @@ public actor TransitStore {
     }
 
     public func replaceNearestBike(_ pick: NearestBikePick?) async {
+        await replaceNearbyBikePicks(pick.map { [$0] } ?? [])
+    }
+
+    /// Replaces the cached "closest e-bikes" list (rank 0 = closest). The
+    /// dashboard reads all rows; the widget / Live Activity reads rank 0.
+    public func replaceNearbyBikePicks(_ picks: [NearestBikePick]) async {
         await MainActor.run {
             let ctx = ModelContext(container)
             try? ctx.delete(model: CachedNearestBike.self)
-            if let pick {
-                ctx.insert(CachedNearestBike(pick: pick))
+            for (rank, pick) in picks.enumerated() {
+                ctx.insert(CachedNearestBike(pick: pick, rank: rank))
             }
             try? ctx.save()
         }

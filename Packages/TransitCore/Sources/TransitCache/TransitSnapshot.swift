@@ -7,6 +7,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var trainArrivals: [Arrival]
     public var busPredictions: [BusPrediction]
     public var nearestBike: NearestBikePick?
+    public var nearbyBikePicks: [NearestBikePick]
     public var activeAlerts: [ServiceAlert]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
@@ -17,6 +18,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         trainArrivals: [Arrival] = [],
         busPredictions: [BusPrediction] = [],
         nearestBike: NearestBikePick? = nil,
+        nearbyBikePicks: [NearestBikePick] = [],
         activeAlerts: [ServiceAlert] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
@@ -26,6 +28,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.trainArrivals = trainArrivals
         self.busPredictions = busPredictions
         self.nearestBike = nearestBike
+        self.nearbyBikePicks = nearbyBikePicks
         self.activeAlerts = activeAlerts
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
