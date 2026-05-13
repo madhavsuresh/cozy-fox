@@ -37,9 +37,13 @@ enum RefreshTaskScheduler {
         case 23, 0, 1, 2, 3, 4, 5:
             return nil // sleep window
         case 6...9, 16...18:
-            return 15 * 60
+            // Trains run every ~5 min during rush, so we ask for refreshes
+            // at the same cadence. iOS rate-limits BGAppRefreshTask, so
+            // this is the minimum we request — actual fires happen
+            // whenever the system grants the budget.
+            return 5 * 60
         default:
-            return 45 * 60
+            return 20 * 60
         }
     }
 
