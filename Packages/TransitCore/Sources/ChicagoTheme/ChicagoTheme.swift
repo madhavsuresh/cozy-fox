@@ -23,11 +23,14 @@ public enum ChicagoTheme {
     private static func registerFonts() {
         let names = ["BigShouldersDisplay", "BigShouldersText", "Roboto"]
         for name in names {
-            guard let url = Bundle.module.url(
-                forResource: name,
-                withExtension: "ttf",
-                subdirectory: "Fonts"
-            ) else {
+            // Try the `Fonts/` subdirectory first (what `.copy` produces),
+            // then the bundle root (what `.process` produces). Robust to
+            // either resource-rule choice in Package.swift.
+            let url = Bundle.module.url(forResource: name,
+                                        withExtension: "ttf",
+                                        subdirectory: "Fonts")
+                ?? Bundle.module.url(forResource: name, withExtension: "ttf")
+            guard let url else {
                 log.error("Font resource missing: \(name).ttf")
                 assertionFailure("ChicagoTheme: missing font resource \(name).ttf")
                 continue
