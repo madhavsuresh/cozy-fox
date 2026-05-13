@@ -12,6 +12,7 @@ struct DashboardScreen: View {
     @State private var pinnedTrainDestination: String?
     @State private var pinnedBusRoute: String?
     @State private var pinnedBusDirection: String?
+    @State private var pinSource: RoutePinSource = .manual
     @State private var isTripPlannerPresented: Bool = false
 
     var body: some View {
@@ -62,6 +63,7 @@ struct DashboardScreen: View {
             .tint(ChicagoPalette.flagBlue)
             .refreshable { await model.refreshIfNeeded(force: true) }
             .onAppear { reloadPinnedFromPreferences() }
+            .onChange(of: model.pinRevision) { _, _ in reloadPinnedFromPreferences() }
             .sheet(isPresented: $isTripPlannerPresented, onDismiss: reloadPinnedFromPreferences) {
                 TripPlannerScreen()
                     .environment(model)
@@ -76,6 +78,7 @@ struct DashboardScreen: View {
         pinnedTrainDestination = prefs.pinnedTrainDestination
         pinnedBusRoute = prefs.pinnedBusRoute
         pinnedBusDirection = prefs.pinnedBusDirection
+        pinSource = prefs.pinSource
     }
 
     // MARK: - Flag header band
@@ -201,6 +204,16 @@ struct DashboardScreen: View {
             Text(directionDescription)
                 .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                 .foregroundStyle(ChicagoPalette.Gray.darkest)
+            if isAutopinned {
+                Text("Autopin")
+                    .font(ChicagoTypography.displaySM(relativeTo: .caption2))
+                    .tracking(0.5)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, ChicagoSpacing.sm)
+                    .padding(.vertical, 3)
+                    .background(ChicagoPalette.flagBlue,
+                                in: Capsule())
+            }
             Spacer()
             if model.isRefreshing { ProgressView().scaleEffect(0.7) }
         }
@@ -213,9 +226,13 @@ struct DashboardScreen: View {
         switch model.location.context {
         case .atHome: "Heading to work"
         case .atWork: "Heading home"
-        case .elsewhere: "Out and about"
+        case .elsewhere: "Heading home"
         case .unknown: "Pick a direction"
         }
+    }
+
+    private var isAutopinned: Bool {
+        pinSource == .automatic && (pinnedLine != nil || pinnedBusRoute != nil)
     }
 
     // MARK: - Train line picker
@@ -247,7 +264,7 @@ struct DashboardScreen: View {
 
     private func pinnedLineCard(line: LineColor) -> some View {
         ChicagoCard(title: line.displayName,
-                    eyebrow: "Pinned line",
+                    eyebrow: isAutopinned ? "Autopinned line" : "Pinned line",
                     ornament: .icon(systemName: "tram.fill")) {
             pinnedLineBody(line: line)
         }
@@ -401,21 +418,21 @@ struct DashboardScreen: View {
         pinnedLine = newValue
         pinnedStationId = nil
         pinnedTrainDestination = nil
-        var prefs = model.preferences.loadRoutePreferences()
-        prefs.pinnedLine = newValue
-        prefs.pinnedStationId = nil
-        prefs.pinnedTrainDestination = nil
-        model.preferences.saveRoutePreferences(prefs)
+        model.saveManualRoutePreferences {
+            $0.pinnedLine = newValue
+            $0.pinnedStationId = nil
+            $0.pinnedTrainDestination = nil
+        }
         Task { await model.refreshIfNeeded(force: true) }
     }
 
     private func setPinnedStation(_ id: Int) {
         pinnedStationId = id
         pinnedTrainDestination = nil
-        var prefs = model.preferences.loadRoutePreferences()
-        prefs.pinnedStationId = id
-        prefs.pinnedTrainDestination = nil
-        model.preferences.saveRoutePreferences(prefs)
+        model.saveManualRoutePreferences {
+            $0.pinnedStationId = id
+            $0.pinnedTrainDestination = nil
+        }
         Task { await model.refreshIfNeeded(force: true) }
     }
 
@@ -567,9 +584,9 @@ struct DashboardScreen: View {
     private func togglePinnedTrainDestination(_ destination: String) {
         let newValue: String? = (pinnedTrainDestination == destination) ? nil : destination
         pinnedTrainDestination = newValue
-        var prefs = model.preferences.loadRoutePreferences()
-        prefs.pinnedTrainDestination = newValue
-        model.preferences.saveRoutePreferences(prefs)
+        model.saveManualRoutePreferences {
+            $0.pinnedTrainDestination = newValue
+        }
         Task { await model.refreshIfNeeded(force: true) }
     }
 
@@ -605,7 +622,7 @@ struct DashboardScreen: View {
                     .background(ChicagoPalette.Surface.elevated,
                                 in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
                 }
-                Text("Tap \"Plan a trip\" below to auto-pin a route from a destination.")
+                Text("Manual pins pause autopin for 30 minutes.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -614,7 +631,7 @@ struct DashboardScreen: View {
 
     private func pinnedBusCard(route: String) -> some View {
         ChicagoCard(title: "Route \(route)",
-                    eyebrow: "Pinned bus",
+                    eyebrow: isAutopinned ? "Autopinned bus" : "Pinned bus",
                     ornament: .icon(systemName: "bus.fill")) {
             pinnedBusBody(route: route)
         }
@@ -731,19 +748,19 @@ struct DashboardScreen: View {
     private func setPinnedBus(_ route: String?) {
         pinnedBusRoute = route
         pinnedBusDirection = nil
-        var prefs = model.preferences.loadRoutePreferences()
-        prefs.pinnedBusRoute = route
-        prefs.pinnedBusDirection = nil
-        model.preferences.saveRoutePreferences(prefs)
+        model.saveManualRoutePreferences {
+            $0.pinnedBusRoute = route
+            $0.pinnedBusDirection = nil
+        }
         Task { await model.refreshIfNeeded(force: true) }
     }
 
     private func togglePinnedBusDirection(_ direction: String) {
         let newValue: String? = (pinnedBusDirection == direction) ? nil : direction
         pinnedBusDirection = newValue
-        var prefs = model.preferences.loadRoutePreferences()
-        prefs.pinnedBusDirection = newValue
-        model.preferences.saveRoutePreferences(prefs)
+        model.saveManualRoutePreferences {
+            $0.pinnedBusDirection = newValue
+        }
         Task { await model.refreshIfNeeded(force: true) }
     }
 

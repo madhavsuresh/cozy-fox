@@ -17,5 +17,6 @@ public enum UserDefaultsKey {
     public static let routePreferences = "routePreferences"
     public static let commuteAnchors = "commuteAnchors"
     public static let lastKnownLocation = "lastKnownLocation"
+    public static let mobilityProfile = "mobilityProfile"
     public static let onboardingComplete = "onboardingComplete"
 }

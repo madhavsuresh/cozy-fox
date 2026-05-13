@@ -23,6 +23,7 @@ final class RefreshCoordinator {
     private let resolver = NearestBikeResolver()
     private let stationResolver = NearestStationResolver()
     private let busStopResolver = NearestBusStopResolver()
+    private let autopinner = CommuteAutopinner()
 
     /// Last-known live vehicle positions for the user's pinned line/route.
     /// Refreshed every cycle; exposed so the dashboard can draw a "where's
@@ -52,7 +53,9 @@ final class RefreshCoordinator {
 
     /// Fan out the refreshes. Alerts run first so we know which stations are
     /// closed before recommending nearby trains; the rest run in parallel.
-    func refreshAll() async {
+    @discardableResult
+    func refreshAll() async -> Bool {
+        let autopinChanged = applyAutopinIfNeeded()
         let prefs = preferences.loadRoutePreferences()
         let lastLocation = preferences.loadLastKnownLocation()
 
@@ -89,6 +92,7 @@ final class RefreshCoordinator {
         await LiveActivityCoordinator.shared.ensureRunning(snapshot: snapshot, prefs: prefs)
 
         WidgetCenter.shared.reloadAllTimelines()
+        return autopinChanged
     }
 
     /// Called whenever the location coordinator detects a region transition.
@@ -123,6 +127,20 @@ final class RefreshCoordinator {
             directionLabel: bus.directionLabel,
             direction: bus.direction
         )
+    }
+
+    private func applyAutopinIfNeeded() -> Bool {
+        let result = autopinner.apply(
+            preferences: preferences.loadRoutePreferences(),
+            anchors: preferences.loadCommuteAnchors(),
+            profile: preferences.loadMobilityProfile(),
+            location: preferences.loadLastKnownLocation(),
+            context: location?.context ?? .unknown
+        )
+        if result.changed {
+            preferences.saveRoutePreferences(result.preferences)
+        }
+        return result.changed
     }
 
     // MARK: - Per-service refreshers

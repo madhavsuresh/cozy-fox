@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import SwiftUI
 import TransitCache
+import TransitDomain
 import TransitLocation
 import TransitModels
 import WidgetKit
@@ -22,6 +23,9 @@ final class AppViewModel {
     var isRefreshing: Bool = false
     var activeDetail: DetailDestination?
     var isOnboardingComplete: Bool
+    /// Bumped when the persisted route pins change outside dashboard-local
+    /// controls, e.g. an automatic commute pin during refresh.
+    var pinRevision: Int = 0
 
     /// User-controlled toggle for the 30 s ticker. Persisted to prefs.
     /// Observable so the dashboard switch reflects state instantly.
@@ -56,7 +60,7 @@ final class AppViewModel {
 
         location.onContextChanged = { [weak self] context in
             guard let self else { return }
-            Task { await self.refreshCoordinator.handleContextChange(context) }
+            Task { await self.refreshIfNeeded(force: true) }
         }
         location.onRegionExit = { [weak self] direction in
             guard let self else { return }
@@ -151,11 +155,51 @@ final class AppViewModel {
         defer { isRefreshing = false }
         await location.refreshLocation()
         if force || snapshot == .empty || snapshot.isAnythingStale(ttl: 30) {
-            await refreshCoordinator.refreshAll()
+            let pinsChanged = await refreshCoordinator.refreshAll()
+            if pinsChanged {
+                pinRevision += 1
+            }
         }
         snapshot = await store.currentSnapshot()
         vehiclePositions = refreshCoordinator.latestPositions
         WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {
+        var prefs = preferences.loadRoutePreferences()
+        update(&prefs)
+        prefs.markManualPin()
+        preferences.saveRoutePreferences(prefs)
+        recordManualRouteChoice(prefs)
+        pinRevision += 1
+    }
+
+    func clearLocalMobilityProfile() {
+        preferences.clearMobilityProfile()
+    }
+
+    private func recordManualRouteChoice(_ prefs: UserRoutePreferences) {
+        var profile = preferences.loadMobilityProfile()
+        profile.recordRouteObservation(
+            direction: inferredManualPinDirection(),
+            context: location.context,
+            line: prefs.pinnedLine,
+            stationId: prefs.pinnedStationId,
+            busRoute: prefs.pinnedBusRoute,
+            busDirection: prefs.pinnedBusDirection,
+            at: .now,
+            calendar: SystemClock().calendar
+        )
+        preferences.saveMobilityProfile(profile)
+    }
+
+    private func inferredManualPinDirection() -> CommuteDirection {
+        switch location.context {
+        case .atHome: return .toWork
+        case .atWork, .elsewhere: return .toHome
+        case .unknown:
+            return CommutePlanner().preferredDirection(context: .unknown)
+        }
     }
 
     func handleDeepLink(_ url: URL) {

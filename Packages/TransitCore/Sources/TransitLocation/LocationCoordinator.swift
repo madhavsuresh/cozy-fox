@@ -32,6 +32,7 @@ public final class LocationCoordinator {
         self.authorization = provider.currentAuthorization()
         self.lastKnown = preferences.loadLastKnownLocation()
         self.context = inferContext(from: self.lastKnown)
+        recordObservation(context: self.context, source: .foreground)
     }
 
     public func bootstrap() {
@@ -50,6 +51,7 @@ public final class LocationCoordinator {
         lastKnown = loc
         preferences.saveLastKnownLocation(loc)
         let newContext = inferContext(from: loc)
+        recordObservation(context: newContext, source: .foreground, at: loc.recordedAt)
         if newContext != context {
             context = newContext
             onContextChanged?(newContext)
@@ -75,19 +77,41 @@ public final class LocationCoordinator {
         switch event {
         case .enteredHome:
             context = .atHome
+            recordObservation(context: .atHome, source: .enteredHome)
             onContextChanged?(.atHome)
         case .exitedHome:
             context = .elsewhere
+            recordObservation(context: .elsewhere, source: .exitedHome, direction: .toWork)
             onContextChanged?(.elsewhere)
             onRegionExit?(.toWork)
         case .enteredWork:
             context = .atWork
+            recordObservation(context: .atWork, source: .enteredWork)
             onContextChanged?(.atWork)
         case .exitedWork:
             context = .elsewhere
+            recordObservation(context: .elsewhere, source: .exitedWork, direction: .toHome)
             onContextChanged?(.elsewhere)
             onRegionExit?(.toHome)
         }
+    }
+
+    private func recordObservation(
+        context: CommuteContext,
+        source: MobilityProfile.Observation.Source,
+        direction: CommuteDirection? = nil,
+        at date: Date = .now
+    ) {
+        guard context != .unknown else { return }
+        var profile = preferences.loadMobilityProfile()
+        profile.recordObservation(
+            context: context,
+            source: source,
+            direction: direction,
+            at: date,
+            calendar: SystemCalendar.chicago
+        )
+        preferences.saveMobilityProfile(profile)
     }
 
     private func inferContext(from location: LastKnownLocation?) -> CommuteContext {
@@ -114,4 +138,15 @@ public final class LocationCoordinator {
 public protocol PreferencesStoreLike: Sendable {
     func loadLastKnownLocation() -> LastKnownLocation?
     func saveLastKnownLocation(_ location: LastKnownLocation)
+    func loadMobilityProfile() -> MobilityProfile
+    func saveMobilityProfile(_ profile: MobilityProfile)
+}
+
+private enum SystemCalendar {
+    static var chicago: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago") ?? .current
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }
 }
