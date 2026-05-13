@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitModels
 import TransitDomain
@@ -6,53 +7,60 @@ public struct BusBlockView: View {
     public let predictions: [BusPrediction]
     public let routeLabel: String
     public let stopLabel: String
+    public let now: Date
 
-    public init(predictions: [BusPrediction], routeLabel: String, stopLabel: String) {
+    public init(predictions: [BusPrediction],
+                routeLabel: String,
+                stopLabel: String,
+                now: Date = .now) {
         self.predictions = predictions
         self.routeLabel = routeLabel
         self.stopLabel = stopLabel
+        self.now = now
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("#\(routeLabel)")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 6))
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
+                RouteBadge(bus: routeLabel, size: .sm)
                 Text(stopLabel)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer(minLength: 2)
-            ForEach(predictions.prefix(2), id: \.id) { prediction in
-                row(for: prediction)
-            }
-            if predictions.isEmpty {
+            Spacer(minLength: 0)
+            if let first = predictions.first {
+                let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(now) / 60).rounded()))
+                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.xs) {
+                    BigNumber(
+                        minutes,
+                        unit: "min",
+                        size: .md,
+                        tone: first.isDelayed ? .alert : .primary,
+                        accessibilityLabel: "\(minutes) minutes to next bus on route \(routeLabel)"
+                    )
+                    if first.isDelayed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(ChicagoPalette.starRed)
+                            .accessibilityHidden(true)
+                    }
+                }
+                HeadwayDotStrip(
+                    arrivals: predictions.prefix(8).map(\.arrivalAt),
+                    accent: ChicagoPalette.flagBlue,
+                    now: now
+                )
+            } else {
                 Text("No buses")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                    .foregroundStyle(ChicagoPalette.Gray.light)
             }
         }
-        .padding(8)
+        .padding(ChicagoSpacing.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func row(for prediction: BusPrediction) -> some View {
-        let label = ArrivalFormatter.label(for: prediction)
-        return HStack(spacing: 4) {
-            Text(label.shortText)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.primary)
-            if prediction.isDelayed {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            }
-            Spacer()
-        }
     }
 }

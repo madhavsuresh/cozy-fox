@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitAPI
 
@@ -53,10 +54,17 @@ struct APIKeysStep: View {
 
     private func statusLabel(_ status: ValidationStatus) -> some View {
         switch status {
-        case .untested: return AnyView(EmptyView())
-        case .checking: return AnyView(Label("Checking…", systemImage: "ellipsis").foregroundStyle(.secondary))
-        case .ok: return AnyView(Label("Key works", systemImage: "checkmark.seal.fill").foregroundStyle(.green))
-        case .failed(let m): return AnyView(Label(m, systemImage: "xmark.seal.fill").foregroundStyle(.red))
+        case .untested:
+            return AnyView(EmptyView())
+        case .checking:
+            return AnyView(Label("Checking…", systemImage: "ellipsis")
+                .foregroundStyle(ChicagoPalette.Gray.medium))
+        case .ok:
+            return AnyView(Label("Key works", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(ChicagoPalette.green))
+        case .failed(let m):
+            return AnyView(Label(m, systemImage: "xmark.seal.fill")
+                .foregroundStyle(ChicagoPalette.starRed))
         }
     }
 

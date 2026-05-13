@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitDomain
 import TransitModels
@@ -12,7 +13,10 @@ struct LargeDashboardView: View {
                 .frame(maxHeight: .infinity)
             let relevantAlerts = displayedAlerts
             if entry.configuration.showAlerts, !relevantAlerts.isEmpty {
-                Divider()
+                Rectangle()
+                    .fill(ChicagoPalette.cornflower.opacity(0.4))
+                    .frame(height: ChicagoSpacing.Stroke.hairline)
+                    .padding(.horizontal, ChicagoSpacing.sm)
                 alertsRow(relevantAlerts)
             }
         }
@@ -26,19 +30,21 @@ struct LargeDashboardView: View {
     }
 
     private func alertsRow(_ alerts: [ServiceAlert]) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading) {
+                .foregroundStyle(ChicagoPalette.starRed)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(alerts.prefix(2), id: \.id) { alert in
                     Text(alert.headline)
-                        .font(.caption2.weight(.semibold))
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .lineLimit(1)
                 }
             }
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, ChicagoSpacing.md)
+        .padding(.vertical, ChicagoSpacing.sm)
     }
 }

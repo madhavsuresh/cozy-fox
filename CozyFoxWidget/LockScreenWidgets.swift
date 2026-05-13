@@ -1,10 +1,11 @@
-import WidgetKit
-import SwiftUI
+import ChicagoTheme
 import SwiftData
+import SwiftUI
 import TransitCache
 import TransitDomain
 import TransitModels
 import TransitUI
+import WidgetKit
 
 struct LockScreenInlineWidget: Widget {
     var body: some WidgetConfiguration {
@@ -53,16 +54,21 @@ struct RectangularLockView: View {
 
     var body: some View {
         if let arrival = entry.snapshot.trainArrivals.first {
+            let line = arrival.line
+            let upcoming = entry.snapshot.trainArrivals
+                .filter { $0.line == line }
+                .prefix(6)
+                .map(\.arrivalAt)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(arrival.line.swiftUIColor)
-                        .frame(width: 10, height: 10)
-                    Text(arrival.line.shortName).font(.caption.weight(.semibold))
+                HStack(spacing: ChicagoSpacing.xs) {
+                    RouteBadge(line: line, size: .sm)
+                    Text(arrival.destinationName)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .lineLimit(1)
                 }
                 ForEach(entry.snapshot.trainArrivals.prefix(2), id: \.id) { item in
                     Text(ArrivalFormatter.label(for: item).shortText)
-                        .font(.callout.monospacedDigit())
+                        .font(ChicagoTypography.bigNumber(16, relativeTo: .callout))
                 }
             }
         } else {
@@ -76,13 +82,19 @@ struct CircularLockView: View {
 
     var body: some View {
         if let arrival = entry.snapshot.trainArrivals.first {
-            let mins = arrival.minutesUntilArrival()
+            let mins = max(0, arrival.minutesUntilArrival())
             VStack(spacing: 0) {
-                Text("\(max(mins, 0))").font(.title3.bold().monospacedDigit())
-                Text("min").font(.caption2)
+                Text("\(mins)")
+                    .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
+                Text("MIN")
+                    .font(ChicagoTypography.displaySM(relativeTo: .caption2))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
             }
         } else {
-            Image(systemName: "tram")
+            ChicagoStar()
+                .fill(.tint)
+                .frame(width: 16, height: 16)
         }
     }
 }

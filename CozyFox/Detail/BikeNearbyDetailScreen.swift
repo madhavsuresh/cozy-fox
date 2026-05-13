@@ -1,52 +1,87 @@
-import SwiftUI
+import ChicagoTheme
 import MapKit
+import SwiftUI
 import TransitDomain
 import TransitModels
+import TransitUI
 
 struct BikeNearbyDetailScreen: View {
     @Environment(AppViewModel.self) private var model
 
     var body: some View {
         NavigationStack {
-            VStack {
-                if let pick = model.snapshot.nearestBike {
-                    Map {
-                        Marker(pick.station.name,
-                               coordinate: CLLocationCoordinate2D(
-                                latitude: pick.station.latitude,
-                                longitude: pick.station.longitude
-                               ))
-                            .tint(.green)
-                        UserAnnotation()
-                    }
-                    .mapControls { MapUserLocationButton() }
-                    .frame(height: 240)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(pick.station.name).font(.title2.weight(.semibold))
-                        Text("\(pick.walkingMinutes) min walk · \(pick.station.eBikesAvailable) e-bikes at station")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                        if pick.bestRangeMeters > 0 {
-                            Text("Best available range: \(Int(pick.bestRangeMiles.rounded())) mi")
-                                .font(.subheadline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                    if let pick = model.snapshot.nearestBike {
+                        map(for: pick)
+                        ChicagoCard(title: pick.station.name,
+                                    eyebrow: "Closest e-bike",
+                                    ornament: .icon(systemName: "bicycle")) {
+                            VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.md) {
+                                    BigNumber(
+                                        pick.walkingMinutes,
+                                        unit: "min walk",
+                                        size: .lg,
+                                        tone: pick.station.isScarce ? .warning : .primary,
+                                        accessibilityLabel: "\(pick.walkingMinutes) minute walk"
+                                    )
+                                    if pick.bestRangeMeters > 0 {
+                                        BigNumber(
+                                            Int(pick.bestRangeMiles.rounded()),
+                                            unit: "mi range",
+                                            size: .md,
+                                            tone: .accent,
+                                            accessibilityLabel: "\(Int(pick.bestRangeMiles.rounded())) miles of range"
+                                        )
+                                    }
+                                }
+                                BikeAvailabilityBar(
+                                    current: pick.station.eBikesAvailable,
+                                    capacity: max(1, pick.station.capacity),
+                                    scarce: pick.station.isScarce
+                                )
+                                if pick.freeFloatingNearby > 0 {
+                                    Text("\(pick.freeFloatingNearby) free-floating e-bike\(pick.freeFloatingNearby == 1 ? "" : "s") nearby")
+                                        .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                                }
+                            }
                         }
-                        if pick.freeFloatingNearby > 0 {
-                            Text("\(pick.freeFloatingNearby) free-floating e-bike\(pick.freeFloatingNearby == 1 ? "" : "s") nearby")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
+                    } else {
+                        ContentUnavailableView(
+                            "No e-bikes nearby",
+                            systemImage: "bicycle",
+                            description: Text("No Divvy e-bikes within walking distance of your last known location.")
+                        )
+                        .padding(ChicagoSpacing.md)
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    ContentUnavailableView(
-                        "No e-bikes nearby",
-                        systemImage: "bicycle",
-                        description: Text("No Divvy e-bikes within walking distance of your last known location.")
-                    )
+                    Spacer()
                 }
-                Spacer()
+                .padding(ChicagoSpacing.md)
             }
+            .background(ChicagoPalette.Surface.background)
             .navigationTitle("E-bikes nearby")
         }
+    }
+
+    private func map(for pick: NearestBikePick) -> some View {
+        Map {
+            Marker(pick.station.name,
+                   coordinate: CLLocationCoordinate2D(
+                    latitude: pick.station.latitude,
+                    longitude: pick.station.longitude
+                   ))
+                .tint(ChicagoPalette.flagBlue)
+            UserAnnotation()
+        }
+        .mapControls { MapUserLocationButton() }
+        .frame(height: 240)
+        .clipShape(RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg)
+                .strokeBorder(ChicagoPalette.cornflower.opacity(0.4),
+                              lineWidth: ChicagoSpacing.Stroke.hairline)
+        )
     }
 }

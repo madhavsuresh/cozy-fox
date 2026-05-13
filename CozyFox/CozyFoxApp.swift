@@ -1,5 +1,6 @@
 import SwiftUI
 import BackgroundTasks
+import ChicagoTheme
 import TransitCache
 import TransitLocation
 import TransitModels
@@ -11,6 +12,7 @@ struct CozyFoxApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        ChicagoTheme.bootstrap()
         let store: TransitStore
         do {
             store = try TransitStore.live()
@@ -41,6 +43,10 @@ struct CozyFoxApp: App {
         WindowGroup {
             RootView()
                 .environment(viewModel)
+                // App-level Chicago tint so every button, picker, and
+                // toggle inherits Flag Blue — including the Form-based
+                // Settings and the Trip Planner.
+                .tint(ChicagoPalette.flagBlue)
                 .onAppear { Task { await viewModel.bootstrap() } }
                 .onOpenURL { viewModel.handleDeepLink($0) }
         }

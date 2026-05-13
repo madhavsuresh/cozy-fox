@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import TransitModels
 
@@ -35,16 +36,26 @@ struct StationsPickerStep: View {
             }
 
             Section {
-                Button("Finish setup") {
+                Button {
                     var prefs = model.preferences.loadRoutePreferences()
                     prefs.includeFreeFloatingBikes = includeFreeFloating
                     prefs.autoStartLiveActivity = autoStartLiveActivity
                     model.preferences.saveRoutePreferences(prefs)
                     done()
+                } label: {
+                    Text("Finish setup")
+                        .font(ChicagoTypography.displayMD(relativeTo: .headline))
+                        .textCase(.uppercase)
+                        .tracking(1)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, ChicagoSpacing.sm)
+                        .background(ChicagoPalette.flagBlue,
+                                    in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .buttonStyle(.plain)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
         }
         .navigationTitle("Almost done")
