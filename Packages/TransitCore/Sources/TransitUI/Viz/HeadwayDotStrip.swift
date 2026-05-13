@@ -77,8 +77,14 @@ public struct HeadwayDotStrip: View {
                     .frame(height: 2)
                     .position(x: geo.size.width / 2, y: trackY)
 
-                // Minute labels for the first three arrivals
-                ForEach(Array(dotData.prefix(3).enumerated()), id: \.offset) { _, dot in
+                // Minute labels for the first three arrivals. When two
+                // arrivals fall close enough in time that their labels
+                // would visually collide (e.g. trains at 1 and 2 min in a
+                // half-width column), keep only the soonest — that's the
+                // informationally critical one, and the dots themselves
+                // still convey the cluster.
+                ForEach(Array(visibleLabels(in: geo.size.width).enumerated()),
+                        id: \.offset) { _, dot in
                     Text("\(dot.minutes)")
                         .font(ChicagoTypography.body(.medium,
                                                      size: 11,
@@ -117,6 +123,24 @@ public struct HeadwayDotStrip: View {
         let diameter: CGFloat
         let opacity: Double
         let minutes: Int
+    }
+
+    /// Greedy left-to-right pass over the first three dots: keep each
+    /// label only if it sits at least `minLabelGap` pt to the right of
+    /// the previously kept one. Iterating in arrival order means we
+    /// always keep the soonest of any colliding pair.
+    private func visibleLabels(in width: CGFloat) -> [Dot] {
+        let minLabelGap: CGFloat = 20  // ≈ widest 2-digit label + breathing
+        var lastX: CGFloat = -.infinity
+        var kept: [Dot] = []
+        for dot in dotData.prefix(3) {
+            let x = dot.fraction * width
+            if x - lastX >= minLabelGap {
+                kept.append(dot)
+                lastX = x
+            }
+        }
+        return kept
     }
 
     private var dotData: [Dot] {
