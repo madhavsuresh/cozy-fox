@@ -1,0 +1,76 @@
+import Foundation
+import SwiftData
+import TransitModels
+
+/// Reads a complete `TransitSnapshot` from SwiftData. Used by the widget
+/// extension on every timeline refresh — pure read, no I/O.
+///
+/// Intentionally NOT `@MainActor`-isolated so the widget timeline provider can
+/// call it from any context. SwiftData `ModelContext` is created fresh per
+/// call and never shared across threads.
+public struct SnapshotReader: Sendable {
+    public let container: ModelContainer
+
+    public init(container: ModelContainer) {
+        self.container = container
+    }
+
+    public func loadSnapshot(now: Date = .now) -> TransitSnapshot {
+        let context = ModelContext(container)
+
+        let trainArrivals = (try? context.fetch(FetchDescriptor<CachedTrainArrival>())) ?? []
+        let busPredictions = (try? context.fetch(FetchDescriptor<CachedBusPrediction>())) ?? []
+        let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
+        let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
+
+        let arrivals = trainArrivals.compactMap(\.asModel)
+            .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+
+        let predictions = busPredictions.map(\.asModel)
+            .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+
+        let activeAlerts = alerts.map(\.asModel)
+            .filter { $0.isActive(at: now) }
+
+        let nearest = nearestBikes.first.map { row -> NearestBikePick in
+            let station = BikeStation(
+                id: row.stationId,
+                name: row.stationName,
+                latitude: row.latitude,
+                longitude: row.longitude,
+                capacity: row.capacity,
+                eBikesAvailable: row.eBikesAvailable,
+                classicBikesAvailable: 0,
+                docksAvailable: max(0, row.capacity - row.eBikesAvailable),
+                isRenting: true,
+                isReturning: true,
+                lastReported: row.computedAt
+            )
+            return NearestBikePick(
+                station: station,
+                walkingDistanceMeters: row.walkingDistanceMeters,
+                bestRangeMeters: row.bestRangeMeters,
+                freeFloatingNearby: row.freeFloatingNearby,
+                computedAt: row.computedAt
+            )
+        }
+
+        return TransitSnapshot(
+            // 50 / 50 is enough headroom for: 3 nearest stations × ~5 trains
+            // each + the pinned-line station + a couple of tracked stations,
+            // and 5 nearest bus routes × 4 predictions each + tracked ones.
+            // Previously capped at 8/8 which hid arrivals from secondary
+            // stations once a busy primary station filled the budget.
+            trainArrivals: Array(arrivals.prefix(50)),
+            busPredictions: Array(predictions.prefix(50)),
+            nearestBike: nearest,
+            activeAlerts: activeAlerts,
+            trainsFetchedAt: trainArrivals.first?.fetchedAt,
+            busesFetchedAt: busPredictions.first?.fetchedAt,
+            bikesFetchedAt: nearestBikes.first?.computedAt,
+            alertsFetchedAt: alerts.first?.fetchedAt
+        )
+    }
+}

@@ -1,0 +1,43 @@
+{
+  "ctatt": {
+    "tmst": "2026-05-13T08:23:00",
+    "errCd": "0",
+    "errNm": null,
+    "eta": [
+      {
+        "staId": "40380",
+        "stpId": "30074",
+        "staNm": "Clark/Division",
+        "stpDe": "Service toward 95th/Dan Ryan",
+        "rn": "418",
+        "rt": "Red",
+        "destSt": "30089",
+        "destNm": "95th/Dan Ryan",
+        "trDr": "1",
+        "prdt": "2026-05-13T08:23:00",
+        "arrT": "2026-05-13T08:27:00",
+        "isApp": "0",
+        "isSch": "0",
+        "isDly": "0",
+        "isFlt": "0"
+      },
+      {
+        "staId": "40380",
+        "stpId": "30074",
+        "staNm": "Clark/Division",
+        "stpDe": "Service toward 95th/Dan Ryan",
+        "rn": "419",
+        "rt": "Red",
+        "destSt": "30089",
+        "destNm": "95th/Dan Ryan",
+        "trDr": "1",
+        "prdt": "2026-05-13T08:23:00",
+        "arrT": "2026-05-13T08:35:00",
+        "isApp": "0",
+        "isSch": "0",
+        "isDly": "1",
+        "isFlt": "0"
+      }
+    ]
+  }
+}

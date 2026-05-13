@@ -1,0 +1,12 @@
+{
+  "last_updated": 1778678700,
+  "ttl": 60,
+  "version": "2.3",
+  "data": {
+    "vehicle_types": [
+      {"vehicle_type_id": "1", "form_factor": "bicycle", "propulsion_type": "human"},
+      {"vehicle_type_id": "2", "form_factor": "bicycle", "propulsion_type": "electric_assist", "max_range_meters": 54717.56, "name": "Divvy E-Bike"},
+      {"vehicle_type_id": "3", "form_factor": "scooter", "propulsion_type": "electric", "max_range_meters": 70810.96}
+    ]
+  }
+}

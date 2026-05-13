@@ -1,0 +1,67 @@
+import SwiftUI
+import BackgroundTasks
+import TransitCache
+import TransitLocation
+import TransitModels
+import WidgetKit
+
+@main
+struct CozyFoxApp: App {
+    @State private var viewModel: AppViewModel
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let store: TransitStore
+        do {
+            store = try TransitStore.live()
+        } catch {
+            // SwiftData failed to open — fall back to in-memory. Avoid crashing.
+            let fallback = try! TransitStore(container: .ephemeral())
+            store = fallback
+        }
+        let prefs = PreferencesStore()
+        let anchors = prefs.loadCommuteAnchors()
+        let location = LocationCoordinator(preferences: prefs, anchors: anchors)
+        let refreshCoordinator = RefreshCoordinator(
+            store: store,
+            preferences: prefs,
+            location: location
+        )
+        let model = AppViewModel(
+            store: store,
+            preferences: prefs,
+            location: location,
+            refreshCoordinator: refreshCoordinator
+        )
+        _viewModel = State(initialValue: model)
+        RefreshTaskScheduler.register(coordinator: refreshCoordinator)
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+                .environment(viewModel)
+                .onAppear { Task { await viewModel.bootstrap() } }
+                .onOpenURL { viewModel.handleDeepLink($0) }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            viewModel.onScenePhase(newPhase)
+        }
+    }
+}
+
+struct RootView: View {
+    @Environment(AppViewModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        if model.isOnboardingComplete {
+            DashboardScreen()
+                .sheet(item: $model.activeDetail) { detail in
+                    DetailRouter(detail: detail)
+                }
+        } else {
+            OnboardingFlow()
+        }
+    }
+}

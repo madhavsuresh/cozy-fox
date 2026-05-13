@@ -1,0 +1,28 @@
+{
+  "CTAAlerts": {
+    "TimeStamp": "20260513 08:00:00",
+    "ErrorCode": "0",
+    "ErrorMessage": null,
+    "Alert": [
+      {
+        "AlertId": "12345",
+        "Headline": "Red Line: Elevator out at Wilson",
+        "ShortDescription": "Elevator unavailable; use Lawrence",
+        "SeverityScore": "30",
+        "MajorAlert": "0",
+        "EventStart": "20260512 06:00:00",
+        "EventEnd": "20260520 23:59:00",
+        "ImpactedService": {
+          "Service": [
+            {
+              "ServiceType": "R",
+              "ServiceTypeDescription": "Train",
+              "ServiceId": "Red",
+              "ServiceName": "Red Line"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

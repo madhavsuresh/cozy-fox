@@ -1,0 +1,34 @@
+{
+  "bustime-response": {
+    "prd": [
+      {
+        "tmstmp": "20260513 08:23",
+        "typ": "A",
+        "stpnm": "Clark & Division",
+        "stpid": "1234",
+        "vid": "1602",
+        "dstp": 412,
+        "rt": "22",
+        "rtdir": "Northbound",
+        "des": "Howard",
+        "prdtm": "20260513 08:26",
+        "dly": false,
+        "prdctdn": "3"
+      },
+      {
+        "tmstmp": "20260513 08:23",
+        "typ": "A",
+        "stpnm": "Clark & Division",
+        "stpid": "1234",
+        "vid": "1603",
+        "dstp": 1200,
+        "rt": "22",
+        "rtdir": "Northbound",
+        "des": "Howard",
+        "prdtm": "20260513 08:34",
+        "dly": false,
+        "prdctdn": "11"
+      }
+    ]
+  }
+}

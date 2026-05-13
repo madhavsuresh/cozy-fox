@@ -1,0 +1,23 @@
+{
+  "last_updated": 1778678700,
+  "ttl": 60,
+  "version": "2.3",
+  "data": {
+    "stations": [
+      {
+        "station_id": "2056421762206241370",
+        "name": "Wabash Ave & Grand Ave",
+        "lat": 41.8916,
+        "lon": -87.6266,
+        "capacity": 12
+      },
+      {
+        "station_id": "2212612309299256224",
+        "name": "Clark St & Division St",
+        "lat": 41.9036,
+        "lon": -87.6315,
+        "capacity": 8
+      }
+    ]
+  }
+}

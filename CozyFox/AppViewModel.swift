@@ -1,0 +1,204 @@
+import Foundation
+import Observation
+import SwiftUI
+import TransitCache
+import TransitLocation
+import TransitModels
+import WidgetKit
+
+@MainActor
+@Observable
+final class AppViewModel {
+    let store: TransitStore
+    let preferences: PreferencesStore
+    let location: LocationCoordinator
+    let refreshCoordinator: RefreshCoordinator
+
+    var snapshot: TransitSnapshot = .empty
+    /// Latest live vehicle positions for whatever the user has pinned — used
+    /// by the dashboard's progress strip. Refreshed each cycle from
+    /// `RefreshCoordinator.latestPositions`.
+    var vehiclePositions: [VehiclePosition] = []
+    var isRefreshing: Bool = false
+    var activeDetail: DetailDestination?
+    var isOnboardingComplete: Bool
+
+    /// User-controlled toggle for the 30 s ticker. Persisted to prefs.
+    /// Observable so the dashboard switch reflects state instantly.
+    var liveUpdatesEnabled: Bool = true
+    /// Mirrors `ProcessInfo.processInfo.isLowPowerModeEnabled`. Updated via
+    /// `NSProcessInfoPowerStateDidChange` so toggling Low Power Mode in
+    /// Settings.app immediately pauses/resumes the ticker.
+    var isLowPowerMode: Bool = false
+
+    /// Whether the 30 s ticker should actually run right now.
+    var liveUpdatesActive: Bool { liveUpdatesEnabled && !isLowPowerMode }
+
+    /// Foreground refresh ticker — polls CTA every 30 s while the app is
+    /// active so the dashboard and Live Activity reflect delays in close to
+    /// real time. iOS suspends background `Task.sleep` aggressively, so this
+    /// effectively pauses when backgrounded and resumes via `onScenePhase`.
+    private var refreshTicker: Task<Void, Never>?
+    private var powerStateObserver: NSObjectProtocol?
+    private static let refreshInterval: UInt64 = 30 * 1_000_000_000  // 30s
+
+    init(
+        store: TransitStore,
+        preferences: PreferencesStore,
+        location: LocationCoordinator,
+        refreshCoordinator: RefreshCoordinator
+    ) {
+        self.store = store
+        self.preferences = preferences
+        self.location = location
+        self.refreshCoordinator = refreshCoordinator
+        self.isOnboardingComplete = preferences.isOnboardingComplete
+
+        location.onContextChanged = { [weak self] context in
+            guard let self else { return }
+            Task { await self.refreshCoordinator.handleContextChange(context) }
+        }
+        location.onRegionExit = { [weak self] direction in
+            guard let self else { return }
+            Task { await self.refreshCoordinator.handleRegionExit(direction: direction) }
+        }
+    }
+
+    func bootstrap() async {
+        location.bootstrap()
+        liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
+        isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        registerPowerStateObserver()
+        await refreshIfNeeded()
+        reconcileRefreshTicker()
+    }
+
+    /// Called from the SwiftUI scene-phase observer in `CozyFoxApp`.
+    func onScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            // Re-check Low Power Mode on foreground — the user may have
+            // toggled it in Settings while we were in the background.
+            isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+            reconcileRefreshTicker()
+            // First foreground hit also gets an immediate fresh fetch.
+            Task { await refreshIfNeeded(force: true) }
+        case .background, .inactive:
+            stopRefreshTicker()
+        @unknown default:
+            break
+        }
+    }
+
+    /// User flipped the dashboard toggle. Persist + reconcile.
+    func setLiveUpdatesEnabled(_ enabled: Bool) {
+        liveUpdatesEnabled = enabled
+        var prefs = preferences.loadRoutePreferences()
+        prefs.liveUpdatesEnabled = enabled
+        preferences.saveRoutePreferences(prefs)
+        reconcileRefreshTicker()
+    }
+
+    private func reconcileRefreshTicker() {
+        if liveUpdatesActive {
+            startRefreshTicker()
+        } else {
+            stopRefreshTicker()
+        }
+    }
+
+    private func startRefreshTicker() {
+        refreshTicker?.cancel()
+        refreshTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.refreshInterval)
+                if Task.isCancelled { return }
+                await self?.refreshIfNeeded(force: true)
+            }
+        }
+    }
+
+    private func stopRefreshTicker() {
+        refreshTicker?.cancel()
+        refreshTicker = nil
+    }
+
+    /// Listen for Low Power Mode toggles so we can pause/resume immediately
+    /// when the user enables Low Power Mode in Settings.app.
+    private func registerPowerStateObserver() {
+        guard powerStateObserver == nil else { return }
+        powerStateObserver = NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+                self.reconcileRefreshTicker()
+            }
+        }
+    }
+
+    func completeOnboarding() {
+        preferences.isOnboardingComplete = true
+        isOnboardingComplete = true
+        Task { await refreshIfNeeded(force: true) }
+    }
+
+    func refreshIfNeeded(force: Bool = false) async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await location.refreshLocation()
+        if force || snapshot == .empty || snapshot.isAnythingStale(ttl: 30) {
+            await refreshCoordinator.refreshAll()
+        }
+        snapshot = await store.currentSnapshot()
+        vehiclePositions = refreshCoordinator.latestPositions
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func handleDeepLink(_ url: URL) {
+        if let destination = DetailDestination.parse(url: url) {
+            activeDetail = destination
+        }
+    }
+}
+
+enum DetailDestination: Identifiable, Hashable {
+    case train(stationId: Int)
+    case bus(route: String, stopId: Int)
+    case bikeNearest
+
+    var id: String {
+        switch self {
+        case .train(let id): "train-\(id)"
+        case .bus(let r, let s): "bus-\(r)-\(s)"
+        case .bikeNearest: "bike-nearest"
+        }
+    }
+
+    static func parse(url: URL) -> DetailDestination? {
+        // Schemes look like cozyfox://train/40380 or cozyfox://bus/22/1234
+        let parts = url.pathComponents.filter { $0 != "/" } + [url.host].compactMap { $0 }
+        // The host part is the destination type; remaining are ids.
+        guard let host = url.host else { return nil }
+        switch host {
+        case "train":
+            if let raw = url.pathComponents.last, let id = Int(raw) {
+                return .train(stationId: id)
+            }
+        case "bus":
+            let comps = url.pathComponents.filter { !["/", ""].contains($0) }
+            if comps.count >= 2, let stop = Int(comps[1]) {
+                return .bus(route: comps[0], stopId: stop)
+            }
+        case "bike":
+            return .bikeNearest
+        default:
+            break
+        }
+        _ = parts
+        return nil
+    }
+}

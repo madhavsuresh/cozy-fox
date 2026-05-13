@@ -1,0 +1,223 @@
+import Foundation
+@preconcurrency import ActivityKit
+import TransitCache
+import TransitModels
+
+/// Manages a **single combined Live Activity** that can render either, both,
+/// or neither of a pinned train leg and a pinned bus leg. Combined into one
+/// activity (vs. two separate ones) so the Dynamic Island shows both legs at
+/// the same time instead of cycling between them.
+actor LiveActivityCoordinator {
+    static let shared = LiveActivityCoordinator()
+
+    private var current: Activity<CommuteAttributes>?
+    private var safetyTimeout: Task<Void, Never>?
+    private var isPersistent: Bool = false
+
+    // MARK: - Always-on mode
+
+    func ensureRunning(snapshot: TransitSnapshot, prefs: UserRoutePreferences) async {
+        guard prefs.alwaysShowLiveActivity else {
+            await endCurrentIfNeeded()
+            return
+        }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+
+        let trainLeg = makeTrainLeg(prefs: prefs, snapshot: snapshot)
+        let busLeg = makeBusLeg(prefs: prefs, snapshot: snapshot)
+
+        // Nothing to surface → tear down.
+        guard trainLeg != nil || busLeg != nil else {
+            await endCurrentIfNeeded()
+            return
+        }
+
+        let identity = makeIdentity(prefs: prefs)
+        let state = CommuteAttributes.ContentState(train: trainLeg, bus: busLeg)
+        let staleDate = soonestArrival(train: trainLeg, bus: busLeg).addingTimeInterval(120)
+
+        if let activity = current,
+           activity.attributes.trainIdentity == identity.train,
+           activity.attributes.busIdentity == identity.bus
+        {
+            // Same legs being tracked — just push new state.
+            await activity.update(ActivityContent(state: state, staleDate: staleDate))
+        } else {
+            // Identity changed (user repinned, or first start) — restart.
+            await endCurrentIfNeeded()
+            await startInternal(identity: identity, state: state, staleDate: staleDate, persistent: true)
+        }
+    }
+
+    // MARK: - Identity & leg builders
+
+    private func makeIdentity(prefs: UserRoutePreferences) -> (train: String?, bus: String?) {
+        var trainId: String?
+        if prefs.pinnedLine != nil {
+            // Use mapId + destination if we know them, else just "<line>"
+            let parts: [String] = [
+                prefs.pinnedStationId.map { "\($0)" },
+                prefs.pinnedTrainDestination,
+                prefs.pinnedLine?.rawValue
+            ].compactMap { $0 }
+            trainId = parts.joined(separator: "-")
+        }
+        var busId: String?
+        if let route = prefs.pinnedBusRoute {
+            busId = [route, prefs.pinnedBusDirection].compactMap { $0 }.joined(separator: "-")
+        }
+        return (trainId, busId)
+    }
+
+    private func makeTrainLeg(
+        prefs: UserRoutePreferences,
+        snapshot: TransitSnapshot
+    ) -> CommuteAttributes.TrainLeg? {
+        // Prefer the pinned line if present; else first tracked; else nothing
+        // (we don't auto-fill a "fallback" arrival when only bus is pinned).
+        let line: LineColor
+        if let pinned = prefs.pinnedLine {
+            line = pinned
+        } else if let tracked = prefs.trains.first {
+            line = tracked.line
+        } else if prefs.pinnedBusRoute == nil,
+                  let arrival = snapshot.trainArrivals.first
+        {
+            // No pins at all → fall back to first arrival anywhere so the
+            // user sees *something* on first launch.
+            line = arrival.line
+        } else {
+            return nil
+        }
+
+        var arrivals = snapshot.trainArrivals.filter { $0.line == line }
+        if let stationId = prefs.pinnedStationId {
+            arrivals = arrivals.filter { $0.stationId == stationId }
+        }
+        if let destination = prefs.pinnedTrainDestination {
+            arrivals = arrivals.filter { $0.destinationName == destination }
+        }
+        let sorted = arrivals.sorted { $0.arrivalAt < $1.arrivalAt }
+        guard let first = sorted.first else { return nil }
+        let following = sorted.dropFirst().first
+        return CommuteAttributes.TrainLeg(
+            routeLabel: line.displayName,
+            lineColorRaw: line.rawValue,
+            stopName: first.stationName,
+            destination: first.destinationName,
+            nextArrival: first.arrivalAt,
+            followingArrival: following?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: line, busRoute: nil)
+                .first?.headline
+        )
+    }
+
+    private func makeBusLeg(
+        prefs: UserRoutePreferences,
+        snapshot: TransitSnapshot
+    ) -> CommuteAttributes.BusLeg? {
+        guard let route = prefs.pinnedBusRoute else { return nil }
+        var predictions = snapshot.busPredictions.filter { $0.route == route }
+        if let direction = prefs.pinnedBusDirection {
+            predictions = predictions.filter { $0.directionName == direction }
+        }
+        let sorted = predictions.sorted { $0.arrivalAt < $1.arrivalAt }
+        guard let first = sorted.first else { return nil }
+        let following = sorted.dropFirst().first
+        return CommuteAttributes.BusLeg(
+            routeLabel: "Route \(route)",
+            stopName: first.stopName,
+            directionLabel: prefs.pinnedBusDirection ?? first.directionName,
+            destination: first.destinationName,
+            nextArrival: first.arrivalAt,
+            followingArrival: following?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: nil, busRoute: route)
+                .first?.headline
+        )
+    }
+
+    private func soonestArrival(
+        train: CommuteAttributes.TrainLeg?,
+        bus: CommuteAttributes.BusLeg?
+    ) -> Date {
+        let dates = [train?.nextArrival, bus?.nextArrival].compactMap { $0 }
+        return dates.min() ?? Date().addingTimeInterval(600)
+    }
+
+    // MARK: - Region-exit start (legacy "auto-start on leaving home/work")
+
+    func startCommute(for preference: TrainPreference, snapshot: TransitSnapshot) async {
+        await endCurrentIfNeeded()
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+
+        let upcoming = snapshot.trainArrivals
+            .filter { $0.line == preference.line }
+            .filter { $0.stationId == preference.mapId || preference.mapId == 0 }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+        let first = upcoming.first
+        let trainLeg = CommuteAttributes.TrainLeg(
+            routeLabel: preference.line.displayName,
+            lineColorRaw: preference.line.rawValue,
+            stopName: preference.stationName,
+            destination: first?.destinationName ?? preference.directionLabel,
+            nextArrival: first?.arrivalAt ?? Date().addingTimeInterval(600),
+            followingArrival: upcoming.dropFirst().first?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: preference.line, busRoute: nil)
+                .first?.headline
+        )
+
+        let state = CommuteAttributes.ContentState(train: trainLeg, bus: nil)
+        let staleDate = trainLeg.nextArrival.addingTimeInterval(120)
+        await startInternal(
+            identity: (train: "\(preference.mapId)-\(trainLeg.destination)", bus: nil),
+            state: state,
+            staleDate: staleDate,
+            persistent: false
+        )
+    }
+
+    // MARK: - Internals
+
+    private func startInternal(
+        identity: (train: String?, bus: String?),
+        state: CommuteAttributes.ContentState,
+        staleDate: Date,
+        persistent: Bool
+    ) async {
+        let attributes = CommuteAttributes(
+            trainIdentity: identity.train,
+            busIdentity: identity.bus
+        )
+        do {
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: ActivityContent(state: state, staleDate: staleDate),
+                pushType: nil
+            )
+            current = activity
+            isPersistent = persistent
+            safetyTimeout?.cancel()
+            if !persistent {
+                safetyTimeout = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 90 * 60 * 1_000_000_000)
+                    await self?.endCurrentIfNeeded()
+                }
+            }
+        } catch {
+            // Live Activities unavailable — silently skip.
+        }
+    }
+
+    func endCurrentIfNeeded() async {
+        if let activity = current {
+            await activity.end(activity.content, dismissalPolicy: .immediate)
+        }
+        current = nil
+        isPersistent = false
+        safetyTimeout?.cancel()
+        safetyTimeout = nil
+    }
+}
