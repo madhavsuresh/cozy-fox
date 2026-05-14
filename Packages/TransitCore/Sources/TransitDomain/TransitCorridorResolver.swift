@@ -124,37 +124,27 @@ public struct TransitCorridorResolver: Sendable {
         excludingRoute: String? = nil,
         isRouteVisible: (String) -> Bool = { _ in true }
     ) -> [NearbyBusCorridorCandidate] {
-        let nearbyStops = catalog
-            .filter { stop in
-                if let excludingRoute, stop.route == excludingRoute {
-                    return false
-                }
-                return isRouteVisible(stop.route)
-            }
-            .map { stop in
-                (
-                    stop: stop,
-                    distance: Distance.meters(
-                        from: origin,
-                        to: (stop.latitude, stop.longitude)
-                    )
-                )
-            }
-            .filter { $0.distance <= radiusMeters }
-            .sorted { $0.distance < $1.distance }
-
         var bestByRoute: [String: (stop: BusStop, distance: Double)] = [:]
-        for entry in nearbyStops where bestByRoute[entry.stop.route] == nil {
-            bestByRoute[entry.stop.route] = entry
+        var stopsByRoute: [String: [BusStop]] = [:]
+        for stop in catalog {
+            if let excludingRoute, stop.route == excludingRoute {
+                continue
+            }
+            guard isRouteVisible(stop.route) else { continue }
+            stopsByRoute[stop.route, default: []].append(stop)
+            let distance = Distance.meters(
+                from: origin,
+                to: (stop.latitude, stop.longitude)
+            )
+            guard distance <= radiusMeters else { continue }
+            if bestByRoute[stop.route].map({ distance < $0.distance }) ?? true {
+                bestByRoute[stop.route] = (stop, distance)
+            }
         }
 
         var byCorridor: [TransitCorridor: [NearbyBusCorridorCandidate]] = [:]
         for entry in bestByRoute.values {
-            let corridor = busCorridor(
-                forRoute: entry.stop.route,
-                near: origin,
-                catalog: catalog
-            )
+            let corridor = busCorridor(forStops: stopsByRoute[entry.stop.route, default: []], near: origin)
             guard corridor != .loop else { continue }
             byCorridor[corridor, default: []].append(NearbyBusCorridorCandidate(
                 corridor: corridor,
@@ -214,7 +204,14 @@ public struct TransitCorridorResolver: Sendable {
         near origin: (lat: Double, lon: Double),
         catalog: [BusStop] = BusStopCatalog.all
     ) -> TransitCorridor {
-        let uniqueStops = uniqueStops(catalog.filter { $0.route == route })
+        busCorridor(forStops: catalog.filter { $0.route == route }, near: origin)
+    }
+
+    private func busCorridor(
+        forStops stops: [BusStop],
+        near origin: (lat: Double, lon: Double)
+    ) -> TransitCorridor {
+        let uniqueStops = uniqueStops(stops)
         let ranked = uniqueStops
             .map { stop in
                 (

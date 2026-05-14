@@ -75,6 +75,18 @@ final class WalkingDistanceStore {
     @ObservationIgnored
     private var persistTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    private var loadTask: Task<[String: AccessRouteDistances], Never>?
+
+    @ObservationIgnored
+    private var hasLoadedFromDisk = false
+
+    @ObservationIgnored
+    private var shouldDiscardHydratedDistances = false
+
+    @ObservationIgnored
+    private var shouldInvalidateHydratedDistances = false
+
     let freshnessTTL: TimeInterval
     let negativeCacheTTL: TimeInterval
 
@@ -88,7 +100,31 @@ final class WalkingDistanceStore {
         self.fileURL = fileURL ?? Self.defaultFileURL()
         self.freshnessTTL = freshnessTTL
         self.negativeCacheTTL = negativeCacheTTL
-        load()
+    }
+
+    func hydrateFromDiskIfNeeded() async {
+        guard !hasLoadedFromDisk else { return }
+        let task: Task<[String: AccessRouteDistances], Never>
+        if let existing = loadTask {
+            task = existing
+        } else {
+            let url = fileURL
+            task = Task.detached(priority: .utility) {
+                Self.loadPersistedDistances(from: url)
+            }
+            loadTask = task
+        }
+
+        var loaded = await task.value
+        guard !hasLoadedFromDisk else { return }
+        loadTask = nil
+        hasLoadedFromDisk = true
+        guard !shouldDiscardHydratedDistances else { return }
+        if shouldInvalidateHydratedDistances {
+            let stamp = Date.distantPast
+            loaded = loaded.mapValues { $0.invalidated(at: stamp) }
+        }
+        distances.merge(loaded) { current, _ in current }
     }
 
     private static func defaultFileURL() -> URL {
@@ -298,6 +334,10 @@ final class WalkingDistanceStore {
 
     /// Wipe the cache. Used by Settings -> "Clear access route cache."
     func clearAll() {
+        loadTask?.cancel()
+        loadTask = nil
+        hasLoadedFromDisk = true
+        shouldDiscardHydratedDistances = true
         distances.removeAll()
         failures.removeAll()
         persistDebounced()
@@ -307,6 +347,7 @@ final class WalkingDistanceStore {
     /// returns nil for everything, which triggers refetch — but `anyCached`
     /// still has the old data to fall back on while MapKit responds.
     func invalidateAll() {
+        shouldInvalidateHydratedDistances = true
         let stamp = Date.distantPast
         distances = distances.mapValues { $0.invalidated(at: stamp) }
         persistDebounced()
@@ -344,19 +385,19 @@ final class WalkingDistanceStore {
         let distances: [String: WalkingDistance]
     }
 
-    private func load() {
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+    nonisolated private static func loadPersistedDistances(from fileURL: URL) -> [String: AccessRouteDistances] {
+        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
         if let decoded = try? JSONDecoder().decode(Persisted.self, from: data),
            decoded.version == 2 {
-            distances = decoded.distances
-            return
+            return decoded.distances
         }
         if let legacy = try? JSONDecoder().decode(LegacyPersisted.self, from: data),
            legacy.version == 1 {
-            distances = legacy.distances.mapValues {
+            return legacy.distances.mapValues {
                 AccessRouteDistances(walking: $0, cycling: nil)
             }
         }
+        return [:]
     }
 
     private func persistDebounced() {

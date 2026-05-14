@@ -22,29 +22,21 @@ public struct NearestBusStopResolver: Sendable {
         limit: Int = 3,
         catalog: [BusStop]
     ) -> [BusStop] {
-        let ranked = catalog
-            .map { stop in
-                (
-                    stop: stop,
-                    distance: Distance.meters(
-                        from: origin,
-                        to: (stop.latitude, stop.longitude)
-                    )
-                )
-            }
-            .filter { $0.distance <= maxDistanceMeters }
-            .sorted { $0.distance < $1.distance }
-
-        var seenRoutes: Set<String> = []
-        var result: [BusStop] = []
-        for (stop, _) in ranked {
-            if !seenRoutes.contains(stop.route) {
-                seenRoutes.insert(stop.route)
-                result.append(stop)
-                if result.count >= limit { break }
+        var bestByRoute: [String: (stop: BusStop, distance: Double)] = [:]
+        for stop in catalog {
+            let distance = Distance.meters(
+                from: origin,
+                to: (stop.latitude, stop.longitude)
+            )
+            guard distance <= maxDistanceMeters else { continue }
+            if bestByRoute[stop.route].map({ distance < $0.distance }) ?? true {
+                bestByRoute[stop.route] = (stop, distance)
             }
         }
-        return result
+        return bestByRoute.values
+            .sorted { $0.distance < $1.distance }
+            .prefix(max(0, limit))
+            .map(\.stop)
     }
 
     /// Closest stop on a specific route — used when the user pins a bus route
@@ -57,14 +49,15 @@ public struct NearestBusStopResolver: Sendable {
         to origin: (lat: Double, lon: Double),
         catalog: [BusStop]
     ) -> BusStop? {
-        catalog
-            .filter { $0.route == route }
-            .map { stop in
-                (stop, Distance.meters(from: origin, to: (stop.latitude, stop.longitude)))
+        var best: (stop: BusStop, distance: Double)?
+        for stop in catalog where stop.route == route {
+            let distance = Distance.meters(from: origin, to: (stop.latitude, stop.longitude))
+            guard distance <= maxDistanceMeters else { continue }
+            if best.map({ distance < $0.distance }) ?? true {
+                best = (stop, distance)
             }
-            .filter { $0.1 <= maxDistanceMeters }
-            .min { $0.1 < $1.1 }?
-            .0
+        }
+        return best?.stop
     }
 
     /// For a pinned route, the closest stop in each *dominant* direction.
@@ -99,8 +92,10 @@ public struct NearestBusStopResolver: Sendable {
         limitPerDirection: Int = 2,
         catalog: [BusStop]
     ) -> [(stop: BusStop, distance: Double)] {
-        let onRoute = catalog.filter { $0.route == route }
-        let byDirection = Dictionary(grouping: onRoute, by: \.directionLabel)
+        var byDirection: [String: [BusStop]] = [:]
+        for stop in catalog where stop.route == route {
+            byDirection[stop.directionLabel, default: []].append(stop)
+        }
 
         // Drop directions that are stop-count outliers — they're typically
         // single-stop turnarounds at the route's terminus, not real legs.

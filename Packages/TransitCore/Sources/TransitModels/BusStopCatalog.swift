@@ -17,17 +17,7 @@ public enum BusStopCatalog {
     /// Every distinct CTA bus route name in the catalog, naturally sorted
     /// (numeric routes first by number, lettered routes after). Used by the
     /// dashboard's bus-route picker.
-    public static let allRoutes: [String] = {
-        let unique = Set(all.map(\.route))
-        return unique.sorted { lhs, rhs in
-            switch (Int(lhs), Int(rhs)) {
-            case let (l?, r?): return l < r
-            case (_?, nil):    return true   // numeric before lettered
-            case (nil, _?):    return false
-            case (nil, nil):   return lhs.localizedStandardCompare(rhs) == .orderedAscending
-            }
-        }
-    }()
+    public static let allRoutes: [String] = loadRouteList()
 
     private static func loadBundled() -> [BusStop] {
         guard
@@ -42,6 +32,32 @@ public enum BusStopCatalog {
         } catch {
             assertionFailure("Failed to decode CTABusStops.json: \(error)")
             return []
+        }
+    }
+
+    private struct RouteOnly: Decodable {
+        let route: String
+    }
+
+    private static func loadRouteList() -> [String] {
+        guard
+            let url = Bundle.module.url(forResource: "CTABusStops", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let rows = try? JSONDecoder().decode([RouteOnly].self, from: data)
+        else {
+            return naturallySortedRoutes(Set(all.map(\.route)))
+        }
+        return naturallySortedRoutes(Set(rows.map(\.route)))
+    }
+
+    private static func naturallySortedRoutes(_ routes: Set<String>) -> [String] {
+        routes.sorted { lhs, rhs in
+            switch (Int(lhs), Int(rhs)) {
+            case let (l?, r?): return l < r
+            case (_?, nil):    return true   // numeric before lettered
+            case (nil, _?):    return false
+            case (nil, nil):   return lhs.localizedStandardCompare(rhs) == .orderedAscending
+            }
         }
     }
 }

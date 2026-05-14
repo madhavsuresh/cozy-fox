@@ -75,9 +75,12 @@ final class AppViewModel {
 
     func bootstrap() async {
         location.bootstrap()
+        let walkingHydration = Task { await walkingStore.hydrateFromDiskIfNeeded() }
         liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
+        await loadCachedSnapshot()
+        await walkingHydration.value
         await refreshIfNeeded()
         reconcileRefreshTicker()
     }
@@ -165,11 +168,15 @@ final class AppViewModel {
                 pinRevision += 1
             }
         }
+        await loadCachedSnapshot()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    private func loadCachedSnapshot() async {
         snapshot = await store.currentSnapshot()
         vehiclePositions = refreshCoordinator.latestPositions.isEmpty
             ? snapshot.vehiclePositions
             : refreshCoordinator.latestPositions
-        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {

@@ -142,8 +142,6 @@ public actor TransitStore {
 
     /// Convenience read for the main app. Widget should use `SnapshotReader`.
     public func currentSnapshot(now: Date = .now) async -> TransitSnapshot {
-        await MainActor.run {
-            SnapshotReader(container: container).loadSnapshot(now: now)
-        }
+        SnapshotReader(container: container).loadSnapshot(now: now)
     }
 }
