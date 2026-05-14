@@ -21,6 +21,7 @@ public struct SnapshotReader: Sendable {
         let trainArrivals = (try? context.fetch(FetchDescriptor<CachedTrainArrival>())) ?? []
         let busPredictions = (try? context.fetch(FetchDescriptor<CachedBusPrediction>())) ?? []
         let metraPredictions = (try? context.fetch(FetchDescriptor<CachedMetraPrediction>())) ?? []
+        let intercampusArrivals = (try? context.fetch(FetchDescriptor<CachedIntercampusArrival>())) ?? []
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
         let nearestFreeBikes = (try? context.fetch(FetchDescriptor<CachedNearestFreeBike>())) ?? []
@@ -34,6 +35,10 @@ public struct SnapshotReader: Sendable {
             .sorted { $0.arrivalAt < $1.arrivalAt }
 
         let metra = metraPredictions.map(\.asModel)
+            .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+
+        let intercampus = intercampusArrivals.compactMap(\.asModel)
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
             .sorted { $0.arrivalAt < $1.arrivalAt }
 
@@ -82,6 +87,7 @@ public struct SnapshotReader: Sendable {
             trainArrivals: Array(arrivals.prefix(50)),
             busPredictions: Array(predictions.prefix(50)),
             metraPredictions: Array(metra.prefix(50)),
+            intercampusArrivals: Array(intercampus.prefix(80)),
             nearestBike: nearbyPicks.first,
             nearbyBikePicks: nearbyPicks,
             nearbyFreeBikePicks: nearbyFreePicks,
@@ -89,6 +95,7 @@ public struct SnapshotReader: Sendable {
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
             metraFetchedAt: metraPredictions.first?.fetchedAt,
+            intercampusFetchedAt: intercampusArrivals.first?.fetchedAt,
             bikesFetchedAt: nearbyPicks.first?.computedAt ?? nearbyFreePicks.first?.computedAt,
             alertsFetchedAt: alerts.first?.fetchedAt
         )

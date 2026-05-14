@@ -5,6 +5,34 @@ import TransitModels
 /// point. MapKit walking routes are useful but occasionally over-route around
 /// downtown blocks and bridges, so this keeps a directness proxy in the mix.
 public struct StationAccessRanker: Sendable {
+    public struct AccessCandidate<Item: Sendable>: Sendable {
+        public let item: Item
+        public let directDistanceMeters: Double
+        public let walkingDistanceMeters: Double?
+        public let walkingTravelTime: TimeInterval?
+
+        public init(
+            item: Item,
+            directDistanceMeters: Double,
+            walkingDistanceMeters: Double? = nil,
+            walkingTravelTime: TimeInterval? = nil
+        ) {
+            self.item = item
+            self.directDistanceMeters = directDistanceMeters
+            self.walkingDistanceMeters = walkingDistanceMeters
+            self.walkingTravelTime = walkingTravelTime
+        }
+    }
+
+    public struct RankedAccessCandidate<Item: Sendable>: Sendable {
+        public let item: Item
+        public let directDistanceMeters: Double
+        public let walkingDistanceMeters: Double?
+        public let accessDistanceMeters: Double
+        public let displayTravelTime: TimeInterval
+        public let isApproximateTravelTime: Bool
+    }
+
     public struct Candidate: Sendable {
         public let station: LStation
         public let directDistanceMeters: Double
@@ -69,8 +97,31 @@ public struct StationAccessRanker: Sendable {
     }
 
     public func rank(_ candidates: [Candidate]) -> [RankedCandidate] {
+        rank(candidates.map { candidate in
+            AccessCandidate(
+                item: candidate.station,
+                directDistanceMeters: candidate.directDistanceMeters,
+                walkingDistanceMeters: candidate.walkingDistanceMeters,
+                walkingTravelTime: candidate.walkingTravelTime
+            )
+        })
+        .map { candidate in
+            RankedCandidate(
+                station: candidate.item,
+                directDistanceMeters: candidate.directDistanceMeters,
+                walkingDistanceMeters: candidate.walkingDistanceMeters,
+                accessDistanceMeters: candidate.accessDistanceMeters,
+                displayTravelTime: candidate.displayTravelTime,
+                isApproximateTravelTime: candidate.isApproximateTravelTime
+            )
+        }
+    }
+
+    public func rank<Item: Sendable>(
+        _ candidates: [AccessCandidate<Item>]
+    ) -> [RankedAccessCandidate<Item>] {
         candidates
-            .map(rankedCandidate)
+            .map(rankedAccessCandidate)
             .sorted { lhs, rhs in
                 if abs(lhs.accessDistanceMeters - rhs.accessDistanceMeters) > 1 {
                     return lhs.accessDistanceMeters < rhs.accessDistanceMeters
@@ -80,6 +131,31 @@ public struct StationAccessRanker: Sendable {
     }
 
     public func visibleCandidates(from ranked: [RankedCandidate]) -> [RankedCandidate] {
+        visibleAccessCandidates(from: ranked.map { candidate in
+            RankedAccessCandidate(
+                item: candidate.station,
+                directDistanceMeters: candidate.directDistanceMeters,
+                walkingDistanceMeters: candidate.walkingDistanceMeters,
+                accessDistanceMeters: candidate.accessDistanceMeters,
+                displayTravelTime: candidate.displayTravelTime,
+                isApproximateTravelTime: candidate.isApproximateTravelTime
+            )
+        })
+        .map { candidate in
+            RankedCandidate(
+                station: candidate.item,
+                directDistanceMeters: candidate.directDistanceMeters,
+                walkingDistanceMeters: candidate.walkingDistanceMeters,
+                accessDistanceMeters: candidate.accessDistanceMeters,
+                displayTravelTime: candidate.displayTravelTime,
+                isApproximateTravelTime: candidate.isApproximateTravelTime
+            )
+        }
+    }
+
+    public func visibleAccessCandidates<Item: Sendable>(
+        from ranked: [RankedAccessCandidate<Item>]
+    ) -> [RankedAccessCandidate<Item>] {
         guard !ranked.isEmpty else { return [] }
         let distances = ranked.map(\.accessDistanceMeters)
         let cutoff = min(
@@ -89,7 +165,9 @@ public struct StationAccessRanker: Sendable {
         return Array(ranked.prefix(cutoff))
     }
 
-    private func rankedCandidate(_ candidate: Candidate) -> RankedCandidate {
+    private func rankedAccessCandidate<Item: Sendable>(
+        _ candidate: AccessCandidate<Item>
+    ) -> RankedAccessCandidate<Item> {
         let proxyDistance = directnessProxyDistance(for: candidate.directDistanceMeters)
         let cappedProxyDistance = proxyDistance + routeNoiseAllowanceMeters
         let accessDistance = min(candidate.walkingDistanceMeters ?? proxyDistance, cappedProxyDistance)
@@ -107,8 +185,8 @@ public struct StationAccessRanker: Sendable {
             isApproximate = true
         }
 
-        return RankedCandidate(
-            station: candidate.station,
+        return RankedAccessCandidate(
+            item: candidate.item,
             directDistanceMeters: candidate.directDistanceMeters,
             walkingDistanceMeters: candidate.walkingDistanceMeters,
             accessDistanceMeters: accessDistance,

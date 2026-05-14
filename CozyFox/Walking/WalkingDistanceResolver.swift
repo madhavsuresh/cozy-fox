@@ -28,6 +28,14 @@ final class WalkingDistanceResolver {
         store.fresh(origin: origin, stationId: stationId)
     }
 
+    func cached(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) -> WalkingDistance? {
+        cached(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.intercampusStopDestinationKey(stopId: intercampusStop.id),
+            mode: .walking
+        )
+    }
+
     /// Stale fallback so the chip can render a known walking value while
     /// the daily refresh is in flight, instead of dropping back to
     /// Haversine and then visibly jumping when MapKit returns.
@@ -41,6 +49,14 @@ final class WalkingDistanceResolver {
 
     func staleFallback(origin: (lat: Double, lon: Double), stationId: Int) -> WalkingDistance? {
         store.anyCached(origin: origin, stationId: stationId)
+    }
+
+    func staleFallback(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) -> WalkingDistance? {
+        staleFallback(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.intercampusStopDestinationKey(stopId: intercampusStop.id),
+            mode: .walking
+        )
     }
 
     /// Kick off a MapKit fetch for `(origin, station)` if we don't already
@@ -97,6 +113,24 @@ final class WalkingDistanceResolver {
     func ensureFresh(origin: (lat: Double, lon: Double), metraStations: [MetraStation]) {
         for station in metraStations {
             ensureFresh(origin: origin, metraStation: station)
+        }
+    }
+
+    func ensureFresh(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) {
+        ensureFresh(
+            origin: origin,
+            destination: AccessRouteDestination(
+                key: WalkingDistanceStore.intercampusStopDestinationKey(stopId: intercampusStop.id),
+                latitude: intercampusStop.latitude,
+                longitude: intercampusStop.longitude
+            ),
+            mode: .walking
+        )
+    }
+
+    func ensureFresh(origin: (lat: Double, lon: Double), intercampusStops: [IntercampusStop]) {
+        for stop in intercampusStops {
+            ensureFresh(origin: origin, intercampusStop: stop)
         }
     }
 

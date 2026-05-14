@@ -19,6 +19,7 @@ final class RefreshCoordinator {
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
     private let metraClient: MetraClient
+    private let intercampusClient: NorthwesternIntercampusClient
     private let alertsClient: CTAAlertsClient
     private let divvyClient: DivvyGBFSClient
 
@@ -26,6 +27,7 @@ final class RefreshCoordinator {
     private let stationResolver = NearestStationResolver()
     private let busStopResolver = NearestBusStopResolver()
     private let metraStationResolver = NearestMetraStationResolver()
+    private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let autopinner = CommuteAutopinner()
 
     /// Day-stamp of the last walking-cache invalidation so a single 30 s
@@ -61,6 +63,7 @@ final class RefreshCoordinator {
         self.metraClient = MetraClient(http: http) {
             APIKeys.read(.metra)
         }
+        self.intercampusClient = NorthwesternIntercampusClient(http: http)
         self.alertsClient = CTAAlertsClient(http: http)
         self.divvyClient = DivvyGBFSClient(http: http)
     }
@@ -95,6 +98,7 @@ final class RefreshCoordinator {
             }
             group.addTask { await self.refreshBuses(prefs: prefs, lastLocation: lastLocation) }
             group.addTask { await self.refreshMetra(prefs: prefs, lastLocation: lastLocation) }
+            group.addTask { await self.refreshIntercampus(prefs: prefs, lastLocation: lastLocation) }
             group.addTask {
                 await self.refreshBikes(
                     origin: lastLocation,
@@ -412,6 +416,57 @@ final class RefreshCoordinator {
             .filter { seen.insert($0.id).inserted }
         if !unique.isEmpty {
             await store.replaceMetraPredictions(unique)
+        }
+    }
+
+    private func refreshIntercampus(
+        prefs: UserRoutePreferences,
+        lastLocation: LastKnownLocation?
+    ) async {
+        guard prefs.includeIntercampus else {
+            await store.replaceIntercampusArrivals([])
+            return
+        }
+        guard let lastLocation else {
+            await store.replaceIntercampusArrivals([])
+            return
+        }
+
+        let origin = (lastLocation.latitude, lastLocation.longitude)
+        let nearby = intercampusStopResolver.nearestPerDirection(
+            to: origin,
+            limitPerDirection: 12,
+            catalog: IntercampusCatalog.all
+        )
+        var targetStopIds = Set(nearby.map(\.stop.id))
+        if let selectedStopId = prefs.pinnedIntercampusStopId,
+           IntercampusCatalog.stop(id: selectedStopId) != nil
+        {
+            targetStopIds.insert(selectedStopId)
+        }
+        guard !targetStopIds.isEmpty else {
+            await store.replaceIntercampusArrivals([])
+            return
+        }
+
+        do {
+            let arrivals = try await intercampusClient.fetchArrivals(
+                stopIds: targetStopIds,
+                now: .now
+            )
+            var perStopDirectionCounts: [String: Int] = [:]
+            let capped = arrivals
+                .sorted { $0.arrivalAt < $1.arrivalAt }
+                .filter { arrival in
+                    let key = "\(arrival.direction.rawValue)-\(arrival.stopId)"
+                    let count = perStopDirectionCounts[key] ?? 0
+                    guard count < 4 else { return false }
+                    perStopDirectionCounts[key] = count + 1
+                    return true
+                }
+            await store.replaceIntercampusArrivals(capped)
+        } catch {
+            // Leave the previous cache in place on transient TripShot failures.
         }
     }
 

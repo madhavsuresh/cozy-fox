@@ -18,6 +18,9 @@ struct DashboardScreen: View {
     @State private var pinnedMetraStationId: String?
     @State private var pinnedMetraDirectionId: Int?
     @State private var pinnedMetraDestination: String?
+    @State private var includeIntercampus: Bool = false
+    @State private var pinnedIntercampusDirection: IntercampusDirection?
+    @State private var pinnedIntercampusStopId: String?
     @State private var pinSource: RoutePinSource = .manual
     @State private var autoPinnedDirection: CommuteDirection?
     @State private var plannedTripPin: PlannedTripPin?
@@ -44,8 +47,10 @@ struct DashboardScreen: View {
     /// placeholders so the user doesn't see a stale Haversine ordering
     /// for a flicker before MapKit refines.
     @State private var allowHaversineFallback: Bool = false
+    @State private var allowIntercampusHaversineFallback: Bool = false
 
     private let tripPlanner = TripPlanner()
+    private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
 
     var body: some View {
         NavigationStack {
@@ -62,6 +67,9 @@ struct DashboardScreen: View {
                     liveUpdatesBar
                     if shouldShowAutopinBanner {
                         contextBanner
+                    }
+                    if includeIntercampus {
+                        intercampusCard
                     }
                     linePickerCard
                     if let line = pinnedLine {
@@ -136,6 +144,9 @@ struct DashboardScreen: View {
         pinnedMetraStationId = prefs.pinnedMetraStationId
         pinnedMetraDirectionId = prefs.pinnedMetraDirectionId
         pinnedMetraDestination = prefs.pinnedMetraDestination
+        includeIntercampus = prefs.includeIntercampus
+        pinnedIntercampusDirection = prefs.pinnedIntercampusDirection
+        pinnedIntercampusStopId = prefs.pinnedIntercampusStopId
         pinSource = prefs.pinSource
         autoPinnedDirection = prefs.autoPinnedDirection
         plannedTripPin = prefs.plannedTripPin
@@ -1055,7 +1066,9 @@ struct DashboardScreen: View {
             return "Low Power Mode is on — auto-refresh paused"
         }
         if model.liveUpdatesEnabled {
-            return "Polling CTA and Metra every 30 seconds for fresh delays"
+            return includeIntercampus
+                ? "Polling CTA, Metra, and Intercampus every 30 seconds"
+                : "Polling CTA and Metra every 30 seconds for fresh delays"
         }
         return "Pull to refresh, or wait for background updates"
     }
@@ -1102,6 +1115,326 @@ struct DashboardScreen: View {
 
     private var isAutopinned: Bool {
         pinSource == .automatic && (pinnedLine != nil || pinnedBusRoute != nil || pinnedMetraRoute != nil)
+    }
+
+    // MARK: - Northwestern Intercampus
+
+    private var intercampusCard: some View {
+        ChicagoCard(title: "Intercampus",
+                    eyebrow: "Northwestern",
+                    ornament: .icon(systemName: "bus.fill")) {
+            intercampusBody
+        }
+    }
+
+    @ViewBuilder
+    private var intercampusBody: some View {
+        if let origin {
+            let candidateEntries = intercampusCandidateEntries(origin: origin)
+            let directionChoices = intercampusDirectionChoices(
+                from: candidateEntries,
+                origin: origin
+            )
+            if directionChoices.isEmpty {
+                Text("No Intercampus stops within 2 km of your location.")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else {
+                let activeDirection = effectiveIntercampusDirection(in: directionChoices)
+                let activeChoice = directionChoices.first { $0.direction == activeDirection }
+                VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                    directionPickerForIntercampus(choices: directionChoices)
+                    if let activeChoice {
+                        let hasWalkingData = activeChoice.stops.contains {
+                            $0.walkingDistanceMeters != nil
+                        }
+                        if hasWalkingData || allowIntercampusHaversineFallback {
+                            intercampusStopSelector(choice: activeChoice)
+                            let selected = effectivePinnedIntercampusStop(in: activeChoice)
+                            intercampusStopRow(choice: selected)
+                        } else {
+                            placeholderChipStrip
+                        }
+                    }
+                }
+                .task(id: intercampusWalkingTaskKey(origin: origin)) {
+                    allowIntercampusHaversineFallback = false
+                    model.walkingResolver.ensureFresh(
+                        origin: origin,
+                        intercampusStops: Array(Set(candidateEntries.map(\.stop)))
+                    )
+                    do {
+                        try await Task.sleep(for: .milliseconds(300))
+                        allowIntercampusHaversineFallback = true
+                    } catch {
+                        // Cancelled because the origin changed.
+                    }
+                }
+            }
+        } else {
+            Text("Waiting for a location fix…")
+                .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+        }
+    }
+
+    private func intercampusCandidateEntries(
+        origin: (lat: Double, lon: Double)
+    ) -> [NearestIntercampusStopResolver.Entry] {
+        var entries = intercampusStopResolver.nearestPerDirection(
+            to: origin,
+            limitPerDirection: 12,
+            catalog: IntercampusCatalog.all
+        )
+        if let selectedStopId = pinnedIntercampusStopId,
+           let selectedStop = IntercampusCatalog.stop(id: selectedStopId)
+        {
+            let directions = pinnedIntercampusDirection.map { [$0] } ?? selectedStop.servedDirections
+            for direction in directions where selectedStop.servedDirections.contains(direction) {
+                let distance = Distance.meters(
+                    from: origin,
+                    to: (selectedStop.latitude, selectedStop.longitude)
+                )
+                entries.append(NearestIntercampusStopResolver.Entry(
+                    direction: direction,
+                    stop: selectedStop,
+                    distance: distance
+                ))
+            }
+        }
+
+        var seen: Set<String> = []
+        return entries.filter { entry in
+            seen.insert(entry.id).inserted
+        }
+    }
+
+    private func intercampusDirectionChoices(
+        from entries: [NearestIntercampusStopResolver.Entry],
+        origin: (lat: Double, lon: Double)
+    ) -> [IntercampusDirectionStopChoice] {
+        IntercampusDirection.allCases.compactMap { direction -> IntercampusDirectionStopChoice? in
+            let candidates = entries.filter { $0.direction == direction }
+            guard !candidates.isEmpty else { return nil }
+
+            let ranked = rankIntercampusStopsWithWalking(
+                candidates: candidates,
+                origin: origin
+            )
+            let visible = Array(
+                StationAccessRanker()
+                    .visibleAccessCandidates(from: ranked)
+                    .prefix(3)
+            )
+            var choices = visible.map { ranked in
+                IntercampusStopChoice(
+                    direction: direction,
+                    stop: ranked.item,
+                    directDistanceMeters: ranked.directDistanceMeters,
+                    walkingDistanceMeters: ranked.walkingDistanceMeters,
+                    accessDistanceMeters: ranked.accessDistanceMeters,
+                    displayTravelTime: ranked.displayTravelTime,
+                    isApproximateTravelTime: ranked.isApproximateTravelTime
+                )
+            }
+
+            if let pinnedIntercampusStopId,
+               pinnedIntercampusDirection == direction,
+               choices.contains(where: { $0.stop.id == pinnedIntercampusStopId }) == false,
+               let pinned = ranked.first(where: { $0.item.id == pinnedIntercampusStopId })
+            {
+                choices.append(IntercampusStopChoice(
+                    direction: direction,
+                    stop: pinned.item,
+                    directDistanceMeters: pinned.directDistanceMeters,
+                    walkingDistanceMeters: pinned.walkingDistanceMeters,
+                    accessDistanceMeters: pinned.accessDistanceMeters,
+                    displayTravelTime: pinned.displayTravelTime,
+                    isApproximateTravelTime: pinned.isApproximateTravelTime
+                ))
+            }
+
+            guard !choices.isEmpty else { return nil }
+            return IntercampusDirectionStopChoice(
+                direction: direction,
+                stops: choices.sorted { $0.accessDistanceMeters < $1.accessDistanceMeters }
+            )
+        }
+        .sorted {
+            ($0.stops.first?.accessDistanceMeters ?? .infinity)
+                < ($1.stops.first?.accessDistanceMeters ?? .infinity)
+        }
+    }
+
+    private func rankIntercampusStopsWithWalking(
+        candidates: [NearestIntercampusStopResolver.Entry],
+        origin: (lat: Double, lon: Double)
+    ) -> [StationAccessRanker.RankedAccessCandidate<IntercampusStop>] {
+        let ranker = StationAccessRanker()
+        return ranker.rank(candidates.map { entry in
+            let walking = model.walkingResolver.cached(
+                origin: origin,
+                intercampusStop: entry.stop
+            ) ?? model.walkingResolver.staleFallback(
+                origin: origin,
+                intercampusStop: entry.stop
+            )
+            return StationAccessRanker.AccessCandidate(
+                item: entry.stop,
+                directDistanceMeters: entry.distance,
+                walkingDistanceMeters: walking?.meters,
+                walkingTravelTime: walking?.expectedTravelTime
+            )
+        })
+    }
+
+    private func effectiveIntercampusDirection(
+        in choices: [IntercampusDirectionStopChoice]
+    ) -> IntercampusDirection {
+        if let direction = pinnedIntercampusDirection,
+           choices.contains(where: { $0.direction == direction })
+        {
+            return direction
+        }
+        return choices.first?.direction ?? .northbound
+    }
+
+    private func directionPickerForIntercampus(
+        choices: [IntercampusDirectionStopChoice]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            sectionLabel("Pick a direction")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: ChicagoSpacing.xs) {
+                    ForEach(choices) { choice in
+                        DirectionChip(
+                            label: choice.direction.label,
+                            isSelected: effectiveIntercampusDirection(in: choices) == choice.direction,
+                            accent: intercampusAccent,
+                            action: { setPinnedIntercampusDirection(choice.direction) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func intercampusStopSelector(choice: IntercampusDirectionStopChoice) -> some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            sectionLabel("Pick a stop")
+            StationChipStrip {
+                ForEach(choice.stops) { entry in
+                    IntercampusStopChip(
+                        choice: entry,
+                        isSelected: entry.stop.id == effectivePinnedIntercampusStop(in: choice).stop.id,
+                        accent: intercampusAccent,
+                        action: { setPinnedIntercampusStop(entry) }
+                    )
+                }
+            }
+        }
+    }
+
+    private func effectivePinnedIntercampusStop(
+        in choice: IntercampusDirectionStopChoice
+    ) -> IntercampusStopChoice {
+        if let id = pinnedIntercampusStopId,
+           let selected = choice.stops.first(where: { $0.stop.id == id })
+        {
+            return selected
+        }
+        return choice.stops.first!
+    }
+
+    private func intercampusStopRow(choice: IntercampusStopChoice) -> some View {
+        let arrivals = intercampusArrivals(direction: choice.direction, stop: choice.stop)
+        let first = arrivals.first
+        let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
+        return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(choice.stop.name)
+                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
+                    .tracking(0.5)
+                    .foregroundStyle(ChicagoPalette.bahama)
+                Spacer()
+                Text(choice.walkTimeText)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .monospacedDigit()
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            }
+            Text(choice.direction.label)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.light)
+            if arrivals.isEmpty {
+                Text(model.isRefreshing
+                     ? "Fetching Intercampus arrivals…"
+                     : "No upcoming Intercampus arrivals returned by TripShot.")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else if let minutes, let first {
+                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
+                    BigNumber(
+                        minutes,
+                        unit: "min",
+                        size: .md,
+                        tone: first.isDelayed ? .alert : .primary,
+                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle"
+                    )
+                    Text("→ \(first.destinationName)")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                }
+                HeadwayDotStrip(
+                    arrivals: arrivals.prefix(8).map(\.arrivalAt),
+                    accent: intercampusAccent
+                )
+            }
+        }
+    }
+
+    private func intercampusArrivals(
+        direction: IntercampusDirection,
+        stop: IntercampusStop
+    ) -> [IntercampusArrival] {
+        model.snapshot.intercampusArrivals
+            .filter { $0.direction == direction && $0.stopId == stop.id }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+    }
+
+    private func setPinnedIntercampusDirection(_ direction: IntercampusDirection) {
+        let changed = pinnedIntercampusDirection != direction
+        pinnedIntercampusDirection = direction
+        if changed {
+            pinnedIntercampusStopId = nil
+        }
+        model.saveIntercampusPreferences {
+            $0.pinnedIntercampusDirection = direction
+            if changed {
+                $0.pinnedIntercampusStopId = nil
+            }
+        }
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
+    private func setPinnedIntercampusStop(_ choice: IntercampusStopChoice) {
+        pinnedIntercampusDirection = choice.direction
+        pinnedIntercampusStopId = choice.stop.id
+        model.saveIntercampusPreferences {
+            $0.pinnedIntercampusDirection = choice.direction
+            $0.pinnedIntercampusStopId = choice.stop.id
+        }
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
+    private func intercampusWalkingTaskKey(origin: (lat: Double, lon: Double)) -> String {
+        let lat = (origin.lat * 11000).rounded()
+        let lon = (origin.lon * 11000).rounded()
+        return "intercampus:\(lat):\(lon)"
+    }
+
+    private var intercampusAccent: Color {
+        Color(red: 0.306, green: 0.165, blue: 0.518)
     }
 
     // MARK: - Train line picker
@@ -2816,6 +3149,35 @@ private struct MetraEntry: Identifiable {
     var id: String { "\(routeId)-\(station.id)" }
 }
 
+private struct IntercampusDirectionStopChoice: Identifiable {
+    let direction: IntercampusDirection
+    let stops: [IntercampusStopChoice]
+
+    var id: IntercampusDirection { direction }
+}
+
+private struct IntercampusStopChoice: Identifiable, Hashable {
+    let direction: IntercampusDirection
+    let stop: IntercampusStop
+    let directDistanceMeters: Double
+    let walkingDistanceMeters: Double?
+    let accessDistanceMeters: Double
+    let displayTravelTime: TimeInterval
+    let isApproximateTravelTime: Bool
+
+    var id: String { "\(direction.rawValue)-\(stop.id)" }
+
+    var walkTimeText: String {
+        let minutes = max(1, Int((displayTravelTime / 60).rounded()))
+        return "\(isApproximateTravelTime ? "≈" : "")\(minutes) min walk"
+    }
+
+    var accessibilityWalkTimeText: String {
+        let minutes = max(1, Int((displayTravelTime / 60).rounded()))
+        return "\(isApproximateTravelTime ? "about " : "")\(minutes) minute walk"
+    }
+}
+
 private struct BusDirectionStopChoice: Identifiable {
     let directionLabel: String
     let stops: [BusStopChoice]
@@ -3114,6 +3476,44 @@ private struct MetraStationChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(station.name), \(AccessTimeFormatter.accessibility(accessTime))")
+    }
+}
+
+private struct IntercampusStopChip: View {
+    let choice: IntercampusStopChoice
+    let isSelected: Bool
+    let accent: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(choice.stop.name)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                Text(choice.walkTimeText)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .monospacedDigit()
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
+            }
+            .padding(.horizontal, ChicagoSpacing.md)
+            .padding(.vertical, ChicagoSpacing.sm)
+            .frame(minWidth: 132, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .fill(isSelected ? accent : ChicagoPalette.Surface.elevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .strokeBorder(
+                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                        lineWidth: ChicagoSpacing.Stroke.thin
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(choice.stop.name), \(choice.accessibilityWalkTimeText)")
     }
 }
 
