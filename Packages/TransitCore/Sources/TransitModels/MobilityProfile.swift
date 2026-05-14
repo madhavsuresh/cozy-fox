@@ -92,6 +92,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         public let context: CommuteContext
         public let line: LineColor?
         public let stationId: Int?
+        public let trainDestination: String?
         public let busRoute: String?
         public let busDirection: String?
         public let metraRoute: String?
@@ -110,6 +111,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             context: CommuteContext,
             line: LineColor?,
             stationId: Int?,
+            trainDestination: String? = nil,
             busRoute: String?,
             busDirection: String?,
             metraRoute: String? = nil,
@@ -127,6 +129,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             self.context = context
             self.line = line
             self.stationId = stationId
+            self.trainDestination = trainDestination
             self.busRoute = busRoute
             self.busDirection = busDirection
             self.metraRoute = metraRoute
@@ -192,6 +195,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         context: CommuteContext,
         line: LineColor?,
         stationId: Int?,
+        trainDestination: String? = nil,
         busRoute: String?,
         busDirection: String?,
         metraRoute: String? = nil,
@@ -210,6 +214,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             context: context,
             line: line,
             stationId: stationId,
+            trainDestination: trainDestination,
             busRoute: busRoute,
             busDirection: busDirection,
             metraRoute: metraRoute,
