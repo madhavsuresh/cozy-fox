@@ -212,6 +212,15 @@ final class AppViewModel {
         Task { await refreshIfNeeded(force: true) }
     }
 
+    func setWorkAnchor(latitude: Double, longitude: Double) {
+        var anchors = preferences.loadCommuteAnchors()
+        anchors.work = .init(latitude: latitude, longitude: longitude, label: "Work")
+        preferences.saveCommuteAnchors(anchors)
+        location.updateAnchors(anchors)
+        pinRevision += 1
+        Task { await refreshIfNeeded(force: true) }
+    }
+
     private func recordManualRouteChoice(_ prefs: UserRoutePreferences) {
         var profile = preferences.loadMobilityProfile()
         profile.recordRouteObservation(

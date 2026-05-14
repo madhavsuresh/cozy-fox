@@ -115,13 +115,71 @@ public enum RoutePinSource: String, Codable, Sendable, Hashable {
 }
 
 public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
-    public enum Destination: String, Codable, Sendable, Hashable {
+    public enum DestinationKind: String, Codable, Sendable, Hashable {
         case home
+        case work
+        case custom
 
-        public var label: String {
+        var defaultTitle: String {
             switch self {
             case .home: "Home"
+            case .work: "Work"
+            case .custom: "Destination"
             }
+        }
+    }
+
+    public struct Destination: Codable, Sendable, Hashable {
+        public let kind: DestinationKind
+        public let title: String
+        public let subtitle: String?
+        public let latitude: Double?
+        public let longitude: Double?
+
+        public init(
+            kind: DestinationKind,
+            title: String,
+            subtitle: String? = nil,
+            latitude: Double?,
+            longitude: Double?
+        ) {
+            self.kind = kind
+            self.title = title
+            self.subtitle = subtitle
+            self.latitude = latitude
+            self.longitude = longitude
+        }
+
+        public var label: String {
+            title
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind
+            case title
+            case subtitle
+            case latitude
+            case longitude
+        }
+
+        public init(from decoder: Decoder) throws {
+            if let container = try? decoder.container(keyedBy: CodingKeys.self),
+               let kind = try? container.decode(DestinationKind.self, forKey: .kind) {
+                self.kind = kind
+                self.title = (try? container.decode(String.self, forKey: .title)) ?? kind.defaultTitle
+                self.subtitle = try? container.decode(String.self, forKey: .subtitle)
+                self.latitude = try? container.decode(Double.self, forKey: .latitude)
+                self.longitude = try? container.decode(Double.self, forKey: .longitude)
+                return
+            }
+
+            let rawValue = try decoder.singleValueContainer().decode(String.self)
+            let kind = DestinationKind(rawValue: rawValue) ?? .custom
+            self.kind = kind
+            self.title = kind.defaultTitle
+            self.subtitle = nil
+            self.latitude = nil
+            self.longitude = nil
         }
     }
 
