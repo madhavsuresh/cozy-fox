@@ -2,27 +2,14 @@ import Foundation
 import TransitModels
 
 /// Picks the nearest CTA "L" stations to a given coordinate from the
-/// `LStationCatalog`. Used by the refresh coordinator as a fallback when
-/// the user has no tracked train preferences yet, so the dashboard surfaces
-/// "what's coming up at the closest station" out of the box.
-///
-/// Ranking uses **effective distance**: Haversine plus a penalty when the
-/// straight line crosses the Chicago River. Two stops at similar Haversine
-/// distance but on opposite sides of the river have very different
-/// walking costs, and this nudges the river-side that matches the user's
-/// side without us needing real pedestrian routing. The returned tuple
-/// reports Haversine for display so chip distances don't include the
-/// invisible bridge cost.
+/// `LStationCatalog`. Ranks by Haversine distance — the dashboard layers a
+/// MapKit walking-distance refinement on top of this, so we don't bother
+/// modeling pedestrian barriers here.
 public struct NearestStationResolver: Sendable {
     public let maxDistanceMeters: Double
-    public let appliesRiverPenalty: Bool
 
-    public init(
-        maxDistanceMeters: Double = 5_000,
-        appliesRiverPenalty: Bool = true
-    ) {
+    public init(maxDistanceMeters: Double = 5_000) {
         self.maxDistanceMeters = maxDistanceMeters
-        self.appliesRiverPenalty = appliesRiverPenalty
     }
 
     public func nearest(
@@ -31,10 +18,14 @@ public struct NearestStationResolver: Sendable {
         catalog: [LStation] = LStationCatalog.all,
         excludingStationIds: Set<Int> = []
     ) -> [LStation] {
-        all(within: maxDistanceMeters, of: origin, catalog: catalog)
-            .filter { !excludingStationIds.contains($0.station.id) }
-            .prefix(limit)
-            .map(\.station)
+        all(
+            within: maxDistanceMeters,
+            of: origin,
+            catalog: catalog,
+            excludingStationIds: excludingStationIds
+        )
+        .prefix(limit)
+        .map(\.station)
     }
 
     /// The single closest station that serves a specific line — used when the
@@ -48,9 +39,8 @@ public struct NearestStationResolver: Sendable {
         closestStations(onLine: line, to: origin, limit: 1, catalog: catalog).first?.station
     }
 
-    /// Top N closest stations serving a specific line, sorted by effective
-    /// distance. Used so the user can pick a specific stop after pinning a
-    /// line. The reported distance is Haversine.
+    /// Top N closest stations serving a specific line, sorted by Haversine
+    /// distance.
     public func closestStations(
         onLine line: LineColor,
         to origin: (lat: Double, lon: Double),
@@ -62,19 +52,22 @@ public struct NearestStationResolver: Sendable {
             .filter { !excludingStationIds.contains($0.id) }
             .filter { $0.servedLines.contains(line) }
             .map { station in
-                rank(station: station, from: origin)
+                (
+                    station: station,
+                    distance: Distance.meters(
+                        from: origin,
+                        to: (station.latitude, station.longitude)
+                    )
+                )
             }
-            .filter { $0.effective <= maxDistanceMeters }
-            .sorted { $0.effective < $1.effective }
+            .filter { $0.distance <= maxDistanceMeters }
+            .sorted { $0.distance < $1.distance }
             .prefix(limit)
-            .map { (station: $0.station, distance: $0.haversine) }
+            .map { (station: $0.station, distance: $0.distance) }
     }
 
-    /// Returns every station within `radiusMeters` of effective distance,
-    /// sorted ascending by effective distance. Reported `distance` is
-    /// Haversine. Used for the dashboard "Near you" cluster view — callers
-    /// can rely on the ordering to pick the closest serving stop per line
-    /// without re-comparing.
+    /// Returns every station within `radiusMeters`, sorted by Haversine
+    /// distance ascending. Used for the dashboard "Near you" cluster view.
     public func all(
         within radiusMeters: Double,
         of origin: (lat: Double, lon: Double),
@@ -84,22 +77,15 @@ public struct NearestStationResolver: Sendable {
         catalog
             .filter { !excludingStationIds.contains($0.id) }
             .map { station in
-                rank(station: station, from: origin)
+                (
+                    station: station,
+                    distance: Distance.meters(
+                        from: origin,
+                        to: (station.latitude, station.longitude)
+                    )
+                )
             }
-            .filter { $0.effective <= radiusMeters }
-            .sorted { $0.effective < $1.effective }
-            .map { (station: $0.station, distance: $0.haversine) }
-    }
-
-    private func rank(
-        station: LStation,
-        from origin: (lat: Double, lon: Double)
-    ) -> (station: LStation, haversine: Double, effective: Double) {
-        let destination = (lat: station.latitude, lon: station.longitude)
-        let haversine = Distance.meters(from: origin, to: destination)
-        let penalty = appliesRiverPenalty
-            ? RiverPenalty.penalty(from: origin, to: destination)
-            : 0
-        return (station, haversine, haversine + penalty)
+            .filter { $0.distance <= radiusMeters }
+            .sorted { $0.distance < $1.distance }
     }
 }
