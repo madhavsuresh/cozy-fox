@@ -187,6 +187,7 @@ final class AppViewModel {
             stationId: prefs.pinnedStationId,
             busRoute: prefs.pinnedBusRoute,
             busDirection: prefs.pinnedBusDirection,
+            motion: location.motion,
             at: .now,
             calendar: SystemClock().calendar
         )

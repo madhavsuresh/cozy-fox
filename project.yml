@@ -48,6 +48,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         NSLocationWhenInUseUsageDescription: "Cozy Fox uses your location to surface the closest e-bikes and to detect when you're leaving home or work, so transit info stays relevant. Location never leaves your phone."
         NSLocationAlwaysAndWhenInUseUsageDescription: "Cozy Fox watches for when you leave home or work to automatically surface your commute. It only uses region crossings, not continuous tracking."
+        NSMotionUsageDescription: "Cozy Fox reads the iPhone motion coprocessor (always-on, near-zero battery) to tell whether you're walking, still, or in a vehicle. This sharpens auto-pin timing — for example, it won't surface your commute while you're still on the couch. Motion data never leaves your phone."
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
         BGTaskSchedulerPermittedIdentifiers:

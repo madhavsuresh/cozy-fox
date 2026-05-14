@@ -1,5 +1,18 @@
 import Foundation
 
+/// Coarse, semantic classification of the device's current motion, sourced
+/// from the M-series motion coprocessor via Core Motion. Stored alongside
+/// observations so the autopinner can tell "about to leave home" (walking)
+/// apart from "still at home" (stationary) without ever needing a GPS trace.
+public enum MotionContext: String, Codable, Sendable, Hashable {
+    case unknown
+    case stationary
+    case walking
+    case running
+    case cycling
+    case automotive
+}
+
 /// Coarse, on-device history used for commute prediction.
 ///
 /// This intentionally stores semantic states and route choices, not a raw GPS
@@ -14,6 +27,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         public let direction: CommuteDirection?
         public let weekday: Int
         public let hour: Int
+        public let motion: MotionContext?
 
         public init(
             id: UUID = UUID(),
@@ -22,7 +36,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             source: Source,
             direction: CommuteDirection?,
             weekday: Int,
-            hour: Int
+            hour: Int,
+            motion: MotionContext? = nil
         ) {
             self.id = id
             self.recordedAt = recordedAt
@@ -31,6 +46,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             self.direction = direction
             self.weekday = weekday
             self.hour = hour
+            self.motion = motion
         }
 
         public enum Source: String, Codable, Sendable {
@@ -53,6 +69,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         public let busDirection: String?
         public let weekday: Int
         public let hour: Int
+        public let motion: MotionContext?
 
         public init(
             id: UUID = UUID(),
@@ -64,7 +81,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             busRoute: String?,
             busDirection: String?,
             weekday: Int,
-            hour: Int
+            hour: Int,
+            motion: MotionContext? = nil
         ) {
             self.id = id
             self.recordedAt = recordedAt
@@ -76,6 +94,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             self.busDirection = busDirection
             self.weekday = weekday
             self.hour = hour
+            self.motion = motion
         }
     }
 
@@ -99,6 +118,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         context: CommuteContext,
         source: Observation.Source,
         direction: CommuteDirection? = nil,
+        motion: MotionContext? = nil,
         at date: Date = .now,
         calendar: Calendar = .current
     ) {
@@ -106,6 +126,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
            last.context == context,
            last.source == source,
            last.direction == direction,
+           last.motion == motion,
            date.timeIntervalSince(last.recordedAt) < 15 * 60
         {
             return
@@ -117,7 +138,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             source: source,
             direction: direction,
             weekday: calendar.component(.weekday, from: date),
-            hour: calendar.component(.hour, from: date)
+            hour: calendar.component(.hour, from: date),
+            motion: motion
         ))
         updatedAt = date
         prune(relativeTo: date)
@@ -130,6 +152,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         stationId: Int?,
         busRoute: String?,
         busDirection: String?,
+        motion: MotionContext? = nil,
         at date: Date = .now,
         calendar: Calendar = .current
     ) {
@@ -143,7 +166,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             busRoute: busRoute,
             busDirection: busDirection,
             weekday: calendar.component(.weekday, from: date),
-            hour: calendar.component(.hour, from: date)
+            hour: calendar.component(.hour, from: date),
+            motion: motion
         ))
         updatedAt = date
         prune(relativeTo: date)

@@ -18,6 +18,8 @@ public struct CommuteAutopinner: Sendable {
             case missingLocation
             case missingAnchor
             case notInCommuteWindow
+            case suppressedByMotion
+            case heldDuringTransit
             case noRoute
             case unchanged
             case pinned
@@ -66,7 +68,8 @@ public struct CommuteAutopinner: Sendable {
         anchors: CommuteAnchors,
         profile: MobilityProfile,
         location: LastKnownLocation?,
-        context: CommuteContext
+        context: CommuteContext,
+        motion: MotionContext? = nil
     ) -> Result {
         guard preferences.autopinEnabled else {
             return .init(preferences: preferences, changed: false, direction: nil, reason: .disabled)
@@ -74,11 +77,26 @@ public struct CommuteAutopinner: Sendable {
         guard !hasActiveManualOverride(preferences) else {
             return .init(preferences: preferences, changed: false, direction: nil, reason: .manualOverride)
         }
+        // While the user is actively in a vehicle or on a bike with an
+        // automatic pin already showing, hold steady — region-edge crossings
+        // shouldn't flicker the pin mid-trip.
+        if let motion, motion == .automotive || motion == .cycling,
+           preferences.pinSource == .automatic, preferences.hasPinnedTransit {
+            return .init(
+                preferences: preferences,
+                changed: false,
+                direction: preferences.autoPinnedDirection,
+                reason: .heldDuringTransit
+            )
+        }
         guard let location else {
             return .init(preferences: preferences, changed: false, direction: nil, reason: .missingLocation)
         }
-        guard let direction = predictedDirection(context: context, profile: profile) else {
-            return clearAutomaticPins(preferences, reason: .notInCommuteWindow)
+        guard let direction = predictedDirection(context: context, profile: profile, motion: motion) else {
+            let reason: Result.Reason = (context == .atHome && motion == .stationary)
+                ? .suppressedByMotion
+                : .notInCommuteWindow
+            return clearAutomaticPins(preferences, reason: reason)
         }
         guard let target = targetAnchor(for: direction, anchors: anchors) else {
             return clearAutomaticPins(preferences, reason: .missingAnchor)
@@ -122,11 +140,15 @@ public struct CommuteAutopinner: Sendable {
 
     private func predictedDirection(
         context: CommuteContext,
-        profile: MobilityProfile
+        profile: MobilityProfile,
+        motion: MotionContext?
     ) -> CommuteDirection? {
         switch context {
         case .atHome:
-            return shouldSurfaceToWorkFromHome(profile: profile) ? .toWork : nil
+            // Stationary at home → not commuting; let the caller turn this
+            // into a `.suppressedByMotion` reason for the belief panel.
+            if motion == .stationary { return nil }
+            return shouldSurfaceToWorkFromHome(profile: profile, motion: motion) ? .toWork : nil
         case .atWork, .elsewhere:
             return .toHome
         case .unknown:
@@ -134,8 +156,15 @@ public struct CommuteAutopinner: Sendable {
         }
     }
 
-    private func shouldSurfaceToWorkFromHome(profile: MobilityProfile) -> Bool {
+    private func shouldSurfaceToWorkFromHome(
+        profile: MobilityProfile,
+        motion: MotionContext?
+    ) -> Bool {
         guard isWeekday(clock.now) else { return false }
+        // Walking or running on a weekday at home is strong evidence the user
+        // is leaving — surface toWork even if we have no learned history or
+        // we're outside the usual hour window.
+        if motion == .walking || motion == .running { return true }
         let hour = clock.calendar.component(.hour, from: clock.now)
         let departures = profile.observations.filter {
             $0.source == .exitedHome
