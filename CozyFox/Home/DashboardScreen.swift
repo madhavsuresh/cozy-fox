@@ -815,7 +815,7 @@ struct DashboardScreen: View {
         selectedTrainChoiceIds = Set(option.trainChoices.prefix(1).compactMap { selected in
             trainChoices.first { trainPinKey($0) == trainPinKey(selected) }?.id
         })
-        selectedBusChoiceIds = Set(option.busChoices.compactMap { selected in
+        selectedBusChoiceIds = Set(option.busChoices.prefix(1).compactMap { selected in
             busChoices.first { busPinKey($0) == busPinKey(selected) }?.id
         })
         selectedMetraChoiceIds = Set(option.metraChoices.compactMap { selected in
