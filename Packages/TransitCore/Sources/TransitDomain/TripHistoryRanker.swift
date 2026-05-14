@@ -58,11 +58,50 @@ struct TripHistoryRanker: Sendable {
     }
 
     func score(resolution: TransitResolution) -> Double {
-        profile.routeObservations
+        let rawScore = profile.routeObservations
             .compactMap { observationScore($0, for: resolution) }
             .sorted(by: >)
             .prefix(8)
             .reduce(0, +)
+        let summaryScore = summaryScore(for: resolution) * 0.6
+        return rawScore + summaryScore
+    }
+
+    private func summaryScore(for resolution: TransitResolution) -> Double {
+        let mode: MobilityProfileSummary.RoutePattern.Mode
+        let routeId: String
+        switch resolution {
+        case .line(let line):
+            mode = .train
+            routeId = line.rawValue
+        case .bus(let route):
+            mode = .bus
+            routeId = route
+        case .metra(let route):
+            mode = .metra
+            routeId = route
+        case .unknown:
+            return 0
+        }
+
+        let weekday = calendar.component(.weekday, from: now)
+        let hour = calendar.component(.hour, from: now)
+        return profile.summary.routePatterns.values
+            .filter { $0.mode == mode && $0.routeId == routeId }
+            .reduce(0.0) { acc, pattern in
+                let totalDouble = Double(pattern.totalCount)
+                guard totalDouble > 0 else { return acc }
+                let weekdayFraction = Double(pattern.weekdayCounts[String(weekday)] ?? 0) / totalDouble
+                let hourCount = (-2...2).reduce(0) { sum, offset in
+                    let h = ((hour + offset) % 24 + 24) % 24
+                    return sum + (pattern.hourCounts[String(h)] ?? 0)
+                }
+                let hourFraction = Double(hourCount) / totalDouble
+                let ageDays = max(0, now.timeIntervalSince(pattern.latestSampleAt) / 86_400)
+                let recency = max(0, 1.5 - ageDays / 60)
+                let originBoost = pattern.originBucketCounts.isEmpty ? 0 : 0.5
+                return acc + log(totalDouble + 1) * (0.3 + weekdayFraction * 1.5 + hourFraction * 1.5) + recency + originBoost
+            }
     }
 
     private func observationScore(

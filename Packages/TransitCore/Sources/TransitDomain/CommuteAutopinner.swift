@@ -207,24 +207,37 @@ public struct CommuteAutopinner: Sendable {
         // we're outside the usual hour window.
         if motion == .walking || motion == .running { return true }
         let hour = clock.calendar.component(.hour, from: clock.now)
+        let weekday = clock.calendar.component(.weekday, from: clock.now)
         let departures = profile.observations.filter {
             $0.source == .exitedHome
                 && $0.direction == .toWork
                 && isWeekday(weekday: $0.weekday)
         }
 
-        guard departures.count >= 3 else {
-            return (5...11).contains(hour)
+        if departures.count >= 3 {
+            let sameWeekday = departures.filter { $0.weekday == weekday }
+            let sample = sameWeekday.count >= 2 ? sameWeekday : departures
+            let byHour = Dictionary(grouping: sample, by: \.hour)
+            guard let peak = byHour.max(by: { $0.value.count < $1.value.count })?.key else {
+                return false
+            }
+            return hourDistance(hour, peak) <= 2
         }
 
-        let weekday = clock.calendar.component(.weekday, from: clock.now)
-        let sameWeekday = departures.filter { $0.weekday == weekday }
-        let sample = sameWeekday.count >= 2 ? sameWeekday : departures
-        let byHour = Dictionary(grouping: sample, by: \.hour)
-        guard let peak = byHour.max(by: { $0.value.count < $1.value.count })?.key else {
-            return false
+        // Raw history has aged out — fall back to the derived summary so we
+        // don't lose the user's learned commute window after 14 days.
+        if let window = profile.summary.departureWindow(source: .exitedHome, direction: .toWork),
+           window.totalCount >= 3
+        {
+            if window.matchesWindow(weekday: weekday, hour: hour, hourWindow: 2, minSamples: 2) {
+                return true
+            }
+            if let peakHour = window.peakHour {
+                return hourDistance(hour, peakHour) <= 2
+            }
         }
-        return hourDistance(hour, peak) <= 2
+
+        return (5...11).contains(hour)
     }
 
     private func targetAnchor(
@@ -346,6 +359,36 @@ public struct CommuteAutopinner: Sendable {
             }
         }
 
+        // Summary fallback for patterns that have aged out of the raw window.
+        // Only fill in modes the raw scan didn't see; the freshly-observed
+        // signal still wins when available.
+        for pattern in profile.summary.patterns(direction: direction) {
+            let score = score(pattern: pattern)
+            switch pattern.mode {
+            case .train:
+                guard let line = LineColor(rawValue: pattern.routeId),
+                      preferences.isTrainLineVisible(line),
+                      lineScores[line] == nil
+                else { continue }
+                let stationId = pattern.topStationId.flatMap(Int.init)
+                lineScores[line] = (score, pattern.latestSampleAt, stationId)
+            case .bus:
+                let route = pattern.routeId
+                guard preferences.isBusRouteVisible(route), busScores[route] == nil else { continue }
+                busScores[route] = (score, pattern.latestSampleAt, pattern.topDirectionLabel)
+            case .metra:
+                let route = pattern.routeId
+                guard preferences.isMetraRouteVisible(route), metraScores[route] == nil else { continue }
+                let directionId = pattern.topDirectionLabel.flatMap(Int.init)
+                metraScores[route] = (
+                    score,
+                    pattern.latestSampleAt,
+                    pattern.topStationId,
+                    directionId
+                )
+            }
+        }
+
         let bestLine = lineScores.max { $0.value.score < $1.value.score }
         let bestBus = busScores.max { $0.value.score < $1.value.score }
         let bestMetra = metraScores.max { $0.value.score < $1.value.score }
@@ -375,6 +418,22 @@ public struct CommuteAutopinner: Sendable {
             metraStationId: validatedMetra?.stationId,
             metraDirectionId: validatedMetra?.directionId
         )
+    }
+
+    private func score(pattern: MobilityProfileSummary.RoutePattern) -> Double {
+        let weekday = clock.calendar.component(.weekday, from: clock.now)
+        let hour = clock.calendar.component(.hour, from: clock.now)
+        let totalDouble = Double(pattern.totalCount)
+        guard totalDouble > 0 else { return 0 }
+        let weekdayFraction = Double(pattern.weekdayCounts[String(weekday)] ?? 0) / totalDouble
+        let hourCount = (-2...2).reduce(0) { acc, offset in
+            let h = ((hour + offset) % 24 + 24) % 24
+            return acc + (pattern.hourCounts[String(h)] ?? 0)
+        }
+        let hourFraction = Double(hourCount) / totalDouble
+        let ageDays = max(0, clock.now.timeIntervalSince(pattern.latestSampleAt) / 86_400)
+        let recency = max(0, 1.5 - ageDays / 60)
+        return log(totalDouble + 1) * (0.3 + weekdayFraction * 1.5 + hourFraction * 1.5) + recency
     }
 
     private func localRouteChoice(

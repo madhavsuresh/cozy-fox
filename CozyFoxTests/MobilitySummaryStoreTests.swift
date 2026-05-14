@@ -56,25 +56,34 @@ struct MobilitySummaryStoreTests {
         let now = Date(timeIntervalSinceReferenceDate: 770_000_000)
         let old = now.addingTimeInterval(-30 * 24 * 60 * 60)
         let recent = now.addingTimeInterval(-1 * 24 * 60 * 60)
-        var profile = MobilityProfile.empty
-        profile.recordRouteObservation(
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        // Construct route observations directly so `MobilityProfile`'s
+        // 14-day auto-prune (which fires on `recordRouteObservation`) doesn't
+        // drop the old row before our fold gets to see it.
+        let oldRow = MobilityProfile.RouteObservation(
+            recordedAt: old,
             direction: .toWork,
             context: .atHome,
             line: .blue,
             stationId: 40380,
             busRoute: nil,
             busDirection: nil,
-            at: old
+            weekday: calendar.component(.weekday, from: old),
+            hour: calendar.component(.hour, from: old)
         )
-        profile.recordRouteObservation(
+        let recentRow = MobilityProfile.RouteObservation(
+            recordedAt: recent,
             direction: .toWork,
             context: .atHome,
             line: .blue,
             stationId: 40380,
             busRoute: nil,
             busDirection: nil,
-            at: recent
+            weekday: calendar.component(.weekday, from: recent),
+            hour: calendar.component(.hour, from: recent)
         )
+        let profile = MobilityProfile(routeObservations: [oldRow, recentRow])
 
         let result = store.fold(profile: profile, now: now)
         // Only the 30-day-old observation is foldable; the 1-day-old one stays.

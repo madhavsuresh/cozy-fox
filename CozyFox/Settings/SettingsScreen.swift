@@ -141,7 +141,7 @@ struct SettingsScreen: View {
                 Text("Behavior")
             }
 
-            autopinBeliefSection
+            localPredictionsSection
 
             Section("Tracked trains") {
                 if prefs.trains.isEmpty {
@@ -552,12 +552,13 @@ struct SettingsScreen: View {
         model.pinRevision += 1
     }
 
-    // MARK: - Autopin belief
+    // MARK: - Local predictions
 
     @ViewBuilder
-    private var autopinBeliefSection: some View {
+    private var localPredictionsSection: some View {
         let profile = model.preferences.loadMobilityProfile()
-        let preview = autopinPreview(profile: profile)
+        let autopinPreview = autopinPreview(profile: profile)
+        let prediction = localPrediction(profile: profile)
 
         Section {
             beliefRow("Current place", contextBeliefText)
@@ -573,20 +574,148 @@ struct SettingsScreen: View {
                 resolved: workApproximateAddress,
                 missing: "No work address set yet."
             ))
+
+            beliefRow("Predicted direction", predictedDirectionText(prediction))
+            beliefRow("Confidence", confidenceText(prediction))
+            beliefRow("Reason", prediction.reasonText)
+            beliefRow("Departure-window match", departureMatchText(prediction))
+            beliefRow("Likely route", likelyRouteText(prediction))
+
             beliefRow("Typical home departure", homeDepartureBeliefText(profile))
             beliefRow("Typical work departure", workDepartureBeliefText(profile))
-            beliefRow("Next autopin decision", predictionDecisionText(preview))
-            beliefRow("Transit it would surface", surfacedTransitText(preview))
+            beliefRow("Next autopin decision", predictionDecisionText(autopinPreview))
+            beliefRow("Transit it would surface", surfacedTransitText(autopinPreview))
+
+            beliefRow("Summary freshness", summaryFreshnessText(profile))
+            beliefRow("Raw retention window", retentionWindowText)
+            beliefRow("Sample counts", sampleCountsText(profile))
 
             if let override = manualOverrideText {
                 beliefRow("Manual override", override)
             }
         } header: {
-            Text("Autopin belief")
+            Text("Local predictions")
         } footer: {
-            Text("These are the local prediction inputs and output. Activity is read from the iPhone motion coprocessor (always-on, near-zero battery). Approximate addresses are reverse-geocoded for display only and are not saved by Cozy Fox.")
+            Text("On-device commute prediction inputs and outputs. Activity is read from the iPhone motion coprocessor (always-on, near-zero battery). Approximate addresses are reverse-geocoded for display only and are not saved by Cozy Fox. Raw observations are kept for \(Int(MobilityProfile.rawRetentionDays)) days; long-term patterns survive in a derived summary.")
                 .font(.footnote)
         }
+    }
+
+    private func localPrediction(profile: MobilityProfile) -> LocalMobilityPrediction {
+        LocalPredictionEngine().predict(
+            preferences: prefs,
+            anchors: anchors,
+            profile: profile,
+            location: model.location.lastKnown,
+            context: model.location.context,
+            motion: model.location.motion
+        )
+    }
+
+    private func predictedDirectionText(_ prediction: LocalMobilityPrediction) -> String {
+        guard let direction = prediction.direction else {
+            switch prediction.reason {
+            case .disabled: return "Auto-pin is off."
+            case .manualOverride: return "Holding the manual pin."
+            case .missingLocation: return "Waiting for a current location."
+            case .suppressedByMotion: return "Suppressed — still at home."
+            case .notInCommuteWindow: return "No commute direction right now."
+            default: return "No commute direction right now."
+            }
+        }
+        return direction.label
+    }
+
+    private func confidenceText(_ prediction: LocalMobilityPrediction) -> String {
+        let percentage = Int((prediction.confidence * 100).rounded())
+        let coverage = Int((prediction.coverage * 100).rounded())
+        if prediction.confidence == 0 && prediction.coverage == 0 {
+            return "Not predicting right now."
+        }
+        return "\(percentage)% on this call · learning coverage \(coverage)%."
+    }
+
+    private func departureMatchText(_ prediction: LocalMobilityPrediction) -> String {
+        let baseline: String
+        switch prediction.departureMatch {
+        case .insideLearnedWindow:
+            baseline = "Inside the learned departure window"
+        case .nearLearnedWindow:
+            baseline = "Close to the learned departure window"
+        case .outsideLearnedWindow:
+            baseline = "Outside the usual departure window"
+        case .fallbackWindow:
+            baseline = "Inside the fallback commute hours"
+        case .noLearnedWindow:
+            baseline = "No learned departure window yet"
+        }
+        if let weekday = prediction.peakDepartureWeekday,
+           let hour = prediction.peakDepartureHour
+        {
+            return "\(baseline) (peak \(weekdayShortName(weekday)) ~ \(hourLabel(hour)), \(prediction.learnedDepartureSampleCount) samples)."
+        }
+        if let hour = prediction.peakDepartureHour {
+            return "\(baseline) (peak around \(hourLabel(hour)), \(prediction.learnedDepartureSampleCount) samples)."
+        }
+        return "\(baseline)."
+    }
+
+    private func likelyRouteText(_ prediction: LocalMobilityPrediction) -> String {
+        guard let candidate = prediction.topCandidate else {
+            return "No learned route yet."
+        }
+        var description = routeDescription(candidate)
+        let sourceText = candidate.source == .raw ? "from recent history" : "from the long-term summary"
+        let countText = candidate.totalCount == 1 ? "1 sample" : "\(candidate.totalCount) samples"
+        description += " · \(sourceText) · \(countText)"
+        if prediction.routeCandidates.count > 1 {
+            let alternatives = prediction.routeCandidates.dropFirst()
+                .prefix(2)
+                .map { routeDescription($0) }
+                .joined(separator: ", ")
+            description += "; also considering \(alternatives)"
+        }
+        return description
+    }
+
+    private func routeDescription(_ candidate: LocalMobilityPrediction.RouteCandidate) -> String {
+        switch candidate.mode {
+        case .train:
+            let line = LineColor(rawValue: candidate.routeId)?.displayName ?? candidate.routeId
+            if let label = candidate.directionLabel, !label.isEmpty {
+                return "\(line) toward \(label)"
+            }
+            return line
+        case .bus:
+            if let label = candidate.directionLabel, !label.isEmpty {
+                return "Bus #\(candidate.routeId) \(label)"
+            }
+            return "Bus #\(candidate.routeId)"
+        case .metra:
+            return "Metra \(candidate.routeId)"
+        }
+    }
+
+    private func summaryFreshnessText(_ profile: MobilityProfile) -> String {
+        guard let lastSummarized = profile.summary.lastSummarizedAt else {
+            return "Summary has not been built yet."
+        }
+        let consumed = profile.summary.consumedObservationCount + profile.summary.consumedRouteObservationCount
+        return "Last folded \(dateTimeText(lastSummarized)); \(consumed) observation\(consumed == 1 ? "" : "s") summarized."
+    }
+
+    private var retentionWindowText: String {
+        "Raw observations kept for \(Int(MobilityProfile.rawRetentionDays)) days; long-term patterns persist in the summary."
+    }
+
+    private func sampleCountsText(_ profile: MobilityProfile) -> String {
+        "\(profile.observations.count) context, \(profile.routeObservations.count) route observations in the last \(Int(MobilityProfile.rawRetentionDays)) days; \(profile.summary.routePatterns.count) route patterns in the summary."
+    }
+
+    private func weekdayShortName(_ weekday: Int) -> String {
+        let names = ["", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        guard (1...7).contains(weekday) else { return "?" }
+        return names[weekday]
     }
 
     private func reloadPredictionState() {
