@@ -21,6 +21,9 @@ settings:
 packages:
   TransitCore:
     path: Packages/TransitCore
+  SwiftyH3:
+    url: https://github.com/pawelmajcher/SwiftyH3
+    from: 0.5.0
 
 targets:
   CozyFox:
@@ -88,6 +91,8 @@ targets:
         product: ChicagoTheme
       - package: TransitCore
         product: TransitUI
+      - package: SwiftyH3
+        product: SwiftyH3
       - target: CozyFoxWidget
       - target: CozyFoxLiveActivity
 

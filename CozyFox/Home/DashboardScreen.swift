@@ -273,21 +273,28 @@ struct DashboardScreen: View {
     @ViewBuilder
     private func pinnedLineBody(line: LineColor) -> some View {
         if let origin {
-            let stations = NearestStationResolver(maxDistanceMeters: 10_000)
+            // Pull a wider candidate pool than we display so walking-aware
+            // re-ranking has room to promote a stop that's further by air
+            // but closer on foot. The display limit stays at 3 chips.
+            let candidates = NearestStationResolver(maxDistanceMeters: 10_000)
                 .closestStations(
                     onLine: line,
                     to: origin,
-                    limit: 3,
+                    limit: 6,
                     catalog: LStationCatalog.all,
                     excludingStationIds: closedStationIds
                 )
 
-            if stations.isEmpty {
+            if candidates.isEmpty {
                 Text("No \(line.displayName) station within 10 km of your location.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else {
-                let chosenId = effectivePinnedStation(stations: stations)
+                let ranked = rankWithWalking(candidates: candidates, origin: origin)
+                let stations = Array(ranked.prefix(3))
+                let chosenId = effectivePinnedStation(
+                    stations: stations.map { (station: $0.station, distance: $0.haversine) }
+                )
                 VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                     sectionLabel("Pick a stop")
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -295,7 +302,8 @@ struct DashboardScreen: View {
                             ForEach(stations, id: \.station.id) { entry in
                                 StationChip(
                                     station: entry.station,
-                                    distance: entry.distance,
+                                    distance: entry.haversine,
+                                    walkingTime: entry.walking?.expectedTravelTime,
                                     isSelected: entry.station.id == chosenId,
                                     accent: line.swiftUIColor,
                                     action: { setPinnedStation(entry.station.id) }
@@ -309,12 +317,60 @@ struct DashboardScreen: View {
                         trainProgressStrip(toStation: chosen.station, line: line)
                     }
                 }
+                .task(id: walkingTaskKey(line: line, origin: origin)) {
+                    model.walkingResolver.ensureFresh(
+                        origin: origin,
+                        stations: candidates.map(\.station)
+                    )
+                }
             }
         } else {
             Text("Waiting for a location fix…")
                 .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         }
+    }
+
+    /// Re-ranks candidates by walking distance where MapKit has answered,
+    /// falling back to the resolver's effective distance (Haversine + river
+    /// penalty) for entries that aren't cached yet. The displayed
+    /// `haversine` value stays straight-line for the chip label.
+    private func rankWithWalking(
+        candidates: [(station: LStation, distance: Double)],
+        origin: (lat: Double, lon: Double)
+    ) -> [RankedStop] {
+        let walkingResolver = model.walkingResolver
+        return candidates
+            .map { entry -> RankedStop in
+                let walking = walkingResolver.cached(
+                    origin: origin,
+                    stationId: entry.station.id
+                ) ?? walkingResolver.staleFallback(
+                    origin: origin,
+                    stationId: entry.station.id
+                )
+                let rankingMeters = walking?.meters ?? (
+                    entry.distance + RiverPenalty.penalty(
+                        from: origin,
+                        to: (entry.station.latitude, entry.station.longitude)
+                    )
+                )
+                return RankedStop(
+                    station: entry.station,
+                    haversine: entry.distance,
+                    walking: walking,
+                    rankingMeters: rankingMeters
+                )
+            }
+            .sorted { $0.rankingMeters < $1.rankingMeters }
+    }
+
+    private func walkingTaskKey(line: LineColor, origin: (lat: Double, lon: Double)) -> String {
+        // ~10m grid: enough precision to retrigger when the user actually
+        // moves, coarse enough to avoid GPS-jitter thrashes mid-render.
+        let lat = (origin.lat * 11000).rounded()
+        let lon = (origin.lon * 11000).rounded()
+        return "\(line.rawValue):\(lat):\(lon)"
     }
 
     @ViewBuilder
@@ -894,21 +950,42 @@ struct DashboardScreen: View {
 
     private var nearbyLines: [LineEntry] {
         guard let origin else { return [] }
-        let stations = NearestStationResolver(maxDistanceMeters: 1_500)
+        let stations = NearestStationResolver(maxDistanceMeters: 2_000)
             .all(
-                within: 1_500,
+                within: 2_000,
                 of: origin,
                 catalog: LStationCatalog.all,
                 excludingStationIds: closedStationIds
             )
 
+        // Opportunistic walking-aware re-ranking: if MapKit has already
+        // resolved a walking distance for this (origin-bucket, station)
+        // pair via the pinned-line card, use it. Otherwise keep the
+        // resolver's effective-distance order. No new MapKit requests are
+        // kicked off here — the "Near you" view is glanceable and we don't
+        // want to fan out per-line walking queries on every refresh.
+        let walkingResolver = model.walkingResolver
+        let reranked: [(station: LStation, haversine: Double, rankingMeters: Double)] = stations
+            .enumerated()
+            .map { index, entry in
+                let walking = walkingResolver.cached(
+                    origin: origin,
+                    stationId: entry.station.id
+                )
+                // Without a walking value, preserve the resolver's order via
+                // a tiny additive `index` tiebreaker so equal Haversine
+                // entries don't reshuffle on re-render.
+                let ranking = walking?.meters ?? (entry.distance + Double(index) * 0.001)
+                return (entry.station, entry.distance, ranking)
+            }
+            .sorted { $0.rankingMeters < $1.rankingMeters }
+
         var byLine: [LineColor: (station: LStation, distance: Double)] = [:]
-        for entry in stations {
+        for entry in reranked {
             for line in entry.station.servedLines {
-                if let existing = byLine[line], existing.distance <= entry.distance {
-                    continue
+                if byLine[line] == nil {
+                    byLine[line] = (entry.station, entry.haversine)
                 }
-                byLine[line] = (entry.station, entry.distance)
             }
         }
 
@@ -1152,9 +1229,17 @@ private struct LineChip: View {
     }
 }
 
+private struct RankedStop {
+    let station: LStation
+    let haversine: Double
+    let walking: WalkingDistance?
+    let rankingMeters: Double
+}
+
 private struct StationChip: View {
     let station: LStation
     let distance: Double
+    let walkingTime: TimeInterval?
     let isSelected: Bool
     let accent: Color
     let action: () -> Void
@@ -1166,7 +1251,7 @@ private struct StationChip: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                     .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
-                Text(DistanceFormatter.short(distance))
+                Text(secondaryLabel)
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .monospacedDigit()
                     .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
@@ -1186,6 +1271,14 @@ private struct StationChip: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private var secondaryLabel: String {
+        if let walkingTime {
+            let minutes = max(1, Int((walkingTime / 60).rounded()))
+            return "\(minutes) min walk"
+        }
+        return DistanceFormatter.short(distance)
     }
 }
 

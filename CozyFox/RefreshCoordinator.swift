@@ -14,6 +14,7 @@ final class RefreshCoordinator {
     let store: TransitStore
     let preferences: PreferencesStore
     weak var location: LocationCoordinator?
+    let walkingStore: WalkingDistanceStore
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -25,6 +26,12 @@ final class RefreshCoordinator {
     private let busStopResolver = NearestBusStopResolver()
     private let autopinner = CommuteAutopinner()
 
+    /// Day-stamp of the last walking-cache invalidation so a single 30 s
+    /// foreground refresh doesn't repeatedly flush the cache. Re-invalidates
+    /// once per Chicago-local calendar day so closures and construction
+    /// changes get picked up.
+    private var lastWalkingInvalidationDay: Date?
+
     /// Last-known live vehicle positions for the user's pinned line/route.
     /// Refreshed every cycle; exposed so the dashboard can draw a "where's
     /// my train" strip. Empty when no route is pinned.
@@ -33,11 +40,13 @@ final class RefreshCoordinator {
     init(
         store: TransitStore,
         preferences: PreferencesStore,
-        location: LocationCoordinator?
+        location: LocationCoordinator?,
+        walkingStore: WalkingDistanceStore
     ) {
         self.store = store
         self.preferences = preferences
         self.location = location
+        self.walkingStore = walkingStore
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -58,6 +67,8 @@ final class RefreshCoordinator {
         let autopinChanged = await applyAutopinIfNeeded()
         let prefs = preferences.loadRoutePreferences()
         let lastLocation = preferences.loadLastKnownLocation()
+
+        invalidateWalkingCacheIfNewDay()
 
         // Phase 1: alerts. Needed before train recommendations so we can
         // exclude stations the alerts flag as closed (e.g. State/Lake).
@@ -334,5 +345,21 @@ final class RefreshCoordinator {
         } catch {
             // leave previous nearest bike in place
         }
+    }
+
+    /// Marks every walking-distance cache entry stale once per Chicago-local
+    /// day. The stale data is still readable as a fallback, but the
+    /// pinned-line card's `ensureFresh` will see a miss and re-query
+    /// MapKit — which picks up bridge closures, construction reroutes, and
+    /// any updates Apple Maps has ingested since the last fetch.
+    private func invalidateWalkingCacheIfNewDay() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Chicago") ?? .current
+        let today = cal.startOfDay(for: Date())
+        if let last = lastWalkingInvalidationDay, cal.isDate(last, inSameDayAs: today) {
+            return
+        }
+        lastWalkingInvalidationDay = today
+        walkingStore.invalidateAll()
     }
 }

@@ -24,16 +24,19 @@ struct CozyFoxApp: App {
         let prefs = PreferencesStore()
         let anchors = prefs.loadCommuteAnchors()
         let location = LocationCoordinator(preferences: prefs, anchors: anchors)
+        let walkingStore = WalkingDistanceStore()
         let refreshCoordinator = RefreshCoordinator(
             store: store,
             preferences: prefs,
-            location: location
+            location: location,
+            walkingStore: walkingStore
         )
         let model = AppViewModel(
             store: store,
             preferences: prefs,
             location: location,
-            refreshCoordinator: refreshCoordinator
+            refreshCoordinator: refreshCoordinator,
+            walkingStore: walkingStore
         )
         _viewModel = State(initialValue: model)
         RefreshTaskScheduler.register(coordinator: refreshCoordinator)
