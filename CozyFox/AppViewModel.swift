@@ -232,20 +232,70 @@ final class AppViewModel {
 
     private func recordManualRouteChoice(_ prefs: UserRoutePreferences) {
         var profile = preferences.loadMobilityProfile()
-        profile.recordRouteObservation(
-            direction: inferredManualPinDirection(),
-            context: location.context,
-            line: prefs.plannedTripPin?.train?.line ?? prefs.pinnedLine,
-            stationId: prefs.plannedTripPin?.train?.stationId ?? prefs.pinnedStationId,
-            busRoute: prefs.plannedTripPin?.bus?.route ?? prefs.pinnedBusRoute,
-            busDirection: prefs.plannedTripPin?.bus?.directionLabel ?? prefs.pinnedBusDirection,
-            metraRoute: prefs.plannedTripPin?.metra?.routeId ?? prefs.pinnedMetraRoute,
-            metraStationId: prefs.plannedTripPin?.metra?.stationId ?? prefs.pinnedMetraStationId,
-            metraDirectionId: prefs.plannedTripPin?.metra?.directionId ?? prefs.pinnedMetraDirectionId,
-            motion: location.motion,
-            at: .now,
-            calendar: SystemClock().calendar
-        )
+        let direction = inferredManualPinDirection()
+        let calendar = SystemClock().calendar
+        let now = Date.now
+        let origin = location.lastKnown.map {
+            MobilityProfile.RouteLocation.bucketed(
+                latitude: $0.latitude,
+                longitude: $0.longitude,
+                label: location.context.rawValue
+            )
+        }
+        let destination = prefs.plannedTripPin?.destination.routeLocation
+
+        func record(
+            line: LineColor? = nil,
+            stationId: Int? = nil,
+            busRoute: String? = nil,
+            busDirection: String? = nil,
+            metraRoute: String? = nil,
+            metraStationId: String? = nil,
+            metraDirectionId: Int? = nil
+        ) {
+            profile.recordRouteObservation(
+                direction: direction,
+                context: location.context,
+                line: line,
+                stationId: stationId,
+                busRoute: busRoute,
+                busDirection: busDirection,
+                metraRoute: metraRoute,
+                metraStationId: metraStationId,
+                metraDirectionId: metraDirectionId,
+                origin: origin,
+                destination: destination,
+                motion: location.motion,
+                at: now,
+                calendar: calendar
+            )
+        }
+
+        if let trip = prefs.plannedTripPin {
+            for train in trip.trainLegs {
+                record(line: train.line, stationId: train.stationId)
+            }
+            for bus in trip.busLegs {
+                record(busRoute: bus.route, busDirection: bus.directionLabel)
+            }
+            for metra in trip.metraLegs {
+                record(
+                    metraRoute: metra.routeId,
+                    metraStationId: metra.stationId,
+                    metraDirectionId: metra.directionId
+                )
+            }
+        } else {
+            record(
+                line: prefs.pinnedLine,
+                stationId: prefs.pinnedStationId,
+                busRoute: prefs.pinnedBusRoute,
+                busDirection: prefs.pinnedBusDirection,
+                metraRoute: prefs.pinnedMetraRoute,
+                metraStationId: prefs.pinnedMetraStationId,
+                metraDirectionId: prefs.pinnedMetraDirectionId
+            )
+        }
         preferences.saveMobilityProfile(profile)
     }
 
@@ -262,6 +312,17 @@ final class AppViewModel {
         if let destination = DetailDestination.parse(url: url) {
             activeDetail = destination
         }
+    }
+}
+
+private extension PlannedTripPin.Destination {
+    var routeLocation: MobilityProfile.RouteLocation? {
+        guard let latitude, let longitude else { return nil }
+        return MobilityProfile.RouteLocation.bucketed(
+            latitude: latitude,
+            longitude: longitude,
+            label: title
+        )
     }
 }
 
