@@ -279,14 +279,14 @@ struct DashboardScreen: View {
     @ViewBuilder
     private func pinnedLineBody(line: LineColor) -> some View {
         if let origin {
-            // Pull a wider candidate pool than we display so walking-aware
-            // re-ranking has room to promote a stop that's further by air
-            // but closer on foot. The display limit stays at 3 chips.
+            // Pull a wider candidate pool than the minimum display count so
+            // walking-aware re-ranking and the tie band can surface downtown
+            // alternatives that MapKit might otherwise bury.
             let candidates = NearestStationResolver(maxDistanceMeters: 10_000)
                 .closestStations(
                     onLine: line,
                     to: origin,
-                    limit: 6,
+                    limit: 12,
                     catalog: LStationCatalog.all,
                     excludingStationIds: closedStationIds
                 )
@@ -297,26 +297,25 @@ struct DashboardScreen: View {
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else {
                 let ranked = rankWithWalking(candidates: candidates, origin: origin)
-                let stations = Array(ranked.prefix(3))
-                let hasWalkingData = stations.contains { $0.walking != nil }
-                let chosenId = effectivePinnedStation(
-                    stations: stations.map { (station: $0.station, distance: $0.haversine) }
+                let stations = StationAccessRanker().visibleCandidates(
+                    from: ranked,
+                    pinnedStationId: pinnedStationId
                 )
+                let hasWalkingData = stations.contains { $0.walkingDistanceMeters != nil }
+                let chosenId = effectivePinnedStation(stations: stations)
                 VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                     sectionLabel("Pick a stop")
                     if hasWalkingData || allowHaversineFallback {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: ChicagoSpacing.xs) {
-                                ForEach(stations, id: \.station.id) { entry in
-                                    StationChip(
-                                        station: entry.station,
-                                        distance: entry.haversine,
-                                        walkingTime: entry.walking?.expectedTravelTime,
-                                        isSelected: entry.station.id == chosenId,
-                                        accent: line.swiftUIColor,
-                                        action: { setPinnedStation(entry.station.id) }
-                                    )
-                                }
+                        StationChipGrid {
+                            ForEach(stations, id: \.station.id) { entry in
+                                StationChip(
+                                    station: entry.station,
+                                    travelTime: entry.displayTravelTime,
+                                    isApproximateTravelTime: entry.isApproximateTravelTime,
+                                    isSelected: entry.station.id == chosenId,
+                                    accent: line.swiftUIColor,
+                                    action: { setPinnedStation(entry.station.id) }
+                                )
                             }
                         }
                         if let chosen = stations.first(where: { $0.station.id == chosenId }) {
@@ -362,19 +361,18 @@ struct DashboardScreen: View {
     }
 
     /// Re-ranks candidates by walking distance where MapKit has answered,
-    /// falling back to Haversine for entries that aren't cached yet. The
-    /// view layer renders shimmer placeholders briefly when *no* candidate
-    /// has walking data, so the user doesn't see a stale Haversine
+    /// with a directness proxy to keep obviously inflated routes from hiding
+    /// comparable stops. The view layer renders shimmer placeholders briefly
+    /// when *no* candidate has walking data, so the user doesn't see a stale
     /// ordering for the ~300ms before MapKit responds at a new location.
-    /// The displayed `haversine` value stays straight-line for the chip
-    /// label.
     private func rankWithWalking(
         candidates: [(station: LStation, distance: Double)],
         origin: (lat: Double, lon: Double)
-    ) -> [RankedStop] {
+    ) -> [StationAccessRanker.RankedCandidate] {
         let walkingResolver = model.walkingResolver
-        return candidates
-            .map { entry -> RankedStop in
+        let ranker = StationAccessRanker()
+        return ranker.rank(
+            candidates.map { entry in
                 let walking = walkingResolver.cached(
                     origin: origin,
                     stationId: entry.station.id
@@ -382,14 +380,14 @@ struct DashboardScreen: View {
                     origin: origin,
                     stationId: entry.station.id
                 )
-                return RankedStop(
+                return StationAccessRanker.Candidate(
                     station: entry.station,
-                    haversine: entry.distance,
-                    walking: walking,
-                    rankingMeters: walking?.meters ?? entry.distance
+                    directDistanceMeters: entry.distance,
+                    walkingDistanceMeters: walking?.meters,
+                    walkingTravelTime: walking?.expectedTravelTime
                 )
             }
-            .sorted { $0.rankingMeters < $1.rankingMeters }
+        )
     }
 
     private func walkingTaskKey(line: LineColor, origin: (lat: Double, lon: Double)) -> String {
@@ -401,11 +399,9 @@ struct DashboardScreen: View {
     }
 
     private var placeholderChipStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: ChicagoSpacing.xs) {
-                ForEach(0..<3, id: \.self) { _ in
-                    StationChipPlaceholder()
-                }
+        StationChipGrid {
+            ForEach(0..<3, id: \.self) { _ in
+                StationChipPlaceholder()
             }
         }
     }
@@ -496,7 +492,7 @@ struct DashboardScreen: View {
     }
 
     private func effectivePinnedStation(
-        stations: [(station: LStation, distance: Double)]
+        stations: [StationAccessRanker.RankedCandidate]
     ) -> Int {
         if let id = pinnedStationId,
            stations.contains(where: { $0.station.id == id })
@@ -1261,17 +1257,28 @@ private struct LineChip: View {
     }
 }
 
-private struct RankedStop {
-    let station: LStation
-    let haversine: Double
-    let walking: WalkingDistance?
-    let rankingMeters: Double
+private struct StationChipGrid<Content: View>: View {
+    let content: Content
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 132), spacing: ChicagoSpacing.xs, alignment: .leading)
+    ]
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: ChicagoSpacing.xs) {
+            content
+        }
+    }
 }
 
 private struct StationChip: View {
     let station: LStation
-    let distance: Double
-    let walkingTime: TimeInterval?
+    let travelTime: TimeInterval
+    let isApproximateTravelTime: Bool
     let isSelected: Bool
     let accent: Color
     let action: () -> Void
@@ -1290,6 +1297,7 @@ private struct StationChip: View {
             }
             .padding(.horizontal, ChicagoSpacing.md)
             .padding(.vertical, ChicagoSpacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                     .fill(isSelected ? accent : ChicagoPalette.Surface.elevated)
@@ -1303,14 +1311,17 @@ private struct StationChip: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(station.name), \(accessibilityTimeLabel)")
     }
 
     private var secondaryLabel: String {
-        if let walkingTime {
-            let minutes = max(1, Int((walkingTime / 60).rounded()))
-            return "\(minutes) min walk"
-        }
-        return DistanceFormatter.short(distance)
+        let minutes = max(1, Int((travelTime / 60).rounded()))
+        return "\(isApproximateTravelTime ? "≈" : "")\(minutes) min walk"
+    }
+
+    private var accessibilityTimeLabel: String {
+        let minutes = max(1, Int((travelTime / 60).rounded()))
+        return "\(isApproximateTravelTime ? "about " : "")\(minutes) minute walk"
     }
 }
 
@@ -1334,6 +1345,7 @@ private struct StationChipPlaceholder: View {
         }
         .padding(.horizontal, ChicagoSpacing.md)
         .padding(.vertical, ChicagoSpacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                 .fill(ChicagoPalette.Surface.elevated)
