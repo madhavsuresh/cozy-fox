@@ -36,7 +36,8 @@ struct TrainDetailScreen: View {
                         )
                         ChicagoCard(title: line.displayName,
                                     eyebrow: items.first?.stationName,
-                                    ornament: .icon(systemName: "tram.fill")) {
+                                    ornament: .icon(systemName: "tram.fill"),
+                                    accent: line.swiftUIColor) {
                             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                                 let first = items.first!
                                 let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
@@ -59,7 +60,7 @@ struct TrainDetailScreen: View {
                                     }
                                 )
                                 Rectangle()
-                                    .fill(ChicagoPalette.cornflower.opacity(0.3))
+                                    .fill(ChicagoPalette.Gray.light.opacity(0.28))
                                     .frame(height: ChicagoSpacing.Stroke.hairline)
                                 ForEach(items.prefix(6), id: \.id) { arrival in
                                     arrivalRow(arrival, assessment: assessments[arrival.id])

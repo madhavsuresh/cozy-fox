@@ -31,6 +31,9 @@ public struct BigNumber: View {
     public enum Tone: Sendable {
         case primary    // Gray.darkest
         case accent     // flagBlue
+        case bus         // CTA bus copper
+        case intercampus // Northwestern purple
+        case bike        // Divvy teal
         case warning    // gold
         case alert      // starRed
         case onDark     // white (for live activity / dark widget)
@@ -86,11 +89,14 @@ public struct BigNumber: View {
 
     private var color: Color {
         switch tone {
-        case .primary: ChicagoPalette.Gray.darkest
-        case .accent:  ChicagoPalette.flagBlue
-        case .warning: ChicagoPalette.gold
-        case .alert:   ChicagoPalette.starRed
-        case .onDark:  .white
+        case .primary:     ChicagoPalette.Gray.darkest
+        case .accent:      ChicagoPalette.flagBlue
+        case .bus:         ChicagoPalette.Mode.bus
+        case .intercampus: ChicagoPalette.Mode.intercampus
+        case .bike:        ChicagoPalette.Mode.divvy
+        case .warning:     ChicagoPalette.gold
+        case .alert:       ChicagoPalette.starRed
+        case .onDark:      .white
         }
     }
 }

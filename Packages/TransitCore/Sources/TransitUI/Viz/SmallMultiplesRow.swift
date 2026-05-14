@@ -76,7 +76,7 @@ public struct ArrivalTile: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                .strokeBorder(ChicagoPalette.Gray.light.opacity(0.26),
                               lineWidth: ChicagoSpacing.Stroke.hairline)
         )
     }
@@ -133,7 +133,7 @@ public struct DepartureTimeTile: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                .strokeBorder(ChicagoPalette.Gray.light.opacity(0.26),
                               lineWidth: ChicagoSpacing.Stroke.hairline)
         )
     }
@@ -191,7 +191,7 @@ public struct DepartureTimesTile: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                .strokeBorder(ChicagoPalette.Gray.light.opacity(0.26),
                               lineWidth: ChicagoSpacing.Stroke.hairline)
         )
     }

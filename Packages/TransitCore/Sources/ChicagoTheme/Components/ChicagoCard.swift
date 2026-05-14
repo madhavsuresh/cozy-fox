@@ -12,17 +12,20 @@ public struct ChicagoCard<Content: View>: View {
     private let title: String?
     private let eyebrow: String?
     private let ornament: Ornament?
+    private let accent: Color?
     private let content: () -> Content
 
     public init(
         title: String? = nil,
         eyebrow: String? = nil,
         ornament: Ornament? = nil,
+        accent: Color? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.title = title
         self.eyebrow = eyebrow
         self.ornament = ornament
+        self.accent = accent
         self.content = content
     }
 
@@ -42,7 +45,7 @@ public struct ChicagoCard<Content: View>: View {
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg)
                 .strokeBorder(
-                    ChicagoPalette.cornflower.opacity(0.35),
+                    borderColor,
                     lineWidth: ChicagoSpacing.Stroke.hairline
                 )
         )
@@ -54,7 +57,7 @@ public struct ChicagoCard<Content: View>: View {
             if let eyebrow {
                 Text(eyebrow)
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.bahama)
+                    .foregroundStyle(eyebrowColor)
                     .accessibilityLabel(eyebrow)
             }
             if let title {
@@ -82,10 +85,25 @@ public struct ChicagoCard<Content: View>: View {
         case .icon(let name):
             Image(systemName: name)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(ChicagoPalette.flagBlue)
+                .foregroundStyle(iconColor)
                 .accessibilityHidden(true)
         case .none:
             EmptyView()
         }
+    }
+
+    private var eyebrowColor: Color {
+        accent ?? ChicagoPalette.Gray.medium
+    }
+
+    private var iconColor: Color {
+        accent ?? ChicagoPalette.Gray.medium
+    }
+
+    private var borderColor: Color {
+        if let accent {
+            return accent.opacity(0.24)
+        }
+        return ChicagoPalette.Gray.light.opacity(0.26)
     }
 }

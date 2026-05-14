@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// City of Chicago Design System palette, mapped to SwiftUI `Color`s with
 /// Dark Mode variants resolved from the bundled asset catalog.
@@ -29,6 +32,20 @@ public enum ChicagoPalette {
 
     public static let gold  = catalog("gold")
     public static let green = catalog("green")
+
+    // MARK: - Transit modes
+
+    /// Semantic accents for non-rail modes. These are intentionally outside
+    /// the Chicago blue family so CTA Blue Line, buses, Intercampus, and
+    /// Divvy are distinguishable at a glance.
+    public enum Mode {
+        /// CTA bus identity. A warm copper separates buses from CTA rail colors.
+        public static let bus = adaptive(light: 0xA8481C, dark: 0xB85620)
+        /// Northwestern Intercampus identity. Matches the shuttle's university context.
+        public static let intercampus = adaptive(light: 0x4E2A84, dark: 0x7C3AED)
+        /// Divvy / e-bike identity. Teal avoids CTA Blue while staying mobility-oriented.
+        public static let divvy = adaptive(light: 0x007A5E, dark: 0x0B7A67)
+    }
 
     // MARK: - Grays (semantic name, not visual lightness — `darkest` is darkest in light mode and lightest in dark mode)
 
@@ -84,4 +101,33 @@ public enum ChicagoPalette {
     private static func catalog(_ name: String) -> Color {
         Color(name, bundle: .module)
     }
+
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+        #if canImport(UIKit)
+        Color(uiColor: UIColor { traits in
+            uiColor(traits.userInterfaceStyle == .dark ? dark : light)
+        })
+        #else
+        srgb(light)
+        #endif
+    }
+
+    private static func srgb(_ hex: UInt32) -> Color {
+        Color(
+            red: Double((hex >> 16) & 0xFF) / 255.0,
+            green: Double((hex >> 8) & 0xFF) / 255.0,
+            blue: Double(hex & 0xFF) / 255.0
+        )
+    }
+
+    #if canImport(UIKit)
+    private static func uiColor(_ hex: UInt32) -> UIColor {
+        UIColor(
+            red: CGFloat((hex >> 16) & 0xFF) / 255.0,
+            green: CGFloat((hex >> 8) & 0xFF) / 255.0,
+            blue: CGFloat(hex & 0xFF) / 255.0,
+            alpha: 1.0
+        )
+    }
+    #endif
 }

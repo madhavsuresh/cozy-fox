@@ -54,6 +54,9 @@ public struct MetraDepartureTimeView: View {
         switch tone {
         case .primary: ChicagoPalette.Gray.darkest
         case .accent: ChicagoPalette.flagBlue
+        case .bus: ChicagoPalette.Mode.bus
+        case .intercampus: ChicagoPalette.Mode.intercampus
+        case .bike: ChicagoPalette.Mode.divvy
         case .warning: ChicagoPalette.gold
         case .alert: ChicagoPalette.starRed
         case .onDark: .white
@@ -121,6 +124,9 @@ public struct MetraDepartureTimesView: View {
         return switch tone {
         case .primary: ChicagoPalette.Gray.darkest
         case .accent: ChicagoPalette.flagBlue
+        case .bus: ChicagoPalette.Mode.bus
+        case .intercampus: ChicagoPalette.Mode.intercampus
+        case .bike: ChicagoPalette.Mode.divvy
         case .warning: ChicagoPalette.gold
         case .alert: ChicagoPalette.starRed
         case .onDark: .white

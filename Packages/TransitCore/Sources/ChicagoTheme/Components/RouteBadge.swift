@@ -2,14 +2,10 @@ import SwiftUI
 import TransitModels
 
 /// A compact, high-contrast badge identifying a CTA L line, CTA bus route,
-/// or Metra line.
-/// route. The only place in the app where CTA brand colours appear —
-/// every other surface uses the Chicago palette. Riders recognise the
-/// Red Line *by red*; that's wayfinding, not decoration, and we
-/// preserve it intentionally.
+/// or Metra line. Rail badges use their official line colors; bus badges use
+/// the semantic bus accent so they do not read as CTA Blue Line content.
 ///
-/// The badge auto-picks an accessible text colour based on the line's
-/// luminance (yellow and pink lines use black; the rest use white).
+/// The badge auto-picks readable text based on each route color's luminance.
 public struct RouteBadge: View {
     public enum Kind: Sendable {
         case lLine(LineColor)
@@ -91,7 +87,7 @@ public struct RouteBadge: View {
     private var backgroundColor: Color {
         switch kind {
         case .lLine(let line): line.swiftUIColor
-        case .bus: ChicagoPalette.flagBlue
+        case .bus: ChicagoPalette.Mode.bus
         case .metra(let routeId):
             MetraStationCatalog.route(id: routeId)?.swiftUIColor ?? ChicagoPalette.bahama
         }

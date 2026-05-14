@@ -33,7 +33,8 @@ struct MetraDetailScreen: View {
                     } else if let first = predictions.first {
                         ChicagoCard(title: MetraStationCatalog.route(id: route)?.displayName ?? route,
                                     eyebrow: first.stationName,
-                                    ornament: .icon(systemName: "train.side.front.car")) {
+                                    ornament: .icon(systemName: "train.side.front.car"),
+                                    accent: MetraStationCatalog.route(id: route)?.swiftUIColor) {
                             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                                 ForEach(groups) { group in
                                     groupSection(group)
@@ -63,7 +64,7 @@ struct MetraDetailScreen: View {
                 accent: MetraStationCatalog.route(id: route)?.swiftUIColor ?? ChicagoPalette.bahama
             )
             Rectangle()
-                .fill(ChicagoPalette.cornflower.opacity(0.3))
+                .fill(ChicagoPalette.Gray.light.opacity(0.28))
                 .frame(height: ChicagoSpacing.Stroke.hairline)
             ForEach(group.departures.prefix(8), id: \.id) { prediction in
                 predictionRow(prediction)

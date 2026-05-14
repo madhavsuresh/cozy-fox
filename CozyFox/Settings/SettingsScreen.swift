@@ -375,7 +375,20 @@ struct SettingsScreen: View {
             Label(title, systemImage: systemImage)
                 .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
         }
-        .tint(ChicagoPalette.flagBlue)
+        .tint(accent(for: mode))
+    }
+
+    private func accent(for mode: TransitVisibilityMode) -> Color {
+        switch mode {
+        case .buses:
+            ChicagoPalette.Mode.bus
+        case .bikes:
+            ChicagoPalette.Mode.divvy
+        case .intercampus:
+            ChicagoPalette.Mode.intercampus
+        case .trains, .metra:
+            ChicagoPalette.Gray.dark
+        }
     }
 
     private func routeVisibilityHeader(
@@ -940,7 +953,7 @@ private struct VisibilityRouteChip<Badge: View>: View {
             .overlay(
                 RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                     .strokeBorder(
-                        isVisible ? ChicagoPalette.cornflower.opacity(0.45) : ChicagoPalette.Gray.light.opacity(0.28),
+                        isVisible ? ChicagoPalette.Gray.light.opacity(0.34) : ChicagoPalette.Gray.light.opacity(0.22),
                         lineWidth: ChicagoSpacing.Stroke.hairline
                     )
             )

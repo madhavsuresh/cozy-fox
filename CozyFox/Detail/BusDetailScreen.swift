@@ -31,7 +31,8 @@ struct BusDetailScreen: View {
                         let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
                         ChicagoCard(title: "Route \(route)",
                                     eyebrow: first.stopName,
-                                    ornament: .icon(systemName: "bus.fill")) {
+                                    ornament: .icon(systemName: "bus.fill"),
+                                    accent: ChicagoPalette.Mode.bus) {
                             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                                 BigNumber(
                                     minutes,
@@ -42,10 +43,10 @@ struct BusDetailScreen: View {
                                 )
                                 HeadwayDotStrip(
                                     arrivals: predictions.prefix(8).map(\.arrivalAt),
-                                    accent: ChicagoPalette.flagBlue
+                                    accent: ChicagoPalette.Mode.bus
                                 )
                                 Rectangle()
-                                    .fill(ChicagoPalette.cornflower.opacity(0.3))
+                                    .fill(ChicagoPalette.Gray.light.opacity(0.28))
                                     .frame(height: ChicagoSpacing.Stroke.hairline)
                                 ForEach(predictions.prefix(8), id: \.id) { p in
                                     predictionRow(p)
