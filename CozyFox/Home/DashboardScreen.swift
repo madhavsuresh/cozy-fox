@@ -2068,6 +2068,14 @@ struct DashboardScreen: View {
                     do {
                         try await Task.sleep(for: .milliseconds(300))
                         allowHaversineFallback = true
+                        try await Task.sleep(for: .seconds(2))
+                        if let selected = candidates.first(where: { $0.station.id == chosenId })?.station {
+                            model.walkingResolver.ensureFresh(
+                                origin: origin,
+                                station: selected,
+                                modes: [.cycling]
+                            )
+                        }
                     } catch {
                         // Cancelled — origin or line changed, next .task
                         // run will reset the flag.
@@ -2555,6 +2563,16 @@ struct DashboardScreen: View {
                         origin: origin,
                         stops: directionChoices.flatMap(\.stops).map(\.stop)
                     )
+                    do {
+                        try await Task.sleep(for: .seconds(2))
+                        model.walkingResolver.ensureFresh(
+                            origin: origin,
+                            stops: directionChoices.map { effectivePinnedBusStop(in: $0).stop },
+                            modes: [.cycling]
+                        )
+                    } catch {
+                        // Cancelled because the origin or route changed.
+                    }
                 }
             }
         } else {
@@ -2814,6 +2832,16 @@ struct DashboardScreen: View {
                         origin: origin,
                         metraStations: choices.map(\.station)
                     )
+                    do {
+                        try await Task.sleep(for: .seconds(2))
+                        model.walkingResolver.ensureFresh(
+                            origin: origin,
+                            metraStation: selected.station,
+                            modes: [.cycling]
+                        )
+                    } catch {
+                        // Cancelled because the origin or route changed.
+                    }
                 }
             }
         } else {
