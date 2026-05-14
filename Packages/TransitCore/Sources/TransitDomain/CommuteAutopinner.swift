@@ -86,23 +86,13 @@ public struct CommuteAutopinner: Sendable {
         self.manualOverrideSeconds = manualOverrideSeconds
     }
 
-    /// Score multiplier applied to a learned route observation when the
-    /// optional `nextAnchorHint` matches its destination (or origin as a
-    /// fallback) bucket. Picked at 1.25 — large enough to break ties between
-    /// observations of similar strength, small enough that a weak observation
-    /// can't outrank a clearly-stronger non-hinted one. This keeps the hint
-    /// invisible-by-design: when the autopinner already has confident signal,
-    /// the boost is noise.
-    public static let learnedRouteHintBoost: Double = 1.25
-
     public func apply(
         preferences: UserRoutePreferences,
         anchors: CommuteAnchors,
         profile: MobilityProfile,
         location: LastKnownLocation?,
         context: CommuteContext,
-        motion: MotionContext? = nil,
-        nextAnchorHint: AnchorID? = nil
+        motion: MotionContext? = nil
     ) -> Result {
         guard preferences.autopinEnabled else {
             return .init(preferences: preferences, changed: false, direction: nil, reason: .disabled)
@@ -142,8 +132,7 @@ public struct CommuteAutopinner: Sendable {
             profile: profile,
             preferences: preferences,
             direction: direction,
-            origin: origin,
-            nextAnchorHint: nextAnchorHint
+            origin: origin
         ))
         choice.fillMissing(from: localRouteChoice(
             from: origin,
@@ -311,20 +300,14 @@ public struct CommuteAutopinner: Sendable {
         profile: MobilityProfile,
         preferences: UserRoutePreferences,
         direction: CommuteDirection,
-        origin: PlannerCoordinate,
-        nextAnchorHint: AnchorID? = nil
+        origin: PlannerCoordinate
     ) -> RouteChoice {
         var lineScores: [LineColor: (score: Double, latest: Date, stationId: Int?)] = [:]
         var busScores: [String: (score: Double, latest: Date, direction: String?)] = [:]
         var metraScores: [String: (score: Double, latest: Date, stationId: String?, directionId: Int?)] = [:]
 
         for observation in profile.routeObservations where observation.direction == direction {
-            let baseScore = score(observation)
-            let hintMultiplier = hintMultiplier(
-                for: observation,
-                hint: nextAnchorHint
-            )
-            let score = baseScore * hintMultiplier
+            let score = score(observation)
             if let line = observation.line, preferences.isTrainLineVisible(line) {
                 let current = lineScores[line]
                 if current == nil
@@ -554,20 +537,6 @@ public struct CommuteAutopinner: Sendable {
         return 1 + recency + weekdayBoost + hourBoost
     }
 
-    /// 1.0 when no hint is supplied or the observation doesn't match, else
-    /// `learnedRouteHintBoost`. Match order: destination first (it's the
-    /// stronger signal — "where you're going") then origin as a fallback.
-    /// Anchors compared via `AnchorID.bucketed(...)` for `RouteLocation`, or
-    /// direct id match for `.lStation` / `.metraStation`.
-    private func hintMultiplier(
-        for observation: MobilityProfile.RouteObservation,
-        hint: AnchorID?
-    ) -> Double {
-        guard let hint else { return 1.0 }
-        if observation.matches(anchor: hint) { return Self.learnedRouteHintBoost }
-        return 1.0
-    }
-
     private func select<T>(_ items: [T], direction: CommuteDirection) -> T?
     where T: PreferenceCommute {
         if let match = items.first(where: { $0.direction == direction }) { return match }
@@ -637,54 +606,5 @@ public struct CommuteAutopinner: Sendable {
         let tm = sqrt(target.north * target.north + target.east * target.east)
         guard vm > 0, tm > 0 else { return 10 }
         return -(dot / (vm * tm))
-    }
-}
-
-private extension MobilityProfile.RouteObservation {
-    /// True when this observation looks like it terminates at (or originates
-    /// from) the given anchor. Destination wins over origin because the
-    /// autopinner is choosing what to pin *for the next leg*, so "going
-    /// toward the hint" beats "came from the hint." For `.lStation` and
-    /// `.metraStation` anchors we match the embedded station id; for
-    /// `.bucketed` anchors we bucket origin/destination at the same grid
-    /// resolution and compare.
-    func matches(anchor: AnchorID) -> Bool {
-        switch anchor {
-        case let .lStation(stationId):
-            return self.stationId == stationId
-        case let .metraStation(stationId):
-            return self.metraStationId == stationId
-        case let .busStop(route, _):
-            // Bus observations don't carry a stop id today (see
-            // `MobilitySummaryStore.primaryAnchor(for:)`) — match by route as
-            // a best-effort. Phase 1 just needs this to be additive; later
-            // phases can tighten once boarding events emit stop ids.
-            return self.busRoute == route
-        case let .bucketed(latCell, lonCell):
-            if let destination,
-               case let .bucketed(destLat, destLon) = AnchorID.bucketed(
-                   latitude: destination.latitude,
-                   longitude: destination.longitude
-               ),
-               destLat == latCell, destLon == lonCell
-            {
-                return true
-            }
-            if let origin,
-               case let .bucketed(originLat, originLon) = AnchorID.bucketed(
-                   latitude: origin.latitude,
-                   longitude: origin.longitude
-               ),
-               originLat == latCell, originLon == lonCell
-            {
-                return true
-            }
-            return false
-        case .home, .work:
-            // These are semantic, not coordinate, anchors. The autopinner
-            // doesn't carry a separate "destination is home" flag — direction
-            // already encodes that — so we don't try to match here.
-            return false
-        }
     }
 }

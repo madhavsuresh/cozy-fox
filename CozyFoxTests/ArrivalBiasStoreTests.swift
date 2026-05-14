@@ -7,7 +7,7 @@ import TransitModels
 @Suite("ArrivalBiasStore")
 struct ArrivalBiasStoreTests {
     @Test func clearAllBeforeHydrationFinishesWins() async throws {
-        let url = MobilitySummaryStoreTests.temporaryFile(name: "ArrivalBias-clear-race")
+        let url = Self.temporaryFile(name: "ArrivalBias-clear-race")
         let key = BiasCellKey(
             line: "Brown",
             stopId: "40380",
@@ -29,7 +29,7 @@ struct ArrivalBiasStoreTests {
     }
 
     @Test func recordSampleSurvivesHydrationRace() async throws {
-        let url = MobilitySummaryStoreTests.temporaryFile(name: "ArrivalBias-record-race")
+        let url = Self.temporaryFile(name: "ArrivalBias-record-race")
         let key = BiasCellKey(
             line: "Brown",
             stopId: "40380",
@@ -56,7 +56,7 @@ struct ArrivalBiasStoreTests {
     }
 
     @Test func decayDropsCellsBelowOne() async throws {
-        let url = MobilitySummaryStoreTests.temporaryFile(name: "ArrivalBias-decay")
+        let url = Self.temporaryFile(name: "ArrivalBias-decay")
         let store = ArrivalBiasStore(fileURL: url)
         await store.hydrateFromDiskIfNeeded()
         let key = BiasCellKey(
@@ -73,6 +73,11 @@ struct ArrivalBiasStoreTests {
     }
 
     // MARK: - Helpers
+
+    static func temporaryFile(name: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-\(UUID().uuidString).json")
+    }
 
     static func seedPersisted(
         at url: URL,

@@ -3,17 +3,12 @@ import Foundation
 import TransitCache
 import TransitModels
 
-/// Nightly low-priority BGTask that:
-///   - Hydrates both learning stores from disk if they haven't been yet.
-///   - Folds observations older than 14 days out of the persisted
-///     `MobilityProfile` into `MobilitySummaryStore`'s rolling weeklies.
-///   - Decays `ArrivalBiasStore` cells with a 30-day half-life so service
-///     pattern changes can age out without erasing the cells outright.
-///   - Persists both stores, then reschedules itself.
-///
-/// Phase 0 does nothing else with the results — no notifications, no UI
-/// surfaces. The task exists so later phases can plug in without needing to
-/// re-bootstrap the maintenance pipeline.
+/// Nightly low-priority BGTask that decays `ArrivalBiasStore` cells with a
+/// 30-day half-life so service-pattern changes age out gracefully without
+/// erasing the running statistics outright. Long-lived mobility summaries
+/// are folded incrementally by `MobilityProfileSummarizer` on every
+/// `MobilityProfile.record*` call, so this task only owns the bias-store
+/// half of the maintenance pipeline.
 enum PredictionMaintenanceTask {
     static let identifier = "net.thoughtbison.cozyfox.learning.maintenance"
 
@@ -25,21 +20,12 @@ enum PredictionMaintenanceTask {
 
     /// Register the BG task handler. Call once at app launch. Mirrors
     /// `RefreshTaskScheduler.register` in shape.
-    static func register(
-        mobilitySummaryStore: MobilitySummaryStore,
-        arrivalBiasStore: ArrivalBiasStore,
-        preferences: PreferencesStore
-    ) {
+    static func register(arrivalBiasStore: ArrivalBiasStore) {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: identifier,
             using: nil
         ) { task in
-            handle(
-                task: task as! BGProcessingTask,
-                mobilitySummaryStore: mobilitySummaryStore,
-                arrivalBiasStore: arrivalBiasStore,
-                preferences: preferences
-            )
+            handle(task: task as! BGProcessingTask, arrivalBiasStore: arrivalBiasStore)
         }
         scheduleNext()
     }
@@ -64,17 +50,10 @@ enum PredictionMaintenanceTask {
     @MainActor
     private static func handle(
         task: BGProcessingTask,
-        mobilitySummaryStore: MobilitySummaryStore,
-        arrivalBiasStore: ArrivalBiasStore,
-        preferences: PreferencesStore
+        arrivalBiasStore: ArrivalBiasStore
     ) {
         let work = Task { @MainActor in
-            await runMaintenance(
-                mobilitySummaryStore: mobilitySummaryStore,
-                arrivalBiasStore: arrivalBiasStore,
-                preferences: preferences,
-                now: .now
-            )
+            await runMaintenance(arrivalBiasStore: arrivalBiasStore, now: .now)
         }
         task.expirationHandler = {
             work.cancel()
@@ -89,23 +68,9 @@ enum PredictionMaintenanceTask {
     /// The actual maintenance body, split out so tests can drive it directly
     /// without spinning up `BGTaskScheduler`.
     @MainActor
-    static func runMaintenance(
-        mobilitySummaryStore: MobilitySummaryStore,
-        arrivalBiasStore: ArrivalBiasStore,
-        preferences: PreferencesStore,
-        now: Date
-    ) async {
-        await mobilitySummaryStore.hydrateFromDiskIfNeeded()
+    static func runMaintenance(arrivalBiasStore: ArrivalBiasStore, now: Date) async {
         await arrivalBiasStore.hydrateFromDiskIfNeeded()
-        let profile = preferences.loadMobilityProfile()
-        let result = mobilitySummaryStore.fold(profile: profile, now: now)
-        // Only re-persist the source profile if rows were actually folded
-        // out, to avoid an empty rewrite cycle.
-        if result.foldedObservationCount + result.foldedRouteObservationCount > 0 {
-            preferences.saveMobilityProfile(result.mutatedProfile)
-        }
         arrivalBiasStore.decay(halfLifeDays: biasHalfLifeDays, now: now)
-        await mobilitySummaryStore.persistNow()
         await arrivalBiasStore.persistNow()
     }
 }
