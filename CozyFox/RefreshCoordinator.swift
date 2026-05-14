@@ -488,11 +488,11 @@ final class RefreshCoordinator {
         }
     }
 
-    /// Marks every walking-distance cache entry stale once per Chicago-local
+    /// Marks every access-route cache entry stale once per Chicago-local
     /// day. The stale data is still readable as a fallback, but the
-    /// pinned-line card's `ensureFresh` will see a miss and re-query
-    /// MapKit — which picks up bridge closures, construction reroutes, and
-    /// any updates Apple Maps has ingested since the last fetch.
+    /// stop chips' `ensureFresh` calls will see a miss and re-query MapKit,
+    /// which picks up bridge closures, construction reroutes, and any updates
+    /// Apple Maps has ingested since the last fetch.
     private func invalidateWalkingCacheIfNewDay() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "America/Chicago") ?? .current

@@ -1074,8 +1074,7 @@ struct DashboardScreen: View {
                             ForEach(stations, id: \.station.id) { entry in
                                 StationChip(
                                     station: entry.station,
-                                    travelTime: entry.displayTravelTime,
-                                    isApproximateTravelTime: entry.isApproximateTravelTime,
+                                    accessTime: stationAccessSummary(entry: entry, origin: origin),
                                     isSelected: entry.station.id == chosenId,
                                     accent: line.swiftUIColor,
                                     action: { setPinnedStation(entry.station.id) }
@@ -1160,6 +1159,69 @@ struct DashboardScreen: View {
         let lat = (origin.lat * 11000).rounded()
         let lon = (origin.lon * 11000).rounded()
         return "\(line.rawValue):\(lat):\(lon)"
+    }
+
+    private func accessTaskKey(prefix: String, origin: (lat: Double, lon: Double)) -> String {
+        // ~10m grid: enough precision to retrigger when the user actually
+        // moves, coarse enough to avoid GPS-jitter thrashes mid-render.
+        let lat = (origin.lat * 11000).rounded()
+        let lon = (origin.lon * 11000).rounded()
+        return "\(prefix):\(lat):\(lon)"
+    }
+
+    private func stationAccessSummary(
+        entry: StationAccessRanker.RankedCandidate,
+        origin: (lat: Double, lon: Double)
+    ) -> AccessTimeSummary {
+        let cycling = cachedAccessRoute(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.stationDestinationKey(stationId: entry.station.id),
+            mode: .cycling
+        )
+        return AccessTimeSummary(
+            walkingTravelTime: entry.displayTravelTime,
+            isApproximateWalkingTime: entry.isApproximateTravelTime,
+            cyclingTravelTime: cycling?.expectedTravelTime
+        )
+    }
+
+    private func accessTimeSummary(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        directDistanceMeters: Double
+    ) -> AccessTimeSummary {
+        let walking = cachedAccessRoute(
+            origin: origin,
+            destinationKey: destinationKey,
+            mode: .walking
+        )
+        let cycling = cachedAccessRoute(
+            origin: origin,
+            destinationKey: destinationKey,
+            mode: .cycling
+        )
+        return AccessTimeSummary(
+            walkingTravelTime: walking?.expectedTravelTime
+                ?? AccessTimeFormatter.approximateWalkingTravelTime(distanceMeters: directDistanceMeters),
+            isApproximateWalkingTime: walking == nil,
+            cyclingTravelTime: cycling?.expectedTravelTime
+        )
+    }
+
+    private func cachedAccessRoute(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) -> WalkingDistance? {
+        model.walkingResolver.cached(
+            origin: origin,
+            destinationKey: destinationKey,
+            mode: mode
+        ) ?? model.walkingResolver.staleFallback(
+            origin: origin,
+            destinationKey: destinationKey,
+            mode: mode
+        )
     }
 
     private var placeholderChipStrip: some View {
@@ -1512,11 +1574,17 @@ struct DashboardScreen: View {
                         let selected = effectivePinnedBusStop(in: choice)
                         VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                             if choice.stops.count > 1 {
-                                busStopSelector(choice: choice)
+                                busStopSelector(choice: choice, origin: origin)
                             }
                             pinnedBusDirectionRow(route: route, stop: selected.stop, origin: origin)
                         }
                     }
+                }
+                .task(id: accessTaskKey(prefix: "bus-\(route)", origin: origin)) {
+                    model.walkingResolver.ensureFresh(
+                        origin: origin,
+                        stops: directionChoices.flatMap(\.stops).map(\.stop)
+                    )
                 }
             }
         } else {
@@ -1572,14 +1640,21 @@ struct DashboardScreen: View {
         }
     }
 
-    private func busStopSelector(choice: BusDirectionStopChoice) -> some View {
+    private func busStopSelector(
+        choice: BusDirectionStopChoice,
+        origin: (lat: Double, lon: Double)
+    ) -> some View {
         VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             sectionLabel("Pick a stop")
             StationChipStrip {
                 ForEach(choice.stops) { entry in
                     BusStopChip(
                         stop: entry.stop,
-                        distance: entry.distance,
+                        accessTime: accessTimeSummary(
+                            origin: origin,
+                            destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: entry.stop.id),
+                            directDistanceMeters: entry.distance
+                        ),
                         isSelected: entry.stop.id == effectivePinnedBusStop(in: choice).stop.id,
                         accent: ChicagoPalette.flagBlue,
                         action: { setPinnedBusStop(entry.stop) }
@@ -1609,6 +1684,11 @@ struct DashboardScreen: View {
             from: origin,
             to: (stop.latitude, stop.longitude)
         )
+        let accessTime = accessTimeSummary(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: stop.id),
+            directDistanceMeters: distance
+        )
         let predictions = model.snapshot.busPredictions
             .filter { $0.route == route && $0.stopId == stop.id }
             .sorted { $0.arrivalAt < $1.arrivalAt }
@@ -1621,9 +1701,11 @@ struct DashboardScreen: View {
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.bahama)
                 Spacer()
-                Text(WalkTimeFormatter.short(distanceMeters: distance))
+                Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
             Text(stop.name)
@@ -1753,9 +1835,15 @@ struct DashboardScreen: View {
             } else {
                 let selected = effectivePinnedMetraStation(in: choices)
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    metraStationSelector(choices: choices)
+                    metraStationSelector(choices: choices, origin: origin)
                     directionPickerForMetra(route: route, station: selected.station)
                     pinnedMetraStationRow(route: route, station: selected.station, origin: origin)
+                }
+                .task(id: accessTaskKey(prefix: "metra-\(route)", origin: origin)) {
+                    model.walkingResolver.ensureFresh(
+                        origin: origin,
+                        metraStations: choices.map(\.station)
+                    )
                 }
             }
         } else {
@@ -1779,14 +1867,21 @@ struct DashboardScreen: View {
             .map { MetraStationChoice(station: $0.station, distance: $0.distance) }
     }
 
-    private func metraStationSelector(choices: [MetraStationChoice]) -> some View {
+    private func metraStationSelector(
+        choices: [MetraStationChoice],
+        origin: (lat: Double, lon: Double)
+    ) -> some View {
         VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             sectionLabel("Pick a station")
             StationChipStrip {
                 ForEach(choices) { entry in
                     MetraStationChip(
                         station: entry.station,
-                        distance: entry.distance,
+                        accessTime: accessTimeSummary(
+                            origin: origin,
+                            destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: entry.station.id),
+                            directDistanceMeters: entry.distance
+                        ),
                         isSelected: entry.station.id == effectivePinnedMetraStation(in: choices).station.id,
                         accent: pinnedMetraAccent,
                         action: { setPinnedMetraStation(entry.station) }
@@ -1839,6 +1934,11 @@ struct DashboardScreen: View {
             from: origin,
             to: (station.latitude, station.longitude)
         )
+        let accessTime = accessTimeSummary(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: station.id),
+            directDistanceMeters: distance
+        )
         let predictions = metraPredictions(route: route, station: station)
         let first = predictions.first
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
@@ -1848,9 +1948,11 @@ struct DashboardScreen: View {
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.bahama)
                 Spacer()
-                Text(WalkTimeFormatter.short(distanceMeters: distance))
+                Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
             if let zone = station.zoneId {
@@ -2741,8 +2843,7 @@ private struct StationChipStrip<Content: View>: View {
 
 private struct StationChip: View {
     let station: LStation
-    let travelTime: TimeInterval
-    let isApproximateTravelTime: Bool
+    let accessTime: AccessTimeSummary
     let isSelected: Bool
     let accent: Color
     let action: () -> Void
@@ -2757,6 +2858,8 @@ private struct StationChip: View {
                 Text(secondaryLabel)
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
             }
             .padding(.horizontal, ChicagoSpacing.md)
@@ -2779,19 +2882,17 @@ private struct StationChip: View {
     }
 
     private var secondaryLabel: String {
-        let minutes = max(1, Int((travelTime / 60).rounded()))
-        return "\(isApproximateTravelTime ? "≈" : "")\(minutes) min walk"
+        AccessTimeFormatter.short(accessTime)
     }
 
     private var accessibilityTimeLabel: String {
-        let minutes = max(1, Int((travelTime / 60).rounded()))
-        return "\(isApproximateTravelTime ? "about " : "")\(minutes) minute walk"
+        AccessTimeFormatter.accessibility(accessTime)
     }
 }
 
 private struct BusStopChip: View {
     let stop: BusStop
-    let distance: Double
+    let accessTime: AccessTimeSummary
     let isSelected: Bool
     let accent: Color
     let action: () -> Void
@@ -2803,9 +2904,11 @@ private struct BusStopChip: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                     .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
-                Text(WalkTimeFormatter.short(distanceMeters: distance))
+                Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
             }
             .padding(.horizontal, ChicagoSpacing.md)
@@ -2824,13 +2927,13 @@ private struct BusStopChip: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(stop.name), \(WalkTimeFormatter.accessibility(distanceMeters: distance))")
+        .accessibilityLabel("\(stop.name), \(AccessTimeFormatter.accessibility(accessTime))")
     }
 }
 
 private struct MetraStationChip: View {
     let station: MetraStation
-    let distance: Double
+    let accessTime: AccessTimeSummary
     let isSelected: Bool
     let accent: Color
     let action: () -> Void
@@ -2842,9 +2945,11 @@ private struct MetraStationChip: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                     .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
-                Text(WalkTimeFormatter.short(distanceMeters: distance))
+                Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
             }
             .padding(.horizontal, ChicagoSpacing.md)
@@ -2863,7 +2968,7 @@ private struct MetraStationChip: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(station.name), \(WalkTimeFormatter.accessibility(distanceMeters: distance))")
+        .accessibilityLabel("\(station.name), \(AccessTimeFormatter.accessibility(accessTime))")
     }
 }
 
@@ -2921,21 +3026,49 @@ private enum DistanceFormatter {
     }
 }
 
-private enum WalkTimeFormatter {
+private struct AccessTimeSummary {
+    let walkingTravelTime: TimeInterval
+    let isApproximateWalkingTime: Bool
+    let cyclingTravelTime: TimeInterval?
+}
+
+private enum AccessTimeFormatter {
     private static let walkingMetersPerMinute = 84.0
+    private static let minimumCyclingDisplayTime: TimeInterval = 2 * 60
 
-    static func short(distanceMeters: Double) -> String {
-        let minutes = minutes(for: distanceMeters)
-        return "≈\(minutes) min walk"
+    static func approximateWalkingTravelTime(distanceMeters: Double) -> TimeInterval {
+        (distanceMeters / walkingMetersPerMinute) * 60
     }
 
-    static func accessibility(distanceMeters: Double) -> String {
-        let minutes = minutes(for: distanceMeters)
-        return "about \(minutes) minute walk"
+    static func short(_ summary: AccessTimeSummary) -> String {
+        let walkMinutes = minutes(for: summary.walkingTravelTime)
+        let walkPrefix = summary.isApproximateWalkingTime ? "≈" : ""
+        let walking = "\(walkPrefix)\(walkMinutes) min walk"
+        guard let cycling = summary.cyclingTravelTime,
+              cycling >= minimumCyclingDisplayTime
+        else {
+            return walking
+        }
+        return "\(walking) / \(minutes(for: cycling)) min bike"
     }
 
-    private static func minutes(for distanceMeters: Double) -> Int {
-        max(1, Int((distanceMeters / walkingMetersPerMinute).rounded()))
+    static func accessibility(_ summary: AccessTimeSummary) -> String {
+        let walkMinutes = minutes(for: summary.walkingTravelTime)
+        let walking = "\(summary.isApproximateWalkingTime ? "about " : "")\(minuteText(walkMinutes)) walk"
+        guard let cycling = summary.cyclingTravelTime,
+              cycling >= minimumCyclingDisplayTime
+        else {
+            return walking
+        }
+        return "\(walking), \(minuteText(minutes(for: cycling))) bike ride"
+    }
+
+    private static func minutes(for travelTime: TimeInterval) -> Int {
+        max(1, Int((travelTime / 60).rounded()))
+    }
+
+    private static func minuteText(_ minutes: Int) -> String {
+        minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
 }
 

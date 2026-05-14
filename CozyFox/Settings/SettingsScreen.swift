@@ -197,8 +197,8 @@ struct SettingsScreen: View {
                 }
             }
 
-            Section("Walking routes") {
-                Text("Cozy Fox caches Apple Maps walking distances from your frequent locations to nearby L stops, so chip rankings reflect actual walking time rather than straight-line distance. Entries refresh automatically once a day to catch bridge closures and construction reroutes.")
+            Section("Access routes") {
+                Text("Cozy Fox caches Apple Maps walking and biking routes from your frequent locations to nearby transit stops, so chips reflect practical access time rather than straight-line distance. Entries refresh automatically once a day to catch bridge closures and construction reroutes.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("Cached routes: \(model.walkingStore.entryCount)")
@@ -207,7 +207,7 @@ struct SettingsScreen: View {
                 Button("Refresh now") {
                     model.walkingStore.invalidateAll()
                 }
-                Button("Clear walking distance cache", role: .destructive) {
+                Button("Clear access route cache", role: .destructive) {
                     model.walkingStore.clearAll()
                 }
             }
