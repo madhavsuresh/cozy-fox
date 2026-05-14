@@ -49,7 +49,7 @@ public struct BusBlockView: View {
                 }
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),
-                    accent: ChicagoPalette.flagBlue,
+                    accent: ChicagoPalette.Mode.bus,
                     now: now
                 )
             } else {

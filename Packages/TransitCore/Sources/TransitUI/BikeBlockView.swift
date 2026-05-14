@@ -22,7 +22,7 @@ public struct BikeBlockView: View {
             HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
                 Image(systemName: "bicycle")
                     .font(.caption)
-                    .foregroundStyle(ChicagoPalette.flagBlue)
+                    .foregroundStyle(ChicagoPalette.Mode.divvy)
                 Text(pick.station.name)
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.darkest)

@@ -9,7 +9,7 @@ import SwiftUI
 /// healthy, low, or empty?" without reading the number.
 ///
 /// Colour reinforces but never replaces:
-/// - `green`  — healthy availability
+/// - `Mode.divvy` — healthy availability
 /// - `gold`   — scarce (per `scarce` flag from upstream)
 /// - `starRed` — empty
 ///
@@ -72,7 +72,7 @@ public struct BikeAvailabilityBar: View {
     private var fillColor: Color {
         if current == 0 { return ChicagoPalette.starRed }
         if scarce       { return ChicagoPalette.gold }
-        return ChicagoPalette.green
+        return ChicagoPalette.Mode.divvy
     }
 
     private var statusLabel: String {

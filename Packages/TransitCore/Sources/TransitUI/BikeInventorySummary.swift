@@ -23,13 +23,13 @@ public struct BikeInventorySummary: View {
                 dockedCount,
                 unit: "docked",
                 size: .sm,
-                tone: scarce ? .warning : .accent,
+                tone: scarce ? .warning : .bike,
                 accessibilityLabel: "\(dockedCount) docked e-bike\(dockedCount == 1 ? "" : "s") available"
             )
             if let chargeSummary {
                 Text(chargeText(for: chargeSummary))
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.green)
+                    .foregroundStyle(ChicagoPalette.Mode.divvy)
                     .lineLimit(2)
                     .multilineTextAlignment(.trailing)
                     .accessibilityLabel(accessibilityChargeText(for: chargeSummary))

@@ -17,19 +17,21 @@ struct BikeNearbyDetailScreen: View {
                         map(for: options)
                         ChicagoCard(title: title(for: headline),
                                     eyebrow: "Closest e-bike",
-                                    ornament: .icon(systemName: "bicycle")) {
+                                    ornament: .icon(systemName: "bicycle"),
+                                    accent: ChicagoPalette.Mode.divvy) {
                             headlineBlock(for: headline)
                         }
                         if options.count > 1 {
                             ChicagoCard(title: "Also nearby",
                                         eyebrow: "Divvy",
-                                        ornament: .icon(systemName: "list.bullet")) {
+                                        ornament: .icon(systemName: "list.bullet"),
+                                        accent: ChicagoPalette.Mode.divvy) {
                                 VStack(spacing: ChicagoSpacing.xs) {
                                     ForEach(Array(options.dropFirst().enumerated()), id: \.element.id) { index, option in
                                         secondaryRow(for: option)
                                         if index < options.count - 2 {
                                             Rectangle()
-                                                .fill(ChicagoPalette.cornflower.opacity(0.25))
+                                                .fill(ChicagoPalette.Gray.light.opacity(0.24))
                                                 .frame(height: ChicagoSpacing.Stroke.hairline)
                                         }
                                     }
@@ -78,7 +80,7 @@ struct BikeNearbyDetailScreen: View {
                         Int(pick.bestRangeMiles.rounded()),
                         unit: "mi range",
                         size: .md,
-                        tone: .accent,
+                        tone: .bike,
                         accessibilityLabel: "\(Int(pick.bestRangeMiles.rounded())) miles of range"
                     )
                 }
@@ -110,13 +112,13 @@ struct BikeNearbyDetailScreen: View {
                     Int(pick.bestRangeMiles.rounded()),
                     unit: "mi charge",
                     size: .md,
-                    tone: .accent,
+                    tone: .bike,
                     accessibilityLabel: "\(Int(pick.bestRangeMiles.rounded())) miles of range"
                 )
             }
             Label("Free-floating e-bike", systemImage: "bicycle")
                 .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
-                .foregroundStyle(ChicagoPalette.green)
+                .foregroundStyle(ChicagoPalette.Mode.divvy)
         }
     }
 
@@ -158,7 +160,7 @@ struct BikeNearbyDetailScreen: View {
             VStack(alignment: .trailing, spacing: ChicagoSpacing.xs) {
                 Image(systemName: "bicycle")
                     .font(.title3.weight(.bold))
-                    .foregroundStyle(ChicagoPalette.green)
+                    .foregroundStyle(ChicagoPalette.Mode.divvy)
                 Text("\(Int(pick.bestRangeMiles.rounded())) mi charge")
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
@@ -198,8 +200,8 @@ struct BikeNearbyDetailScreen: View {
                        coordinate: CLLocationCoordinate2D(
                         latitude: pick.station.latitude,
                         longitude: pick.station.longitude
-                       ))
-                    .tint(ChicagoPalette.flagBlue)
+                    ))
+                    .tint(ChicagoPalette.Mode.divvy)
             }
             ForEach(freePicks) { pick in
                 Annotation("Free e-bike",
@@ -218,7 +220,7 @@ struct BikeNearbyDetailScreen: View {
         .clipShape(RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg))
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg)
-                .strokeBorder(ChicagoPalette.cornflower.opacity(0.4),
+                .strokeBorder(ChicagoPalette.Mode.divvy.opacity(0.28),
                               lineWidth: ChicagoSpacing.Stroke.hairline)
         )
     }
@@ -228,7 +230,7 @@ struct BikeNearbyDetailScreen: View {
             .font(.caption.weight(.bold))
             .foregroundStyle(.white)
             .frame(width: 30, height: 30)
-            .background(Circle().fill(ChicagoPalette.green))
+            .background(Circle().fill(ChicagoPalette.Mode.divvy))
             .overlay(
                 Circle()
                     .strokeBorder(.white, lineWidth: ChicagoSpacing.Stroke.regular)

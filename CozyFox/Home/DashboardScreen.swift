@@ -553,7 +553,7 @@ struct DashboardScreen: View {
                             DirectionChip(
                                 label: "#\(route)",
                                 isSelected: selectedBusRoutes.contains(route),
-                                accent: ChicagoPalette.flagBlue,
+                                accent: ChicagoPalette.Mode.bus,
                                 action: { toggleSelectedBusRoute(route) }
                             )
                         }
@@ -571,7 +571,7 @@ struct DashboardScreen: View {
                                     DirectionChip(
                                         label: busStopPinLabel(choice),
                                         isSelected: selectedBusChoiceIds.contains(choice.id),
-                                        accent: ChicagoPalette.flagBlue,
+                                        accent: ChicagoPalette.Mode.bus,
                                         action: { toggleSelectedBusChoice(choice) }
                                     )
                                 }
@@ -757,7 +757,7 @@ struct DashboardScreen: View {
                         .lineLimit(1)
                 }
                 HeadwayDotStrip(arrivals: predictions.prefix(8).map(\.arrivalAt),
-                                accent: ChicagoPalette.flagBlue)
+                                accent: ChicagoPalette.Mode.bus)
             } else {
                 Text(model.isRefreshing ? "Fetching predictions…" : "No upcoming buses returned yet.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -1667,7 +1667,8 @@ struct DashboardScreen: View {
     private var intercampusCard: some View {
         ChicagoCard(title: "Intercampus",
                     eyebrow: "Northwestern",
-                    ornament: .icon(systemName: "bus.fill")) {
+                    ornament: .icon(systemName: "bus.fill"),
+                    accent: ChicagoPalette.Mode.intercampus) {
             intercampusBody
         }
     }
@@ -1899,7 +1900,7 @@ struct DashboardScreen: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(choice.stop.name)
                     .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
-                    .foregroundStyle(ChicagoPalette.bahama)
+                    .foregroundStyle(intercampusAccent)
                 Spacer()
                 Text(choice.walkTimeText)
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -2004,7 +2005,7 @@ struct DashboardScreen: View {
     }
 
     private var intercampusAccent: Color {
-        Color(red: 0.306, green: 0.165, blue: 0.518)
+        ChicagoPalette.Mode.intercampus
     }
 
     // MARK: - Train line picker
@@ -2583,7 +2584,7 @@ struct DashboardScreen: View {
             MareyProgressStrip(
                 distanceMeters: closest.1,
                 scaleMeters: max(closest.1, 1_500),
-                accent: ChicagoPalette.flagBlue,
+                accent: ChicagoPalette.Mode.bus,
                 vehicleLabel: closest.0.destinationName.map { "→ \($0)" } ?? "Bus",
                 stopLabel: stop.directionLabel.isEmpty ? stop.name : stop.directionLabel,
                 intermediateStops: intermediate
@@ -2644,7 +2645,8 @@ struct DashboardScreen: View {
     private var busRoutePickerCard: some View {
         ChicagoCard(title: "Pin a bus route",
                     eyebrow: "Buses",
-                    ornament: .icon(systemName: "bus.fill")) {
+                    ornament: .icon(systemName: "bus.fill"),
+                    accent: ChicagoPalette.Mode.bus) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                 if let route = visiblePinnedBusRoute {
                     pickerPinnedConfirmationRow(
@@ -2666,7 +2668,7 @@ struct DashboardScreen: View {
                 } label: {
                     HStack(spacing: ChicagoSpacing.xs) {
                         Image(systemName: "bus.fill")
-                            .foregroundStyle(ChicagoPalette.flagBlue)
+                            .foregroundStyle(ChicagoPalette.Mode.bus)
                         Text(visiblePinnedBusRoute == nil ? "Choose a route" : "Change route")
                             .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                             .foregroundStyle(ChicagoPalette.Gray.darkest)
@@ -2696,7 +2698,8 @@ struct DashboardScreen: View {
     private func pinnedBusCard(route: String) -> some View {
         ChicagoCard(title: "Pinned bus",
                     eyebrow: isAutopinned ? "Autopinned bus" : "Pinned bus",
-                    ornament: .icon(systemName: "bus.fill")) {
+                    ornament: .icon(systemName: "bus.fill"),
+                    accent: ChicagoPalette.Mode.bus) {
             pinnedBusBody(route: route)
         }
     }
@@ -2816,7 +2819,7 @@ struct DashboardScreen: View {
                         DirectionChip(
                             label: choice.displayLabel,
                             isSelected: pinnedBusDirection == choice.directionLabel,
-                            accent: ChicagoPalette.flagBlue,
+                            accent: ChicagoPalette.Mode.bus,
                             action: { togglePinnedBusDirection(choice.directionLabel) }
                         )
                     }
@@ -2868,7 +2871,7 @@ struct DashboardScreen: View {
                             directDistanceMeters: entry.distance
                         ),
                         isSelected: entry.stop.id == effectivePinnedBusStop(in: choice).stop.id,
-                        accent: ChicagoPalette.flagBlue,
+                        accent: ChicagoPalette.Mode.bus,
                         action: { setPinnedBusStop(entry.stop) }
                     )
                 }
@@ -2910,7 +2913,7 @@ struct DashboardScreen: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(stop.directionLabel.isEmpty ? stop.name : stop.directionLabel)
                     .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
-                    .foregroundStyle(ChicagoPalette.bahama)
+                    .foregroundStyle(ChicagoPalette.Mode.bus)
                 Spacer()
                 Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -2944,7 +2947,7 @@ struct DashboardScreen: View {
                 }
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),
-                    accent: ChicagoPalette.flagBlue
+                    accent: ChicagoPalette.Mode.bus
                 )
             }
             busProgressStrip(toStop: stop, route: route)
@@ -3035,7 +3038,7 @@ struct DashboardScreen: View {
                 } label: {
                     HStack(spacing: ChicagoSpacing.xs) {
                         Image(systemName: "train.side.front.car")
-                            .foregroundStyle(ChicagoPalette.flagBlue)
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
                         Text(visiblePinnedMetraRoute == nil ? "Choose a line" : "Change line")
                             .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                             .foregroundStyle(ChicagoPalette.Gray.darkest)
@@ -3342,7 +3345,8 @@ struct DashboardScreen: View {
     private var bikeCard: some View {
         ChicagoCard(title: "Closest e-bikes",
                     eyebrow: "Divvy",
-                    ornament: .icon(systemName: "bicycle")) {
+                    ornament: .icon(systemName: "bicycle"),
+                    accent: ChicagoPalette.Mode.divvy) {
             let options = model.snapshot.nearbyBikeOptions
             if options.isEmpty {
                 Text("No e-bikes within walking distance")
@@ -3355,7 +3359,7 @@ struct DashboardScreen: View {
                         BikeOptionRow(option: option)
                         if index < min(options.count, 3) - 1 {
                             Rectangle()
-                                .fill(ChicagoPalette.cornflower.opacity(0.25))
+                                .fill(ChicagoPalette.Gray.light.opacity(0.24))
                                 .frame(height: ChicagoSpacing.Stroke.hairline)
                         }
                     }
@@ -3372,7 +3376,7 @@ struct DashboardScreen: View {
                                 Image(systemName: "chevron.right")
                             }
                             .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
-                            .foregroundStyle(ChicagoPalette.flagBlue)
+                            .foregroundStyle(ChicagoPalette.Mode.divvy)
                             .frame(maxWidth: .infinity, alignment: .trailing)
                             .padding(.top, ChicagoSpacing.xs)
                         }
@@ -3401,7 +3405,7 @@ struct DashboardScreen: View {
                         || !nearbyMetraRoutes.isEmpty
                     {
                         Rectangle()
-                            .fill(ChicagoPalette.cornflower.opacity(0.4))
+                            .fill(ChicagoPalette.Gray.light.opacity(0.28))
                             .frame(height: ChicagoSpacing.Stroke.hairline)
                     }
                     nearbyBuses
@@ -3747,7 +3751,7 @@ struct DashboardScreen: View {
         .background(ChicagoPalette.Surface.background)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(ChicagoPalette.cornflower.opacity(0.3))
+                .fill(ChicagoPalette.Gray.light.opacity(0.28))
                 .frame(height: ChicagoSpacing.Stroke.hairline)
         }
     }
@@ -3891,14 +3895,14 @@ struct DashboardScreen: View {
     private func railBorderColor(for mode: DashboardRailMode) -> Color {
         switch mode {
         case .train:
-            return pinnedLine?.swiftUIColor ?? ChicagoPalette.cornflower
+            return pinnedLine?.swiftUIColor ?? ChicagoPalette.Gray.light
         case .bus:
-            return pinnedBusRoute == nil ? ChicagoPalette.cornflower : ChicagoPalette.flagBlue
+            return pinnedBusRoute == nil ? ChicagoPalette.Gray.light : ChicagoPalette.Mode.bus
         case .metra:
             return pinnedMetraRoute
-                .flatMap { MetraStationCatalog.route(id: $0)?.swiftUIColor } ?? ChicagoPalette.cornflower
+                .flatMap { MetraStationCatalog.route(id: $0)?.swiftUIColor } ?? ChicagoPalette.Gray.light
         case .intercampus:
-            return ChicagoPalette.bahama
+            return ChicagoPalette.Mode.intercampus
         }
     }
 
@@ -4001,7 +4005,7 @@ struct DashboardScreen: View {
         HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
             Text("Pinned")
                 .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                .foregroundStyle(ChicagoPalette.bahama)
+                .foregroundStyle(ChicagoPalette.Gray.medium)
             badge()
             Text(title)
                 .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
@@ -4031,7 +4035,7 @@ struct DashboardScreen: View {
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                 .strokeBorder(
-                    ChicagoPalette.cornflower.opacity(0.28),
+                    ChicagoPalette.Gray.light.opacity(0.26),
                     lineWidth: ChicagoSpacing.Stroke.hairline
                 )
         )
@@ -4078,7 +4082,7 @@ struct DashboardScreen: View {
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
             .font(ChicagoTypography.body(.medium, relativeTo: .caption))
-            .foregroundStyle(ChicagoPalette.bahama)
+            .foregroundStyle(ChicagoPalette.Gray.medium)
     }
 }
 
@@ -4434,7 +4438,7 @@ private struct IntercampusRailBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(
-                ChicagoPalette.bahama,
+                ChicagoPalette.Mode.intercampus,
                 in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm)
             )
             .accessibilityLabel(accessibilityLabel)
@@ -4562,7 +4566,7 @@ private struct NearbyTrainCorridorTile: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                .strokeBorder(ChicagoPalette.Gray.light.opacity(0.26),
                               lineWidth: ChicagoSpacing.Stroke.hairline)
         )
         .accessibilityElement(children: .combine)
@@ -4601,7 +4605,7 @@ private struct NearbyTrainCorridorTile: View {
     private func corridorLabel(_ corridor: TransitCorridor) -> some View {
         Text(corridor.shortLabel)
             .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
-            .foregroundStyle(ChicagoPalette.bahama)
+            .foregroundStyle(ChicagoPalette.Gray.medium)
             .padding(.horizontal, ChicagoSpacing.xs)
             .padding(.vertical, 2)
             .background(
@@ -4660,7 +4664,7 @@ private struct NearbyBusCorridorTile: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                .strokeBorder(ChicagoPalette.Gray.light.opacity(0.26),
                               lineWidth: ChicagoSpacing.Stroke.hairline)
         )
         .accessibilityElement(children: .combine)
@@ -4685,7 +4689,7 @@ private struct NearbyBusCorridorTile: View {
     private func corridorLabel(_ corridor: TransitCorridor) -> some View {
         Text(corridor.shortLabel)
             .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
-            .foregroundStyle(ChicagoPalette.bahama)
+            .foregroundStyle(ChicagoPalette.Gray.medium)
             .padding(.horizontal, ChicagoSpacing.xs)
             .padding(.vertical, 2)
             .background(
@@ -4868,7 +4872,7 @@ private struct DirectionChip: View {
                 .overlay(
                     Capsule()
                         .strokeBorder(
-                            isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                            isSelected ? .clear : ChicagoPalette.Gray.light.opacity(0.34),
                             lineWidth: ChicagoSpacing.Stroke.thin
                         )
                 )
@@ -4901,7 +4905,7 @@ private struct LineChip: View {
             .overlay(
                 Capsule()
                     .strokeBorder(
-                        isPinned ? line.swiftUIColor : ChicagoPalette.cornflower.opacity(0.5),
+                        isPinned ? line.swiftUIColor : ChicagoPalette.Gray.light.opacity(0.34),
                         lineWidth: isPinned
                             ? ChicagoSpacing.Stroke.regular
                             : ChicagoSpacing.Stroke.thin
@@ -4960,7 +4964,7 @@ private struct StationChip: View {
             .overlay(
                 RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                     .strokeBorder(
-                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                        isSelected ? .clear : ChicagoPalette.Gray.light.opacity(0.34),
                         lineWidth: ChicagoSpacing.Stroke.thin
                     )
             )
@@ -5009,7 +5013,7 @@ private struct BusStopChip: View {
             .overlay(
                 RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                     .strokeBorder(
-                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                        isSelected ? .clear : ChicagoPalette.Gray.light.opacity(0.34),
                         lineWidth: ChicagoSpacing.Stroke.thin
                     )
             )
@@ -5050,7 +5054,7 @@ private struct MetraStationChip: View {
             .overlay(
                 RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                     .strokeBorder(
-                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                        isSelected ? .clear : ChicagoPalette.Gray.light.opacity(0.34),
                         lineWidth: ChicagoSpacing.Stroke.thin
                     )
             )
@@ -5088,7 +5092,7 @@ private struct IntercampusStopChip: View {
             .overlay(
                 RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                     .strokeBorder(
-                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                        isSelected ? .clear : ChicagoPalette.Gray.light.opacity(0.34),
                         lineWidth: ChicagoSpacing.Stroke.thin
                     )
             )
@@ -5126,7 +5130,7 @@ private struct StationChipPlaceholder: View {
         .overlay(
             RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
                 .strokeBorder(
-                    ChicagoPalette.cornflower.opacity(0.5),
+                    ChicagoPalette.Gray.light.opacity(0.34),
                     lineWidth: ChicagoSpacing.Stroke.thin
                 )
         )
@@ -5247,7 +5251,7 @@ private struct BikeOptionRow: View {
                 trailing: VStack(alignment: .trailing, spacing: ChicagoSpacing.xs) {
                     Image(systemName: "bicycle")
                         .font(.title3.weight(.bold))
-                        .foregroundStyle(ChicagoPalette.green)
+                        .foregroundStyle(ChicagoPalette.Mode.divvy)
                     Text("\(Int(pick.bestRangeMiles.rounded())) mi charge")
                         .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
                         .foregroundStyle(ChicagoPalette.Gray.medium)

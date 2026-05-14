@@ -127,7 +127,7 @@ public struct MediumDashboardView: View {
 
     private var divider: some View {
         Rectangle()
-            .fill(ChicagoPalette.cornflower.opacity(0.4))
+            .fill(ChicagoPalette.Gray.light.opacity(0.32))
             .frame(width: ChicagoSpacing.Stroke.hairline)
             .padding(.vertical, ChicagoSpacing.xs)
     }
