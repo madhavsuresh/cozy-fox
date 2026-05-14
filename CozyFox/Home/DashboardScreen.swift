@@ -32,7 +32,6 @@ struct DashboardScreen: View {
     @State private var destinationResolveTask: Task<Void, Never>?
     @State private var anchorEntryKind: DestinationAnchorKind?
     @State private var destinationSearch = TripDestinationSearch(region: .chicagoLoop)
-    @State private var allowMultimodalHomePin: Bool = true
     @State private var isPinningHome: Bool = false
     @State private var homePinStatusText: String?
     @State private var homePinStatusIsError: Bool = false
@@ -119,11 +118,6 @@ struct DashboardScreen: View {
                 destinationResolveTask?.cancel()
             }
             .onChange(of: model.pinRevision) { _, _ in reloadPinnedFromPreferences() }
-            .onChange(of: allowMultimodalHomePin) { _, _ in
-                if let selectedTripDestination, plannedTripPin == nil, !isPinningHome {
-                    planTrip(to: selectedTripDestination)
-                }
-            }
             .sheet(item: $anchorEntryKind, onDismiss: reloadPinnedFromPreferences) { kind in
                 AnchorAddressEntry(kind: kind)
                     .environment(model)
@@ -189,13 +183,6 @@ struct DashboardScreen: View {
                 HStack(spacing: ChicagoSpacing.sm) {
                     destinationAnchorButton(.home)
                     destinationAnchorButton(.work)
-
-                    Spacer(minLength: ChicagoSpacing.xs)
-
-                    Toggle("Multimodal", isOn: $allowMultimodalHomePin)
-                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
-                        .tint(ChicagoPalette.flagBlue)
-                        .fixedSize()
                 }
 
                 HStack(spacing: ChicagoSpacing.sm) {
@@ -425,8 +412,7 @@ struct DashboardScreen: View {
                 guard !Task.isCancelled else { return }
                 let options = buildHomeTripOptions(
                     from: plans,
-                    origin: origin,
-                    allowMultimodal: allowMultimodalHomePin
+                    origin: origin
                 )
                 homeTripOptions = options
                 seedSelectedHomeTripChoices(from: options)
@@ -918,7 +904,7 @@ struct DashboardScreen: View {
             summary: summary,
             expectedArrivalAt: option.map { Date().addingTimeInterval($0.expectedTravelTime) },
             expectedTravelTime: option?.expectedTravelTime ?? 0,
-            allowMultimodal: allowMultimodalHomePin,
+            allowMultimodal: true,
             train: trains.first,
             bus: buses.first,
             metra: metras.first,
@@ -1002,13 +988,11 @@ struct DashboardScreen: View {
 
     private func buildHomeTripOptions(
         from plans: [TripPlan],
-        origin: PlannerCoordinate,
-        allowMultimodal: Bool
+        origin: PlannerCoordinate
     ) -> [HomeTripOption] {
         plans.compactMap { plan -> HomeTripOption? in
             let transitLegs = plan.legs.enumerated().filter { $0.element.mode == .transit }
             guard !transitLegs.isEmpty else { return nil }
-            guard allowMultimodal || transitLegs.count == 1 else { return nil }
 
             var trainChoices: [HomeTripTrainChoice] = []
             var busChoices: [HomeTripBusChoice] = []
