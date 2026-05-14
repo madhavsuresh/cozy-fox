@@ -176,9 +176,13 @@ public struct TripPlanner: Sendable {
         request.requestsAlternateRoutes = true
 
         let directions = MKDirections(request: request)
-        let local = fallback.plan(from: origin, to: destination)
+        let fallback = self.fallback
+        let localTask = Task.detached(priority: .userInitiated) {
+            fallback.plan(from: origin, to: destination)
+        }
         if let response = try? await directions.calculate(), !response.routes.isEmpty {
             let mapKitPlans = response.routes.map(Self.decompose(route:))
+            let local = await localTask.value
             let merged = Self.merge(mapKitPlans: mapKitPlans, localPlans: local)
             if !merged.isEmpty {
                 return merged
@@ -189,6 +193,7 @@ public struct TripPlanner: Sendable {
         // pick from the bundled CTA catalogs. The local planner returns
         // comparison plans (train, bus, bus-to-train, Metra) so the user can
         // compare the routes that produce distinct live pins.
+        let local = await localTask.value
         if !local.isEmpty {
             return local
         }

@@ -17,9 +17,15 @@ import TransitModels
 /// - Require the transit option to beat a direct walk by at least 15 %.
 /// - Use straight-line distances; real route polylines are unavailable here.
 public struct LocalTransitPlanner: Sendable {
-    private static let maxTransferEdgesPerRoute = 80
-    private static let maxTransferEdgesPerRoutePair = 4
-    private static let maxTransferSearchStates = 8_000
+    private static let transferBucketSize = 0.01
+    private static let maxOriginTransferRoutes = 12
+    private static let maxDestinationTransferRoutes = 12
+    private static let maxOneTransferCandidates = 32
+    private static let maxOneTransferEdgesPerRoutePair = 3
+    private static let maxThreeLegTransferCandidates = 4
+    private static let maxThreeLegCombinations = 512
+    private static let maxNearbyTransferEdgesPerRoute = 18
+    private static let maxNearbyTransferEdgesPerRoutePair = 1
 
     public let walkingMetersPerMinute: Double
     public let lTrainMetersPerMinute: Double
@@ -61,7 +67,7 @@ public struct LocalTransitPlanner: Sendable {
         maxTrainPlans: Int = 12,
         maxBusPlans: Int = 16,
         maxBusToTrainPlans: Int = 16,
-        maxTransferTransitLegs: Int = 5,
+        maxTransferTransitLegs: Int = 3,
         maxMetraPlans: Int = 8
     ) {
         self.walkingMetersPerMinute = walkingMetersPerMinute
@@ -225,22 +231,12 @@ public struct LocalTransitPlanner: Sendable {
             closest(in: $0, to: destinationPair, maxMeters: maxStopWalkMeters)
         }
 
-        let transferCandidates = multiLegTransferCandidates(
-            origin: originPair,
-            destination: destinationPair,
-            directWalkMinutes: directWalkMinutes,
-            stations: stations,
-            uniqueStopsByRoute: uniqueStopsByRoute,
-            originStopByRoute: originStopByRoute,
-            destinationStopByRoute: destinationStopByRoute
-        )
-
         var busCandidates: [Candidate] = []
         var busKeys: Set<String> = []
-        for (route, unique) in uniqueStopsByRoute {
+        for route in uniqueStopsByRoute.keys {
             guard
-                let originStop = closest(in: unique, to: originPair, maxMeters: maxStopWalkMeters),
-                let destStop = closest(in: unique, to: destinationPair, maxMeters: maxStopWalkMeters),
+                let originStop = originStopByRoute[route],
+                let destStop = destinationStopByRoute[route],
                 originStop.entry.id != destStop.entry.id
             else { continue }
 
@@ -305,6 +301,16 @@ public struct LocalTransitPlanner: Sendable {
             appendBusCandidate(candidate, flavor: .busShortestRide)
         }
 
+        let transferCandidates = multiLegTransferCandidates(
+            origin: originPair,
+            destination: destinationPair,
+            directWalkMinutes: directWalkMinutes,
+            stations: stations,
+            uniqueStopsByRoute: uniqueStopsByRoute,
+            originStopByRoute: originStopByRoute,
+            destinationStopByRoute: destinationStopByRoute
+        )
+
         var plans: [TripPlan] = []
         for candidate in trainCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }).prefix(max(0, maxTrainPlans)) {
             plans.append(makePlan(from: candidate, flavor: .train))
@@ -330,115 +336,123 @@ public struct LocalTransitPlanner: Sendable {
         originStopByRoute: [String: (entry: BusStop, distance: Double)],
         destinationStopByRoute: [String: (entry: BusStop, distance: Double)]
     ) -> [TransferPathCandidate] {
-        let profiles = routeProfiles(stations: stations, uniqueStopsByRoute: uniqueStopsByRoute)
-        guard maxTransferTransitLegs >= 2, profiles.count >= 2 else { return [] }
+        guard maxTransferTransitLegs >= 2, maxBusToTrainPlans > 0 else { return [] }
 
         var originBoardings: [LocalTransitRoute: PointDistance] = [:]
         var destinationAlightings: [LocalTransitRoute: PointDistance] = [:]
 
-        for profile in profiles {
-            switch profile.route {
-            case .bus(let route):
-                if let stop = originStopByRoute[route] {
-                    originBoardings[profile.route] = PointDistance(point: transitPoint(stop.entry), distance: stop.distance)
-                }
-                if let stop = destinationStopByRoute[route] {
-                    destinationAlightings[profile.route] = PointDistance(point: transitPoint(stop.entry), distance: stop.distance)
-                }
-            case .train:
-                if let point = closestPoint(in: profile, to: origin, maxMeters: maxStationWalkMeters) {
-                    originBoardings[profile.route] = point
-                }
-                if let point = closestPoint(in: profile, to: destination, maxMeters: maxStationWalkMeters) {
-                    destinationAlightings[profile.route] = point
-                }
+        for (route, stop) in originStopByRoute {
+            originBoardings[.bus(route)] = PointDistance(point: transitPoint(stop.entry), distance: stop.distance)
+        }
+        for (route, stop) in destinationStopByRoute {
+            destinationAlightings[.bus(route)] = PointDistance(point: transitPoint(stop.entry), distance: stop.distance)
+        }
+        for line in LineColor.allCases {
+            guard let profile = routeProfile(
+                for: .train(line),
+                stations: stations,
+                uniqueStopsByRoute: uniqueStopsByRoute
+            ) else { continue }
+            if let point = closestPoint(in: profile, to: origin, maxMeters: maxStationWalkMeters) {
+                originBoardings[profile.route] = point
+            }
+            if let point = closestPoint(in: profile, to: destination, maxMeters: maxStationWalkMeters) {
+                destinationAlightings[profile.route] = point
             }
         }
         guard !originBoardings.isEmpty, !destinationAlightings.isEmpty else { return [] }
 
-        let adjacency = transferEdges(for: profiles)
-        var queue = originBoardings.map { route, boarding in
-            TransferSearchState(
-                currentRoute: route,
-                currentBoardingPoint: boarding.point,
-                completedSegments: [],
-                routeKeys: [routeKey(route)],
-                elapsedMinutes: boarding.distance / walkingMetersPerMinute,
-                originWalkMeters: boarding.distance,
-                transferWalkMeters: 0
-            )
-        }
-        queue.sort { $0.elapsedMinutes < $1.elapsedMinutes }
+        let originRoutes = cappedTransferEndpoints(originBoardings, limit: Self.maxOriginTransferRoutes)
+        let destinationRoutes = cappedTransferEndpoints(destinationAlightings, limit: Self.maxDestinationTransferRoutes)
+        let endpointRoutes = Set(originRoutes.map(\.route)).union(destinationRoutes.map(\.route))
+        let endpointProfiles = routeProfiles(
+            for: endpointRoutes,
+            stations: stations,
+            uniqueStopsByRoute: uniqueStopsByRoute
+        )
 
-        var expanded = 0
         var candidateByKey: [String: TransferPathCandidate] = [:]
-        while !queue.isEmpty, expanded < Self.maxTransferSearchStates {
-            let state = queue.removeFirst()
-            expanded += 1
+        let oneTransferCandidates = oneTransferCandidates(
+            originRoutes: originRoutes,
+            destinationRoutes: destinationRoutes,
+            profilesByRoute: endpointProfiles,
+            directWalkMinutes: directWalkMinutes,
+            limit: min(maxBusToTrainPlans, Self.maxOneTransferCandidates)
+        )
+        for candidate in oneTransferCandidates {
+            candidateByKey[transferPathKey(candidate)] = candidate
+        }
 
-            if state.completedSegments.count + 1 >= 2,
-               let destinationPoint = destinationAlightings[state.currentRoute],
-               let finalSegment = transferSegment(
-                   route: state.currentRoute,
-                   from: state.currentBoardingPoint,
-                   to: destinationPoint.point
-               )
-            {
-                let segments = state.completedSegments + [finalSegment]
-                let totalMinutes = state.elapsedMinutes
-                    + rideMinutes(for: finalSegment)
-                    + boardingWaitMinutes(for: finalSegment.route)
-                    + destinationPoint.distance / walkingMetersPerMinute
-                if totalMinutes < directWalkMinutes * minimumTripSavingsFactor {
-                    let candidate = TransferPathCandidate(
-                        segments: segments,
-                        originWalkMeters: state.originWalkMeters,
-                        transferWalkMeters: state.transferWalkMeters,
-                        destinationWalkMeters: destinationPoint.distance,
-                        totalMinutes: totalMinutes
-                    )
-                    let key = transferPathKey(candidate)
-                    if candidateByKey[key].map({ candidate.totalMinutes < $0.totalMinutes }) ?? true {
-                        candidateByKey[key] = candidate
-                    }
+        if maxTransferTransitLegs >= 3, candidateByKey.count < maxBusToTrainPlans {
+            let remainingBudget = min(
+                maxBusToTrainPlans - candidateByKey.count,
+                Self.maxThreeLegTransferCandidates
+            )
+            let threeLegCandidates = threeLegTransferCandidates(
+                originRoutes: originRoutes,
+                destinationRoutes: destinationRoutes,
+                stations: stations,
+                uniqueStopsByRoute: uniqueStopsByRoute,
+                directWalkMinutes: directWalkMinutes,
+                limit: remainingBudget
+            )
+            for candidate in threeLegCandidates {
+                let key = transferPathKey(candidate)
+                if candidateByKey[key].map({ candidate.totalMinutes < $0.totalMinutes }) ?? true {
+                    candidateByKey[key] = candidate
                 }
             }
-
-            guard state.completedSegments.count + 1 < maxTransferTransitLegs else { continue }
-            for edge in adjacency[state.currentRoute] ?? [] {
-                guard !state.routeKeys.contains(routeKey(edge.toRoute)) else { continue }
-                guard let segment = transferSegment(
-                    route: state.currentRoute,
-                    from: state.currentBoardingPoint,
-                    to: edge.fromPoint
-                ) else { continue }
-
-                let elapsedMinutes = state.elapsedMinutes
-                    + rideMinutes(for: segment)
-                    + boardingWaitMinutes(for: segment.route)
-                    + edge.distance / walkingMetersPerMinute
-                queue.append(
-                    TransferSearchState(
-                        currentRoute: edge.toRoute,
-                        currentBoardingPoint: edge.toPoint,
-                        completedSegments: state.completedSegments + [segment],
-                        routeKeys: state.routeKeys + [routeKey(edge.toRoute)],
-                        elapsedMinutes: elapsedMinutes,
-                        originWalkMeters: state.originWalkMeters,
-                        transferWalkMeters: state.transferWalkMeters + edge.distance
-                    )
-                )
-            }
-
-            if queue.count > Self.maxTransferSearchStates {
-                queue.sort { $0.elapsedMinutes < $1.elapsedMinutes }
-                queue = Array(queue.prefix(Self.maxTransferSearchStates))
-            } else if expanded % 64 == 0 {
-                queue.sort { $0.elapsedMinutes < $1.elapsedMinutes }
-            }
         }
 
-        return candidateByKey.values.sorted { $0.totalMinutes < $1.totalMinutes }
+        return candidateByKey.values.sorted(by: transferCandidateSort)
+    }
+
+    private func cappedTransferEndpoints(
+        _ endpoints: [LocalTransitRoute: PointDistance],
+        limit: Int
+    ) -> [TransferEndpoint] {
+        endpoints
+            .map { TransferEndpoint(route: $0.key, pointDistance: $0.value) }
+            .sorted { lhs, rhs in
+                if abs(lhs.pointDistance.distance - rhs.pointDistance.distance) > 0.1 {
+                    return lhs.pointDistance.distance < rhs.pointDistance.distance
+                }
+                return routeKey(lhs.route) < routeKey(rhs.route)
+            }
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+
+    private func routeProfile(
+        for route: LocalTransitRoute,
+        stations: [LStation],
+        uniqueStopsByRoute: [String: [BusStop]]
+    ) -> RouteProfile? {
+        let points: [TransitPoint]
+        switch route {
+        case .bus(let route):
+            points = uniqueStopsByRoute[route, default: []].map(transitPoint)
+        case .train(let line):
+            points = stations
+                .filter { $0.servedLines.contains(line) }
+                .map(transitPoint)
+        }
+        guard !points.isEmpty else { return nil }
+        return RouteProfile(route: route, points: points)
+    }
+
+    private func routeProfiles(
+        for routes: Set<LocalTransitRoute>,
+        stations: [LStation],
+        uniqueStopsByRoute: [String: [BusStop]]
+    ) -> [LocalTransitRoute: RouteProfile] {
+        Dictionary(uniqueKeysWithValues: routes.compactMap { route in
+            routeProfile(
+                for: route,
+                stations: stations,
+                uniqueStopsByRoute: uniqueStopsByRoute
+            ).map { (route, $0) }
+        })
     }
 
     private func routeProfiles(
@@ -460,55 +474,265 @@ public struct LocalTransitPlanner: Sendable {
         return trainProfiles + busProfiles
     }
 
-    private func transferEdges(for profiles: [RouteProfile]) -> [LocalTransitRoute: [TransferEdge]] {
-        let bucketSize = 0.01
-        var grid: [String: [PointRef]] = [:]
-        for profile in profiles {
-            for point in profile.points {
-                grid[bucketKey(point.coordinate, bucketSize: bucketSize), default: []]
-                    .append(PointRef(route: profile.route, point: point))
-            }
-        }
+    private func oneTransferCandidates(
+        originRoutes: [TransferEndpoint],
+        destinationRoutes: [TransferEndpoint],
+        profilesByRoute: [LocalTransitRoute: RouteProfile],
+        directWalkMinutes: Double,
+        limit: Int
+    ) -> [TransferPathCandidate] {
+        guard limit > 0 else { return [] }
 
-        var byRoute: [LocalTransitRoute: [TransferEdge]] = [:]
-        for profile in profiles {
-            for fromPoint in profile.points {
-                let bucket = bucketCoordinate(fromPoint.coordinate, bucketSize: bucketSize)
-                for latitudeOffset in -1...1 {
-                    for longitudeOffset in -1...1 {
-                        let key = "\(bucket.latitude + latitudeOffset):\(bucket.longitude + longitudeOffset)"
-                        for ref in grid[key] ?? [] where ref.route != profile.route {
-                            let distance = Distance.meters(
-                                from: (fromPoint.coordinate.latitude, fromPoint.coordinate.longitude),
-                                to: (ref.point.coordinate.latitude, ref.point.coordinate.longitude)
-                            )
-                            guard distance <= maxTransferWalkMeters else { continue }
-                            byRoute[profile.route, default: []].append(
-                                TransferEdge(
-                                    toRoute: ref.route,
-                                    fromPoint: fromPoint,
-                                    toPoint: ref.point,
-                                    distance: distance
-                                )
-                            )
-                        }
+        var candidateByKey: [String: TransferPathCandidate] = [:]
+        for originEndpoint in originRoutes {
+            guard let originProfile = profilesByRoute[originEndpoint.route] else { continue }
+            for destinationEndpoint in destinationRoutes where originEndpoint.route != destinationEndpoint.route {
+                guard let destinationProfile = profilesByRoute[destinationEndpoint.route] else { continue }
+                for edge in transferEdges(
+                    from: originProfile,
+                    to: destinationProfile,
+                    limit: Self.maxOneTransferEdgesPerRoutePair
+                ) {
+                    guard
+                        let firstSegment = transferSegment(
+                            route: originEndpoint.route,
+                            from: originEndpoint.pointDistance.point,
+                            to: edge.fromPoint
+                        ),
+                        let secondSegment = transferSegment(
+                            route: destinationEndpoint.route,
+                            from: edge.toPoint,
+                            to: destinationEndpoint.pointDistance.point
+                        )
+                    else { continue }
+
+                    let totalMinutes = originEndpoint.pointDistance.distance / walkingMetersPerMinute
+                        + rideMinutes(for: firstSegment)
+                        + boardingWaitMinutes(for: firstSegment.route)
+                        + edge.distance / walkingMetersPerMinute
+                        + rideMinutes(for: secondSegment)
+                        + boardingWaitMinutes(for: secondSegment.route)
+                        + destinationEndpoint.pointDistance.distance / walkingMetersPerMinute
+                    guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+                    let candidate = TransferPathCandidate(
+                        segments: [firstSegment, secondSegment],
+                        originWalkMeters: originEndpoint.pointDistance.distance,
+                        transferWalkMeters: edge.distance,
+                        destinationWalkMeters: destinationEndpoint.pointDistance.distance,
+                        totalMinutes: totalMinutes
+                    )
+                    let key = transferPathKey(candidate)
+                    if candidateByKey[key].map({ candidate.totalMinutes < $0.totalMinutes }) ?? true {
+                        candidateByKey[key] = candidate
                     }
                 }
             }
         }
 
-        return byRoute.mapValues { edges in
-            Dictionary(grouping: edges, by: \.toRoute)
-                .values
-                .flatMap { routeEdges in
-                    routeEdges
-                        .sorted { $0.distance < $1.distance }
-                        .prefix(Self.maxTransferEdgesPerRoutePair)
-                }
+        return candidateByKey.values
+            .sorted(by: transferCandidateSort)
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func threeLegTransferCandidates(
+        originRoutes: [TransferEndpoint],
+        destinationRoutes: [TransferEndpoint],
+        stations: [LStation],
+        uniqueStopsByRoute: [String: [BusStop]],
+        directWalkMinutes: Double,
+        limit: Int
+    ) -> [TransferPathCandidate] {
+        guard limit > 0 else { return [] }
+
+        let profiles = routeProfiles(stations: stations, uniqueStopsByRoute: uniqueStopsByRoute)
+        let profilesByRoute = Dictionary(uniqueKeysWithValues: profiles.map { ($0.route, $0) })
+        let index = transferPointIndex(for: profiles)
+
+        var firstEdgesByOrigin: [LocalTransitRoute: [TransferEdge]] = [:]
+        for endpoint in originRoutes {
+            guard let profile = profilesByRoute[endpoint.route] else { continue }
+            firstEdgesByOrigin[endpoint.route] = nearbyTransferEdges(
+                from: profile,
+                using: index,
+                totalLimit: Self.maxNearbyTransferEdgesPerRoute,
+                limitPerRoute: Self.maxNearbyTransferEdgesPerRoutePair
+            )
+        }
+
+        var secondEdgesByMiddle: [LocalTransitRoute: [TransferEdge]] = [:]
+        for endpoint in destinationRoutes {
+            guard let profile = profilesByRoute[endpoint.route] else { continue }
+            let incomingEdges = nearbyTransferEdges(
+                from: profile,
+                using: index,
+                totalLimit: Self.maxNearbyTransferEdgesPerRoute,
+                limitPerRoute: Self.maxNearbyTransferEdgesPerRoutePair
+            )
+            for edge in incomingEdges {
+                let reversed = TransferEdge(
+                    toRoute: endpoint.route,
+                    fromPoint: edge.toPoint,
+                    toPoint: edge.fromPoint,
+                    distance: edge.distance
+                )
+                secondEdgesByMiddle[edge.toRoute, default: []].append(reversed)
+            }
+        }
+        for route in secondEdgesByMiddle.keys {
+            secondEdgesByMiddle[route] = secondEdgesByMiddle[route]?
                 .sorted { $0.distance < $1.distance }
-                .prefix(Self.maxTransferEdgesPerRoute)
+                .prefix(Self.maxNearbyTransferEdgesPerRoute)
                 .map { $0 }
         }
+
+        let destinationEndpointByRoute = Dictionary(uniqueKeysWithValues: destinationRoutes.map { ($0.route, $0) })
+        var evaluatedCombinations = 0
+        var candidateByKey: [String: TransferPathCandidate] = [:]
+        for originEndpoint in originRoutes {
+            for firstEdge in firstEdgesByOrigin[originEndpoint.route] ?? [] {
+                let middleRoute = firstEdge.toRoute
+                guard middleRoute != originEndpoint.route else { continue }
+                for secondEdge in secondEdgesByMiddle[middleRoute] ?? [] {
+                    guard evaluatedCombinations < Self.maxThreeLegCombinations else {
+                        return candidateByKey.values.sorted(by: transferCandidateSort).prefix(limit).map { $0 }
+                    }
+                    evaluatedCombinations += 1
+
+                    let destinationRoute = secondEdge.toRoute
+                    guard
+                        destinationRoute != originEndpoint.route,
+                        destinationRoute != middleRoute,
+                        let destinationEndpoint = destinationEndpointByRoute[destinationRoute],
+                        let firstSegment = transferSegment(
+                            route: originEndpoint.route,
+                            from: originEndpoint.pointDistance.point,
+                            to: firstEdge.fromPoint
+                        ),
+                        let middleSegment = transferSegment(
+                            route: middleRoute,
+                            from: firstEdge.toPoint,
+                            to: secondEdge.fromPoint
+                        ),
+                        let finalSegment = transferSegment(
+                            route: destinationRoute,
+                            from: secondEdge.toPoint,
+                            to: destinationEndpoint.pointDistance.point
+                        )
+                    else { continue }
+
+                    let transferWalkMeters = firstEdge.distance + secondEdge.distance
+                    let totalMinutes = originEndpoint.pointDistance.distance / walkingMetersPerMinute
+                        + rideMinutes(for: firstSegment)
+                        + boardingWaitMinutes(for: firstSegment.route)
+                        + firstEdge.distance / walkingMetersPerMinute
+                        + rideMinutes(for: middleSegment)
+                        + boardingWaitMinutes(for: middleSegment.route)
+                        + secondEdge.distance / walkingMetersPerMinute
+                        + rideMinutes(for: finalSegment)
+                        + boardingWaitMinutes(for: finalSegment.route)
+                        + destinationEndpoint.pointDistance.distance / walkingMetersPerMinute
+                    guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+                    let candidate = TransferPathCandidate(
+                        segments: [firstSegment, middleSegment, finalSegment],
+                        originWalkMeters: originEndpoint.pointDistance.distance,
+                        transferWalkMeters: transferWalkMeters,
+                        destinationWalkMeters: destinationEndpoint.pointDistance.distance,
+                        totalMinutes: totalMinutes
+                    )
+                    let key = transferPathKey(candidate)
+                    if candidateByKey[key].map({ candidate.totalMinutes < $0.totalMinutes }) ?? true {
+                        candidateByKey[key] = candidate
+                    }
+                }
+            }
+        }
+
+        return candidateByKey.values
+            .sorted(by: transferCandidateSort)
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func transferPointIndex(for profiles: [RouteProfile]) -> TransferPointIndex {
+        var grid: [String: [PointRef]] = [:]
+        for profile in profiles {
+            for point in profile.points {
+                grid[bucketKey(point.coordinate, bucketSize: Self.transferBucketSize), default: []]
+                    .append(PointRef(route: profile.route, point: point))
+            }
+        }
+        return TransferPointIndex(grid: grid)
+    }
+
+    private func transferEdges(
+        from profile: RouteProfile,
+        to destinationProfile: RouteProfile,
+        limit: Int
+    ) -> [TransferEdge] {
+        let index = transferPointIndex(for: [destinationProfile])
+        return nearbyTransferEdges(
+            from: profile,
+            using: index,
+            totalLimit: limit,
+            limitPerRoute: limit
+        )
+    }
+
+    private func nearbyTransferEdges(
+        from profile: RouteProfile,
+        using index: TransferPointIndex,
+        totalLimit: Int,
+        limitPerRoute: Int
+    ) -> [TransferEdge] {
+        guard totalLimit > 0, limitPerRoute > 0 else { return [] }
+
+        var byRoute: [LocalTransitRoute: [TransferEdge]] = [:]
+        for fromPoint in profile.points {
+            let bucket = bucketCoordinate(fromPoint.coordinate, bucketSize: Self.transferBucketSize)
+            for latitudeOffset in -1...1 {
+                for longitudeOffset in -1...1 {
+                    let key = "\(bucket.latitude + latitudeOffset):\(bucket.longitude + longitudeOffset)"
+                    for ref in index.grid[key] ?? [] where ref.route != profile.route {
+                        let distance = Distance.meters(
+                            from: (fromPoint.coordinate.latitude, fromPoint.coordinate.longitude),
+                            to: (ref.point.coordinate.latitude, ref.point.coordinate.longitude)
+                        )
+                        guard distance <= maxTransferWalkMeters else { continue }
+                        byRoute[ref.route, default: []].append(
+                            TransferEdge(
+                                toRoute: ref.route,
+                                fromPoint: fromPoint,
+                                toPoint: ref.point,
+                                distance: distance
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        return byRoute.values
+            .flatMap { edges in
+                edges
+                    .sorted { $0.distance < $1.distance }
+                    .prefix(limitPerRoute)
+            }
+            .sorted { $0.distance < $1.distance }
+            .prefix(totalLimit)
+            .map { $0 }
+    }
+
+    private func transferCandidateSort(
+        _ lhs: TransferPathCandidate,
+        _ rhs: TransferPathCandidate
+    ) -> Bool {
+        if lhs.segments.count != rhs.segments.count {
+            return lhs.segments.count < rhs.segments.count
+        }
+        return lhs.totalMinutes < rhs.totalMinutes
     }
 
     private func closestPoint(
@@ -796,21 +1020,20 @@ public struct LocalTransitPlanner: Sendable {
         let point: TransitPoint
     }
 
+    private struct TransferPointIndex: Sendable {
+        let grid: [String: [PointRef]]
+    }
+
+    private struct TransferEndpoint: Sendable {
+        let route: LocalTransitRoute
+        let pointDistance: PointDistance
+    }
+
     private struct TransferEdge: Sendable {
         let toRoute: LocalTransitRoute
         let fromPoint: TransitPoint
         let toPoint: TransitPoint
         let distance: Double
-    }
-
-    private struct TransferSearchState: Sendable {
-        let currentRoute: LocalTransitRoute
-        let currentBoardingPoint: TransitPoint
-        let completedSegments: [TransferPathSegment]
-        let routeKeys: [String]
-        let elapsedMinutes: Double
-        let originWalkMeters: Double
-        let transferWalkMeters: Double
     }
 
     private struct TransferPathCandidate: Sendable {

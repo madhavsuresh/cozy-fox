@@ -226,6 +226,34 @@ struct LocalTransitPlannerTests {
         #expect(plan.legs.count == 7)
     }
 
+    @Test func skipsThreeLegSearchWhenTransferLegLimitIsTwo() {
+        let stations: [LStation] = [
+            LStation(id: 1, name: "North Transfer Station", latitude: 41.9002, longitude: -87.700,
+                     servedLines: [.red]),
+            LStation(id: 2, name: "West Transfer Station", latitude: 41.920, longitude: -87.680,
+                     servedLines: [.red]),
+        ]
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "151", name: "Origin Northbound Stop",
+                    latitude: 41.880, longitude: -87.700, directionLabel: "Northbound"),
+            BusStop(id: 101, route: "151", name: "North Bus Transfer",
+                    latitude: 41.900, longitude: -87.700, directionLabel: "Northbound"),
+            BusStop(id: 200, route: "77", name: "West Bus Transfer",
+                    latitude: 41.9202, longitude: -87.680, directionLabel: "Westbound"),
+            BusStop(id: 201, route: "77", name: "Destination Bus Stop",
+                    latitude: 41.9202, longitude: -87.640, directionLabel: "Westbound"),
+        ]
+        let planner = LocalTransitPlanner(maxTransferTransitLegs: 2)
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.879, longitude: -87.700),
+            to: PlannerCoordinate(latitude: 41.9202, longitude: -87.639),
+            stations: stations,
+            busStops: stops,
+            metraStations: []
+        )
+        #expect(plans.allSatisfy { $0.flavor != .multiTransfer })
+    }
+
     @Test func producesMultipleBusToTrainPlansWhenSeveralBusesFeedStations() throws {
         let stations: [LStation] = [
             LStation(id: 1, name: "Transfer Station", latitude: 41.880, longitude: -87.680,
@@ -261,6 +289,56 @@ struct LocalTransitPlannerTests {
         })
         #expect(busRoutes.contains("65"))
         #expect(busRoutes.contains("66"))
+    }
+
+    @Test func capsTransferPlansBeforeReturning() {
+        let stations: [LStation] = [
+            LStation(id: 1, name: "Transfer Station", latitude: 41.880, longitude: -87.680,
+                     servedLines: [.blue]),
+            LStation(id: 2, name: "Destination Station", latitude: 41.880, longitude: -87.641,
+                     servedLines: [.blue]),
+        ]
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "65", name: "65 Origin",
+                    latitude: 41.880, longitude: -87.699, directionLabel: "Westbound"),
+            BusStop(id: 101, route: "65", name: "65 Transfer",
+                    latitude: 41.880, longitude: -87.6805, directionLabel: "Westbound"),
+            BusStop(id: 200, route: "66", name: "66 Origin",
+                    latitude: 41.880, longitude: -87.7005, directionLabel: "Westbound"),
+            BusStop(id: 201, route: "66", name: "66 Transfer",
+                    latitude: 41.880, longitude: -87.6810, directionLabel: "Westbound"),
+        ]
+        let planner = LocalTransitPlanner(maxBusToTrainPlans: 1)
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
+            to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
+            stations: stations,
+            busStops: stops,
+            metraStations: []
+        )
+        let transferPlans = plans.filter { $0.flavor == .busToTrain }
+        #expect(transferPlans.count == 1)
+    }
+
+    @Test func fullCatalogPlanningHonorsPlanCaps() {
+        let planner = LocalTransitPlanner(
+            maxTrainPlans: 4,
+            maxBusPlans: 4,
+            maxBusToTrainPlans: 6,
+            maxMetraPlans: 2
+        )
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.9088, longitude: -87.6749),
+            to: PlannerCoordinate(latitude: 41.9400, longitude: -87.6530)
+        )
+        let transferPlans = plans.filter {
+            $0.flavor == .busToTrain
+                || $0.flavor == .busToBus
+                || $0.flavor == .trainToBus
+                || $0.flavor == .multiTransfer
+        }
+        #expect(transferPlans.count <= 6)
+        #expect(plans.count <= 16)
     }
 
     /// Two bus routes where each represents a different tradeoff: route 22
