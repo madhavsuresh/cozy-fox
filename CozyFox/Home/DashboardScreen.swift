@@ -432,9 +432,9 @@ struct DashboardScreen: View {
                 )
                 homeTripOptions = options
                 selectedHomeTripOptionId = options.first?.id
-                selectedTrainChoiceId = options.first?.trainChoices.first?.id
-                selectedBusChoiceId = options.first?.busChoices.first?.id
-                selectedMetraChoiceId = options.first?.metraChoices.first?.id
+                selectedTrainChoiceId = homeTripTrainChoices(in: options).first?.id
+                selectedBusChoiceId = homeTripBusChoices(in: options).first?.id
+                selectedMetraChoiceId = homeTripMetraChoices(in: options).first?.id
                 ensureHomeTripAccessRoutes(
                     options,
                     origin: (lat: origin.latitude, lon: origin.longitude)
@@ -457,20 +457,83 @@ struct DashboardScreen: View {
                     eyebrow: "Choose pin",
                     ornament: .icon(systemName: "point.topleft.down.curvedto.point.bottomright.up")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                ForEach(homeTripOptions) { option in
-                    homeTripOptionRow(option)
+                homeTripPinControls
+
+                VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                    sectionLabel("Suggested routes")
+                    ForEach(homeTripOptions) { option in
+                        homeTripOptionRow(option)
+                    }
                 }
+
                 Button {
                     pinSelectedHomeTrip()
                 } label: {
-                    Label("Pin selected trip", systemImage: "pin.fill")
+                    Label("Pin selected pieces", systemImage: "pin.fill")
                         .font(ChicagoTypography.displaySM(relativeTo: .callout))
                         .tracking(0.5)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(ChicagoPalette.flagBlue)
-                .disabled(selectedHomeTripOption == nil)
+                .disabled(!hasSelectedHomeTripPinPiece)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var homeTripPinControls: some View {
+        let trainChoices = homeTripTrainChoices(in: homeTripOptions)
+        let busChoices = homeTripBusChoices(in: homeTripOptions)
+        let metraChoices = homeTripMetraChoices(in: homeTripOptions)
+
+        VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+            if !trainChoices.isEmpty {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                    sectionLabel("Train")
+                    StationChipStrip {
+                        ForEach(trainChoices) { choice in
+                            DirectionChip(
+                                label: choice.displayLabel,
+                                isSelected: selectedTrainChoiceId == choice.id,
+                                accent: choice.line.swiftUIColor,
+                                action: { toggleSelectedTrainChoice(choice) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if !busChoices.isEmpty {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                    sectionLabel("Bus stop")
+                    StationChipStrip {
+                        ForEach(busChoices) { choice in
+                            DirectionChip(
+                                label: choice.displayLabel,
+                                isSelected: selectedBusChoiceId == choice.id,
+                                accent: ChicagoPalette.flagBlue,
+                                action: { toggleSelectedBusChoice(choice) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if !metraChoices.isEmpty {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                    sectionLabel("Metra station")
+                    StationChipStrip {
+                        ForEach(metraChoices) { choice in
+                            DirectionChip(
+                                label: choice.displayLabel,
+                                isSelected: selectedMetraChoiceId == choice.id,
+                                accent: MetraStationCatalog.route(id: choice.routeId)?.swiftUIColor ?? ChicagoPalette.bahama,
+                                action: { toggleSelectedMetraChoice(choice) }
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -479,10 +542,7 @@ struct DashboardScreen: View {
         let isSelected = selectedHomeTripOptionId == option.id
         return VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
             Button {
-                selectedHomeTripOptionId = option.id
-                selectedTrainChoiceId = option.trainChoices.first?.id
-                selectedBusChoiceId = option.busChoices.first?.id
-                selectedMetraChoiceId = option.metraChoices.first?.id
+                selectHomeTripOption(option)
             } label: {
                 HStack(spacing: ChicagoSpacing.sm) {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -506,56 +566,6 @@ struct DashboardScreen: View {
                 }
             }
             .buttonStyle(.plain)
-
-            if isSelected {
-                if !option.trainChoices.isEmpty {
-                    VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                        sectionLabel("Train")
-                        StationChipStrip {
-                            ForEach(option.trainChoices) { choice in
-                                DirectionChip(
-                                    label: choice.displayLabel,
-                                    isSelected: selectedTrainChoiceId == choice.id,
-                                    accent: choice.line.swiftUIColor,
-                                    action: { selectedTrainChoiceId = choice.id }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if !option.busChoices.isEmpty {
-                    VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                        sectionLabel("Bus boarding stop")
-                        StationChipStrip {
-                            ForEach(option.busChoices) { choice in
-                                DirectionChip(
-                                    label: choice.displayLabel,
-                                    isSelected: selectedBusChoiceId == choice.id,
-                                    accent: ChicagoPalette.flagBlue,
-                                    action: { selectedBusChoiceId = choice.id }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if !option.metraChoices.isEmpty {
-                    VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                        sectionLabel("Metra boarding station")
-                        StationChipStrip {
-                            ForEach(option.metraChoices) { choice in
-                                DirectionChip(
-                                    label: choice.displayLabel,
-                                    isSelected: selectedMetraChoiceId == choice.id,
-                                    accent: MetraStationCatalog.route(id: choice.routeId)?.swiftUIColor ?? ChicagoPalette.bahama,
-                                    action: { selectedMetraChoiceId = choice.id }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
         .padding(ChicagoSpacing.md)
         .background(ChicagoPalette.Surface.elevated,
@@ -744,21 +754,58 @@ struct DashboardScreen: View {
         return homeTripOptions.first { $0.id == selectedHomeTripOptionId }
     }
 
+    private var hasSelectedHomeTripPinPiece: Bool {
+        selectedTrainChoice() != nil
+            || selectedBusChoice() != nil
+            || selectedMetraChoice() != nil
+    }
+
+    private func selectHomeTripOption(_ option: HomeTripOption) {
+        let trainChoices = homeTripTrainChoices(in: homeTripOptions)
+        let busChoices = homeTripBusChoices(in: homeTripOptions)
+        let metraChoices = homeTripMetraChoices(in: homeTripOptions)
+        selectedHomeTripOptionId = option.id
+        selectedTrainChoiceId = option.trainChoices.first.flatMap { selected in
+            trainChoices.first { trainPinKey($0) == trainPinKey(selected) }?.id
+        }
+        selectedBusChoiceId = option.busChoices.first.flatMap { selected in
+            busChoices.first { busPinKey($0) == busPinKey(selected) }?.id
+        }
+        selectedMetraChoiceId = option.metraChoices.first.flatMap { selected in
+            metraChoices.first { metraPinKey($0) == metraPinKey(selected) }?.id
+        }
+    }
+
+    private func toggleSelectedTrainChoice(_ choice: HomeTripTrainChoice) {
+        selectedTrainChoiceId = selectedTrainChoiceId == choice.id ? nil : choice.id
+    }
+
+    private func toggleSelectedBusChoice(_ choice: HomeTripBusChoice) {
+        selectedBusChoiceId = selectedBusChoiceId == choice.id ? nil : choice.id
+    }
+
+    private func toggleSelectedMetraChoice(_ choice: HomeTripMetraChoice) {
+        selectedMetraChoiceId = selectedMetraChoiceId == choice.id ? nil : choice.id
+    }
+
     private func pinSelectedHomeTrip() {
-        guard let option = selectedHomeTripOption else { return }
+        let option = selectedHomeTripOption ?? homeTripOptions.first
         guard let destinationInfo = selectedTripDestination else {
             homePinStatusText = "Pick a destination first."
             homePinStatusIsError = true
             return
         }
-        let train = selectedTrainChoice(in: option).map {
+        let trainChoice = selectedTrainChoice()
+        let busChoice = selectedBusChoice()
+        let metraChoice = selectedMetraChoice()
+        let train = trainChoice.map {
             PlannedTripPin.TrainLeg(
                 line: $0.line,
                 stationId: $0.stationId,
                 stationName: $0.stationName
             )
         }
-        let bus = selectedBusChoice(in: option).map {
+        let bus = busChoice.map {
             PlannedTripPin.BusLeg(
                 route: $0.route,
                 stopId: $0.stopId,
@@ -766,7 +813,7 @@ struct DashboardScreen: View {
                 directionLabel: $0.directionLabel
             )
         }
-        let metra = selectedMetraChoice(in: option).map {
+        let metra = metraChoice.map {
             PlannedTripPin.MetraLeg(
                 routeId: $0.routeId,
                 stationId: $0.stationId,
@@ -780,12 +827,17 @@ struct DashboardScreen: View {
             homePinStatusIsError = true
             return
         }
+        let summary = homeTripTransitSummary(
+            train: trainChoice,
+            bus: busChoice,
+            metra: metraChoice
+        )
         let pin = PlannedTripPin(
             destination: destinationInfo,
             title: "Trip to \(destinationInfo.title)",
-            summary: option.transitSummary,
-            expectedArrivalAt: Date().addingTimeInterval(option.expectedTravelTime),
-            expectedTravelTime: option.expectedTravelTime,
+            summary: summary,
+            expectedArrivalAt: option.map { Date().addingTimeInterval($0.expectedTravelTime) },
+            expectedTravelTime: option?.expectedTravelTime ?? 0,
             allowMultimodal: allowMultimodalHomePin,
             train: train,
             bus: bus,
@@ -798,34 +850,37 @@ struct DashboardScreen: View {
         model.savePlannedTripPin(pin)
     }
 
-    private func selectedTrainChoice(in option: HomeTripOption) -> HomeTripTrainChoice? {
-        guard !option.trainChoices.isEmpty else { return nil }
+    private func selectedTrainChoice() -> HomeTripTrainChoice? {
+        let choices = homeTripTrainChoices(in: homeTripOptions)
+        guard !choices.isEmpty else { return nil }
         if let selectedTrainChoiceId,
-           let choice = option.trainChoices.first(where: { $0.id == selectedTrainChoiceId })
+           let choice = choices.first(where: { $0.id == selectedTrainChoiceId })
         {
             return choice
         }
-        return option.trainChoices.first
+        return nil
     }
 
-    private func selectedBusChoice(in option: HomeTripOption) -> HomeTripBusChoice? {
-        guard !option.busChoices.isEmpty else { return nil }
+    private func selectedBusChoice() -> HomeTripBusChoice? {
+        let choices = homeTripBusChoices(in: homeTripOptions)
+        guard !choices.isEmpty else { return nil }
         if let selectedBusChoiceId,
-           let choice = option.busChoices.first(where: { $0.id == selectedBusChoiceId })
+           let choice = choices.first(where: { $0.id == selectedBusChoiceId })
         {
             return choice
         }
-        return option.busChoices.first
+        return nil
     }
 
-    private func selectedMetraChoice(in option: HomeTripOption) -> HomeTripMetraChoice? {
-        guard !option.metraChoices.isEmpty else { return nil }
+    private func selectedMetraChoice() -> HomeTripMetraChoice? {
+        let choices = homeTripMetraChoices(in: homeTripOptions)
+        guard !choices.isEmpty else { return nil }
         if let selectedMetraChoiceId,
-           let choice = option.metraChoices.first(where: { $0.id == selectedMetraChoiceId })
+           let choice = choices.first(where: { $0.id == selectedMetraChoiceId })
         {
             return choice
         }
-        return option.metraChoices.first
+        return nil
     }
 
     private func buildHomeTripOptions(
@@ -984,18 +1039,24 @@ struct DashboardScreen: View {
         origin: (lat: Double, lon: Double)
     ) {
         let accesses = options.compactMap(\.boardingAccess)
-        let stationIds = Set(accesses.compactMap { access -> Int? in
+        let trainChoices = homeTripTrainChoices(in: options)
+        let busChoices = homeTripBusChoices(in: options)
+        let metraChoices = homeTripMetraChoices(in: options)
+        let accessStationIds = Set(accesses.compactMap { access -> Int? in
             if case .train(stationId: let stationId) = access.kind { return stationId }
             return nil
         })
-        let stopIds = Set(accesses.compactMap { access -> Int? in
+        let accessStopIds = Set(accesses.compactMap { access -> Int? in
             if case .bus(stopId: let stopId) = access.kind { return stopId }
             return nil
         })
-        let metraStationIds = Set(accesses.compactMap { access -> String? in
+        let accessMetraStationIds = Set(accesses.compactMap { access -> String? in
             if case .metra(stationId: let stationId) = access.kind { return stationId }
             return nil
         })
+        let stationIds = accessStationIds.union(trainChoices.map(\.stationId))
+        let stopIds = accessStopIds.union(busChoices.map(\.stopId))
+        let metraStationIds = accessMetraStationIds.union(metraChoices.map(\.stationId))
 
         let stations = LStationCatalog.all.filter { stationIds.contains($0.id) }
         let stops = BusStopCatalog.all.filter { stopIds.contains($0.id) }
@@ -1017,7 +1078,7 @@ struct DashboardScreen: View {
             .closestStations(
                 onLine: line,
                 to: (point.latitude, point.longitude),
-                limit: 3,
+                limit: Int.max,
                 catalog: LStationCatalog.all,
                 excludingStationIds: closedStationIds
             )
@@ -1043,7 +1104,7 @@ struct DashboardScreen: View {
         let candidates = resolver.nearestStopsPerDirection(
             onRoute: route,
             to: (point.latitude, point.longitude),
-            limitPerDirection: 3,
+            limitPerDirection: Int.max,
             catalog: BusStopCatalog.all
         )
         return candidates.map { entry in
@@ -1069,7 +1130,7 @@ struct DashboardScreen: View {
         let candidates = resolver.closestStations(
             onRoute: route,
             to: (point.latitude, point.longitude),
-            limit: 3,
+            limit: Int.max,
             catalog: MetraStationCatalog.all
         )
         return candidates.map { entry in
@@ -1098,6 +1159,33 @@ struct DashboardScreen: View {
     private func dedupeMetraChoices(_ choices: [HomeTripMetraChoice]) -> [HomeTripMetraChoice] {
         var seen: Set<String> = []
         return choices.filter { seen.insert($0.id).inserted }
+    }
+
+    private func homeTripTrainChoices(in options: [HomeTripOption]) -> [HomeTripTrainChoice] {
+        var seen: Set<String> = []
+        return options.flatMap(\.trainChoices).filter { seen.insert(trainPinKey($0)).inserted }
+    }
+
+    private func homeTripBusChoices(in options: [HomeTripOption]) -> [HomeTripBusChoice] {
+        var seen: Set<String> = []
+        return options.flatMap(\.busChoices).filter { seen.insert(busPinKey($0)).inserted }
+    }
+
+    private func homeTripMetraChoices(in options: [HomeTripOption]) -> [HomeTripMetraChoice] {
+        var seen: Set<String> = []
+        return options.flatMap(\.metraChoices).filter { seen.insert(metraPinKey($0)).inserted }
+    }
+
+    private func trainPinKey(_ choice: HomeTripTrainChoice) -> String {
+        "\(choice.line.rawValue)-\(choice.stationId)"
+    }
+
+    private func busPinKey(_ choice: HomeTripBusChoice) -> String {
+        "\(choice.route)-\(choice.stopId)-\(choice.directionLabel)"
+    }
+
+    private func metraPinKey(_ choice: HomeTripMetraChoice) -> String {
+        "\(choice.routeId)-\(choice.stationId)-\(choice.directionId.map(String.init) ?? "any")"
     }
 
     private func homeTripTitle(plan: TripPlan, transitLegCount: Int) -> String {
@@ -1136,6 +1224,25 @@ struct DashboardScreen: View {
         let busPieces = buses.map { "Route \($0.route)" }
         let metraPieces = metras.map { MetraStationCatalog.route(id: $0.routeId)?.shortName ?? $0.routeId }
         let pieces = Array((trainPieces + busPieces + metraPieces.map { "Metra \($0)" }).prefix(3))
+        return pieces.isEmpty ? "Transit" : pieces.joined(separator: " + ")
+    }
+
+    private func homeTripTransitSummary(
+        train: HomeTripTrainChoice?,
+        bus: HomeTripBusChoice?,
+        metra: HomeTripMetraChoice?
+    ) -> String {
+        var pieces: [String] = []
+        if let bus {
+            pieces.append("Route \(bus.route)")
+        }
+        if let train {
+            pieces.append(train.line.displayName)
+        }
+        if let metra {
+            let route = MetraStationCatalog.route(id: metra.routeId)?.shortName ?? metra.routeId
+            pieces.append("Metra \(route)")
+        }
         return pieces.isEmpty ? "Transit" : pieces.joined(separator: " + ")
     }
 

@@ -148,7 +148,7 @@ public enum TripPlannerError: Error, Sendable, LocalizedError {
 public struct TripPlanner: Sendable {
     public let fallback: LocalTransitPlanner
     private static let maxMapKitPlans = 6
-    private static let maxMergedPlans = 16
+    private static let maxMergedPlans = 48
 
     public init(fallback: LocalTransitPlanner = LocalTransitPlanner()) {
         self.fallback = fallback
