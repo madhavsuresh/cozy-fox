@@ -28,6 +28,7 @@ final class RefreshCoordinator {
     private let busStopResolver = NearestBusStopResolver()
     private let metraStationResolver = NearestMetraStationResolver()
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
+    private let corridorResolver = TransitCorridorResolver()
     private let autopinner = CommuteAutopinner()
 
     /// Day-stamp of the last walking-cache invalidation so a single 30 s
@@ -204,15 +205,16 @@ final class RefreshCoordinator {
             // closed — the user picked them on purpose, surface the staleness.
             targets.append(contentsOf: visibleTrainPrefs.map { ($0.mapId, $0.stopId) })
         } else if prefs.isModeVisible(.trains), let lastLocation {
-            let nearest = stationResolver.nearest(
+            let nearest = corridorResolver.nearbyTrainCandidates(
                 to: (lastLocation.latitude, lastLocation.longitude),
-                limit: 3,
+                radiusMeters: 2_000,
+                limitPerCorridor: 1,
                 catalog: LStationCatalog.all.filter { station in
                     station.servedLines.contains(where: prefs.isTrainLineVisible)
                 },
                 excludingStationIds: closedStations
             )
-            targets.append(contentsOf: nearest.map { ($0.id, nil) })
+            targets.append(contentsOf: nearest.map { ($0.station.id, nil) })
         }
 
         for tripTrain in prefs.plannedTripPin?.trainLegs ?? [] {
@@ -289,14 +291,15 @@ final class RefreshCoordinator {
         if !visibleBusPrefs.isEmpty {
             targets.append(contentsOf: visibleBusPrefs.map { ($0.route, $0.stopId) })
         } else if prefs.isModeVisible(.buses), let lastLocation {
-            // No tracked buses — surface predictions for the nearest 5
-            // distinct routes from the bundled CTA bus stop catalog.
-            let nearest = busStopResolver.nearest(
+            // No tracked buses — surface predictions for nearby directional
+            // coverage (N/S, E/W, diagonal), not just the closest few routes.
+            let nearest = corridorResolver.nearbyBusCandidates(
                 to: (lastLocation.latitude, lastLocation.longitude),
-                limit: 5,
+                radiusMeters: 1_500,
+                limitPerCorridor: 2,
                 catalog: BusStopCatalog.all.filter { prefs.isBusRouteVisible($0.route) }
             )
-            targets.append(contentsOf: nearest.map { ($0.route, $0.id) })
+            targets.append(contentsOf: nearest.map { ($0.stop.route, $0.stop.id) })
         }
 
         // Pinned bus route: fetch the nearest stops in EACH direction so the
