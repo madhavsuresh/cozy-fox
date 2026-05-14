@@ -52,10 +52,10 @@ public struct LocalTransitPlanner: Sendable {
         minDirectWalkMeters: Double = 800,
         minBusTransitMeters: Double = 500,
         minTrainTransitMeters: Double = 800,
-        maxTrainPlans: Int = 4,
-        maxBusPlans: Int = 4,
-        maxBusToTrainPlans: Int = 4,
-        maxMetraPlans: Int = 2
+        maxTrainPlans: Int = 12,
+        maxBusPlans: Int = 16,
+        maxBusToTrainPlans: Int = 16,
+        maxMetraPlans: Int = 8
     ) {
         self.walkingMetersPerMinute = walkingMetersPerMinute
         self.lTrainMetersPerMinute = lTrainMetersPerMinute
