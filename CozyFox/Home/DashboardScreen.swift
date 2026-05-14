@@ -22,7 +22,13 @@ struct DashboardScreen: View {
     @State private var autoPinnedDirection: CommuteDirection?
     @State private var plannedTripPin: PlannedTripPin?
     @State private var commuteAnchors: CommuteAnchors = .empty
-    @State private var goHomeSelected: Bool = false
+    @State private var selectedTripDestination: PlannedTripPin.Destination?
+    @State private var destinationQuery: String = ""
+    @State private var destinationSuggestions: [DestinationSuggestion] = []
+    @State private var destinationDebounceTask: Task<Void, Never>?
+    @State private var destinationResolveTask: Task<Void, Never>?
+    @State private var anchorEntryKind: DestinationAnchorKind?
+    @State private var destinationSearch = TripDestinationSearch(region: .chicagoLoop)
     @State private var allowMultimodalHomePin: Bool = true
     @State private var isPinningHome: Bool = false
     @State private var homePinStatusText: String?
@@ -32,8 +38,6 @@ struct DashboardScreen: View {
     @State private var selectedTrainChoiceId: String?
     @State private var selectedBusChoiceId: String?
     @State private var selectedMetraChoiceId: String?
-    @State private var isHomeEntryPresented: Bool = false
-    @State private var isTripPlannerPresented: Bool = false
     /// Flipped to `true` 300ms after the pinned-line card mounts (or
     /// re-mounts at a new origin/line) if MapKit hasn't produced any
     /// walking data yet. While false, the chip strip shows shimmer
@@ -71,7 +75,6 @@ struct DashboardScreen: View {
                     if let route = pinnedMetraRoute {
                         pinnedMetraCard(route: route)
                     }
-                    tripPlannerCard
                     bikeCard
                     nearYouSection
                 }
@@ -103,18 +106,19 @@ struct DashboardScreen: View {
             .tint(ChicagoPalette.flagBlue)
             .refreshable { await model.refreshIfNeeded(force: true) }
             .onAppear { reloadPinnedFromPreferences() }
+            .task { await observeDestinationSuggestions() }
+            .onDisappear {
+                destinationDebounceTask?.cancel()
+                destinationResolveTask?.cancel()
+            }
             .onChange(of: model.pinRevision) { _, _ in reloadPinnedFromPreferences() }
             .onChange(of: allowMultimodalHomePin) { _, _ in
-                if goHomeSelected, plannedTripPin == nil, !isPinningHome {
-                    planHomeRouteOptions()
+                if let selectedTripDestination, plannedTripPin == nil, !isPinningHome {
+                    planTrip(to: selectedTripDestination)
                 }
             }
-            .sheet(isPresented: $isHomeEntryPresented, onDismiss: reloadPinnedFromPreferences) {
-                HomeAddressEntry()
-                    .environment(model)
-            }
-            .sheet(isPresented: $isTripPlannerPresented, onDismiss: reloadPinnedFromPreferences) {
-                TripPlannerScreen()
+            .sheet(item: $anchorEntryKind, onDismiss: reloadPinnedFromPreferences) { kind in
+                AnchorAddressEntry(kind: kind)
                     .environment(model)
             }
         }
@@ -135,7 +139,7 @@ struct DashboardScreen: View {
         pinSource = prefs.pinSource
         autoPinnedDirection = prefs.autoPinnedDirection
         plannedTripPin = prefs.plannedTripPin
-        goHomeSelected = prefs.plannedTripPin?.destination == .home
+        selectedTripDestination = selectedTripDestination ?? prefs.plannedTripPin?.destination
         commuteAnchors = model.preferences.loadCommuteAnchors()
     }
 
@@ -165,106 +169,237 @@ struct DashboardScreen: View {
         Rectangle().fill(ChicagoPalette.flagBlue).frame(height: 5)
     }
 
-    // MARK: - Go home
+    // MARK: - Destination pin
 
     private var homePinControl: some View {
-        VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-            HStack(spacing: ChicagoSpacing.sm) {
-                Toggle(isOn: Binding(
-                    get: { goHomeSelected },
-                    set: { setGoHomeSelected($0) }
-                )) {
-                    HStack(spacing: ChicagoSpacing.xs) {
-                        Image(systemName: "house.fill")
-                            .foregroundStyle(ChicagoPalette.flagBlue)
-                        Text("Go home")
-                            .font(ChicagoTypography.displaySM(relativeTo: .callout))
-                            .tracking(0.5)
-                            .foregroundStyle(ChicagoPalette.Gray.darkest)
+        ChicagoCard(title: "Destination",
+                    eyebrow: "Trip pin",
+                    ornament: .icon(systemName: "location.fill")) {
+            VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                HStack(spacing: ChicagoSpacing.sm) {
+                    destinationAnchorButton(.home)
+                    destinationAnchorButton(.work)
+
+                    Spacer(minLength: ChicagoSpacing.xs)
+
+                    Toggle("Multimodal", isOn: $allowMultimodalHomePin)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                        .tint(ChicagoPalette.flagBlue)
+                        .fixedSize()
+                }
+
+                HStack(spacing: ChicagoSpacing.sm) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                    TextField("Type a destination", text: $destinationQuery)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.go)
+                        .onSubmit { planTypedDestination() }
+                        .onChange(of: destinationQuery) { _, newValue in
+                            scheduleDestinationSearch(newValue)
+                        }
+                    if !destinationQuery.isEmpty {
+                        Button {
+                            destinationQuery = ""
+                            destinationSuggestions = []
+                            destinationSearch.setQuery("")
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(ChicagoPalette.Gray.medium)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear destination")
                     }
                 }
-                .tint(ChicagoPalette.flagBlue)
-                .disabled(isPinningHome)
+                .padding(.horizontal, ChicagoSpacing.sm)
+                .padding(.vertical, ChicagoSpacing.xs)
+                .background(ChicagoPalette.Surface.elevated,
+                            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm))
 
-                Toggle("Multimodal", isOn: $allowMultimodalHomePin)
-                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
-                    .tint(ChicagoPalette.flagBlue)
-                    .fixedSize()
-            }
+                if !destinationSuggestions.isEmpty {
+                    VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                        ForEach(destinationSuggestions.prefix(5)) { suggestion in
+                            Button {
+                                pickDestinationSuggestion(suggestion)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.title)
+                                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                                        .lineLimit(1)
+                                    if !suggestion.subtitle.isEmpty {
+                                        Text(suggestion.subtitle)
+                                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
 
-            if isPinningHome {
-                Label("Planning route options…", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
-            }
-            if let text = homePinStatusText {
-                Label(text, systemImage: homePinStatusIsError ? "exclamationmark.triangle.fill" : "pin.fill")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                    .foregroundStyle(homePinStatusIsError ? ChicagoPalette.starRed : ChicagoPalette.Gray.medium)
-            } else if commuteAnchors.home == nil {
-                homeEntryPrompt("Enter home so Go home and autopin can route there.")
-            } else if model.location.lastKnown == nil {
-                homeEntryPrompt("Waiting for your current location. You can still edit home.")
+                if isPinningHome {
+                    Label("Planning route options…", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                }
+                if let text = homePinStatusText {
+                    Label(text, systemImage: homePinStatusIsError ? "exclamationmark.triangle.fill" : "pin.fill")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(homePinStatusIsError ? ChicagoPalette.starRed : ChicagoPalette.Gray.medium)
+                } else if model.location.lastKnown == nil {
+                    destinationInlinePrompt("Waiting for your current location.")
+                } else if commuteAnchors.home == nil {
+                    destinationAnchorPrompt(.home)
+                } else if commuteAnchors.work == nil {
+                    destinationAnchorPrompt(.work)
+                }
             }
         }
-        .padding(ChicagoSpacing.md)
-        .background(ChicagoPalette.Surface.elevated,
-                    in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
     }
 
-    private func homeEntryPrompt(_ text: String) -> some View {
+    private func destinationAnchorButton(_ kind: DestinationAnchorKind) -> some View {
+        let hasAnchor = kind.anchor(in: commuteAnchors) != nil
+        return Button {
+            planAnchoredTrip(kind)
+        } label: {
+            Label(hasAnchor ? kind.title : "Set \(kind.title.lowercased())", systemImage: kind.systemImage)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+        .tint(kind.tint)
+        .disabled(isPinningHome)
+    }
+
+    private func destinationAnchorPrompt(_ kind: DestinationAnchorKind) -> some View {
         HStack(spacing: ChicagoSpacing.sm) {
-            Text(text)
-                .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                .foregroundStyle(ChicagoPalette.Gray.medium)
+            destinationInlinePrompt("\(kind.title) is not set.")
             Spacer(minLength: ChicagoSpacing.sm)
             Button {
-                isHomeEntryPresented = true
+                anchorEntryKind = kind
             } label: {
-                Label("Enter home", systemImage: "mappin.and.ellipse")
+                Label("Set \(kind.title.lowercased())", systemImage: "mappin.and.ellipse")
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption))
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .tint(ChicagoPalette.flagBlue)
+            .tint(kind.tint)
         }
     }
 
-    private func setGoHomeSelected(_ enabled: Bool) {
-        goHomeSelected = enabled
-        homePinStatusText = nil
-        homePinStatusIsError = false
-        if enabled {
-            goHomeTapped()
-        } else {
-            homeTripOptions = []
-            plannedTripPin = nil
-            model.clearPlannedTripPin()
-        }
+    private func destinationInlinePrompt(_ text: String) -> some View {
+        Text(text)
+            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+            .foregroundStyle(ChicagoPalette.Gray.medium)
     }
 
-    private func goHomeTapped() {
+    private func planAnchoredTrip(_ kind: DestinationAnchorKind) {
         homePinStatusText = nil
         homePinStatusIsError = false
-        guard commuteAnchors.home != nil else {
-            isHomeEntryPresented = true
+        guard let anchor = kind.anchor(in: commuteAnchors) else {
+            anchorEntryKind = kind
             return
         }
-        planHomeRouteOptions()
+
+        destinationQuery = kind.title
+        destinationSuggestions = []
+        planTrip(to: PlannedTripPin.Destination(
+            kind: kind.destinationKind,
+            title: kind.title,
+            subtitle: anchor.label,
+            latitude: anchor.latitude,
+            longitude: anchor.longitude
+        ))
     }
 
-    private func planHomeRouteOptions() {
+    @MainActor
+    private func observeDestinationSuggestions() async {
+        for await suggestions in destinationSearch.updates {
+            destinationSuggestions = Array(suggestions.prefix(6))
+        }
+    }
+
+    private func scheduleDestinationSearch(_ query: String) {
+        destinationDebounceTask?.cancel()
+        destinationDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled else { return }
+            destinationSearch.setQuery(query)
+        }
+    }
+
+    private func pickDestinationSuggestion(_ suggestion: DestinationSuggestion) {
+        destinationResolveTask?.cancel()
+        isPinningHome = true
+        homePinStatusText = nil
+        homePinStatusIsError = false
+        destinationResolveTask = Task { @MainActor in
+            do {
+                let resolved = try await destinationSearch.resolve(suggestion)
+                guard !Task.isCancelled else { return }
+                planResolvedDestination(resolved)
+            } catch {
+                homePinStatusText = error.localizedDescription
+                homePinStatusIsError = true
+                isPinningHome = false
+            }
+        }
+    }
+
+    private func planTypedDestination() {
+        let query = destinationQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        destinationResolveTask?.cancel()
+        isPinningHome = true
+        homePinStatusText = nil
+        homePinStatusIsError = false
+        destinationResolveTask = Task { @MainActor in
+            do {
+                let resolved = try await destinationSearch.resolve(query: query)
+                guard !Task.isCancelled else { return }
+                planResolvedDestination(resolved)
+            } catch {
+                homePinStatusText = error.localizedDescription
+                homePinStatusIsError = true
+                isPinningHome = false
+            }
+        }
+    }
+
+    private func planResolvedDestination(_ resolved: ResolvedDestination) {
+        destinationQuery = resolved.title
+        destinationSuggestions = []
+        planTrip(to: PlannedTripPin.Destination(
+            kind: .custom,
+            title: resolved.title,
+            subtitle: resolved.subtitle.isEmpty ? nil : resolved.subtitle,
+            latitude: resolved.coordinate.latitude,
+            longitude: resolved.coordinate.longitude
+        ))
+    }
+
+    private func planTrip(to destinationInfo: PlannedTripPin.Destination) {
         guard let current = model.location.lastKnown else {
             homePinStatusText = "Waiting for your current location."
             homePinStatusIsError = true
-            goHomeSelected = false
             return
         }
-        guard let home = commuteAnchors.home else {
-            isHomeEntryPresented = true
+        guard let latitude = destinationInfo.latitude, let longitude = destinationInfo.longitude else {
+            homePinStatusText = "Pick a destination from search."
+            homePinStatusIsError = true
             return
         }
 
+        selectedTripDestination = destinationInfo
+        if plannedTripPin != nil {
+            plannedTripPin = nil
+            model.clearPlannedTripPin()
+        }
         isPinningHome = true
         homeTripOptions = []
         selectedHomeTripOptionId = nil
@@ -273,7 +408,7 @@ struct DashboardScreen: View {
         selectedMetraChoiceId = nil
 
         let origin = PlannerCoordinate(latitude: current.latitude, longitude: current.longitude)
-        let destination = PlannerCoordinate(latitude: home.latitude, longitude: home.longitude)
+        let destination = PlannerCoordinate(latitude: latitude, longitude: longitude)
 
         Task { @MainActor in
             do {
@@ -290,22 +425,20 @@ struct DashboardScreen: View {
                 selectedBusChoiceId = options.first?.busChoices.first?.id
                 selectedMetraChoiceId = options.first?.metraChoices.first?.id
                 homePinStatusText = options.isEmpty
-                    ? "No pin-ready transit legs found for home."
+                    ? "No pin-ready transit legs found for \(destinationInfo.title)."
                     : "Choose the route pieces to pin."
                 homePinStatusIsError = options.isEmpty
-                goHomeSelected = !options.isEmpty
                 isPinningHome = false
             } catch {
                 homePinStatusText = error.localizedDescription
                 homePinStatusIsError = true
-                goHomeSelected = false
                 isPinningHome = false
             }
         }
     }
 
     private var homeTripOptionsCard: some View {
-        ChicagoCard(title: "Trip home",
+        ChicagoCard(title: "Trip to \(selectedTripDestination?.title ?? "destination")",
                     eyebrow: "Choose pin",
                     ornament: .icon(systemName: "point.topleft.down.curvedto.point.bottomright.up")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
@@ -423,8 +556,8 @@ struct DashboardScreen: View {
                     }
                     Spacer()
                     Button(role: .destructive) {
-                        goHomeSelected = false
                         plannedTripPin = nil
+                        selectedTripDestination = nil
                         model.clearPlannedTripPin()
                     } label: {
                         Label("Unpin", systemImage: "pin.slash")
@@ -596,6 +729,11 @@ struct DashboardScreen: View {
 
     private func pinSelectedHomeTrip() {
         guard let option = selectedHomeTripOption else { return }
+        guard let destinationInfo = selectedTripDestination else {
+            homePinStatusText = "Pick a destination first."
+            homePinStatusIsError = true
+            return
+        }
         let train = selectedTrainChoice(in: option).map {
             PlannedTripPin.TrainLeg(
                 line: $0.line,
@@ -626,8 +764,8 @@ struct DashboardScreen: View {
             return
         }
         let pin = PlannedTripPin(
-            destination: .home,
-            title: "Trip home",
+            destination: destinationInfo,
+            title: "Trip to \(destinationInfo.title)",
             summary: option.transitSummary,
             expectedArrivalAt: Date().addingTimeInterval(option.expectedTravelTime),
             expectedTravelTime: option.expectedTravelTime,
@@ -640,7 +778,6 @@ struct DashboardScreen: View {
         homeTripOptions = []
         homePinStatusText = nil
         homePinStatusIsError = false
-        goHomeSelected = true
         model.savePlannedTripPin(pin)
     }
 
@@ -876,47 +1013,6 @@ struct DashboardScreen: View {
         formatter.dateStyle = .none
         formatter.timeStyle = .short
         return "\(durationText(pin.expectedTravelTime)) · arrives \(formatter.string(from: arrival))"
-    }
-
-    // MARK: - Trip planner
-
-    private var tripPlannerCard: some View {
-        Button {
-            isTripPlannerPresented = true
-        } label: {
-            HStack(spacing: ChicagoSpacing.md) {
-                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(ChicagoPalette.flagBlue,
-                                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Plan a trip")
-                        .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                        .tracking(0.5)
-                        .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    Text("Search a destination and let Apple Maps pick the legs.")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: ChicagoSpacing.sm)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ChicagoPalette.Gray.light)
-            }
-            .padding(ChicagoSpacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ChicagoPalette.Surface.card,
-                        in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg))
-            .overlay(
-                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.lg)
-                    .strokeBorder(ChicagoPalette.cornflower.opacity(0.35),
-                                  lineWidth: ChicagoSpacing.Stroke.hairline)
-            )
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Live updates toggle
@@ -2401,11 +2497,55 @@ struct DashboardScreen: View {
     }
 }
 
-// MARK: - Manual home-address entry
+// MARK: - Manual destination anchor entry
 
-private struct HomeAddressEntry: View {
+private enum DestinationAnchorKind: String, Identifiable {
+    case home
+    case work
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .home: "Home"
+        case .work: "Work"
+        }
+    }
+
+    var destinationKind: PlannedTripPin.DestinationKind {
+        switch self {
+        case .home: .home
+        case .work: .work
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .home: "house.fill"
+        case .work: "briefcase.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .home: ChicagoPalette.flagBlue
+        case .work: ChicagoPalette.starRed
+        }
+    }
+
+    func anchor(in anchors: CommuteAnchors) -> CommuteAnchors.Anchor? {
+        switch self {
+        case .home: anchors.home
+        case .work: anchors.work
+        }
+    }
+}
+
+private struct AnchorAddressEntry: View {
     @Environment(AppViewModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+
+    let kind: DestinationAnchorKind
 
     @State private var address: String = ""
     @State private var coordinate: CLLocationCoordinate2D?
@@ -2435,7 +2575,7 @@ private struct HomeAddressEntry: View {
                         Label("Use current location", systemImage: "location.fill")
                     }
                 } header: {
-                    Text("Home")
+                    Text(kind.title)
                 }
 
                 statusSection
@@ -2443,13 +2583,13 @@ private struct HomeAddressEntry: View {
                 if let coordinate {
                     Section("Preview") {
                         Map(position: $camera, interactionModes: [.pan, .zoom]) {
-                            Marker("Home", coordinate: coordinate).tint(ChicagoPalette.starRed)
+                            Marker(kind.title, coordinate: coordinate).tint(kind.tint)
                         }
                         .frame(height: 220)
                     }
                 }
             }
-            .navigationTitle("Home address")
+            .navigationTitle("\(kind.title) address")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2460,7 +2600,7 @@ private struct HomeAddressEntry: View {
                 }
             }
             .onAppear {
-                if let existing = model.preferences.loadCommuteAnchors().home {
+                if let existing = kind.anchor(in: model.preferences.loadCommuteAnchors()) {
                     let coord = CLLocationCoordinate2D(latitude: existing.latitude, longitude: existing.longitude)
                     coordinate = coord
                     camera = .camera(MapCamera(centerCoordinate: coord, distance: 1_500))
@@ -2531,7 +2671,12 @@ private struct HomeAddressEntry: View {
 
     private func save() {
         guard let coordinate else { return }
-        model.setHomeAnchor(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        switch kind {
+        case .home:
+            model.setHomeAnchor(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        case .work:
+            model.setWorkAnchor(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        }
         dismiss()
     }
 }

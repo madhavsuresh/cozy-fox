@@ -102,6 +102,35 @@ public final class TripDestinationSearch {
             coordinate: PlannerCoordinate(latitude: coord.latitude, longitude: coord.longitude)
         )
     }
+
+    /// Resolve a free-form typed destination without requiring the user to
+    /// choose one of the completer suggestions first.
+    public func resolve(query text: String) async throws -> ResolvedDestination {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DestinationSearchError.noMatch
+        }
+
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = trimmed
+        request.region = completer.region
+        let search = MKLocalSearch(request: request)
+        let response: MKLocalSearch.Response
+        do {
+            response = try await search.start()
+        } catch {
+            throw DestinationSearchError.resolutionFailed(error.localizedDescription)
+        }
+        guard let item = response.mapItems.first else {
+            throw DestinationSearchError.noMatch
+        }
+        let coord = item.placemark.coordinate
+        return ResolvedDestination(
+            title: item.name ?? trimmed,
+            subtitle: item.placemark.title ?? "",
+            coordinate: PlannerCoordinate(latitude: coord.latitude, longitude: coord.longitude)
+        )
+    }
 }
 
 @MainActor
