@@ -14,6 +14,8 @@ final class AppViewModel {
     let preferences: PreferencesStore
     let location: LocationCoordinator
     let refreshCoordinator: RefreshCoordinator
+    let walkingStore: WalkingDistanceStore
+    let walkingResolver: WalkingDistanceResolver
 
     var snapshot: TransitSnapshot = .empty
     /// Latest live vehicle positions for whatever the user has pinned — used
@@ -50,12 +52,15 @@ final class AppViewModel {
         store: TransitStore,
         preferences: PreferencesStore,
         location: LocationCoordinator,
-        refreshCoordinator: RefreshCoordinator
+        refreshCoordinator: RefreshCoordinator,
+        walkingStore: WalkingDistanceStore
     ) {
         self.store = store
         self.preferences = preferences
         self.location = location
         self.refreshCoordinator = refreshCoordinator
+        self.walkingStore = walkingStore
+        self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
         self.isOnboardingComplete = preferences.isOnboardingComplete
 
         location.onContextChanged = { [weak self] context in

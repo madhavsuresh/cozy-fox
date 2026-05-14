@@ -2,9 +2,9 @@ import Foundation
 import TransitModels
 
 /// Picks the nearest CTA "L" stations to a given coordinate from the
-/// `LStationCatalog`. Used by the refresh coordinator as a fallback when
-/// the user has no tracked train preferences yet, so the dashboard surfaces
-/// "what's coming up at the closest station" out of the box.
+/// `LStationCatalog`. Ranks by Haversine distance — the dashboard layers a
+/// MapKit walking-distance refinement on top of this, so we don't bother
+/// modeling pedestrian barriers here.
 public struct NearestStationResolver: Sendable {
     public let maxDistanceMeters: Double
 
@@ -18,10 +18,14 @@ public struct NearestStationResolver: Sendable {
         catalog: [LStation] = LStationCatalog.all,
         excludingStationIds: Set<Int> = []
     ) -> [LStation] {
-        all(within: maxDistanceMeters, of: origin, catalog: catalog)
-            .filter { !excludingStationIds.contains($0.station.id) }
-            .prefix(limit)
-            .map(\.station)
+        all(
+            within: maxDistanceMeters,
+            of: origin,
+            catalog: catalog,
+            excludingStationIds: excludingStationIds
+        )
+        .prefix(limit)
+        .map(\.station)
     }
 
     /// The single closest station that serves a specific line — used when the
@@ -35,8 +39,8 @@ public struct NearestStationResolver: Sendable {
         closestStations(onLine: line, to: origin, limit: 1, catalog: catalog).first?.station
     }
 
-    /// Top N closest stations serving a specific line, sorted by distance.
-    /// Used so the user can pick a specific stop after pinning a line.
+    /// Top N closest stations serving a specific line, sorted by Haversine
+    /// distance.
     public func closestStations(
         onLine line: LineColor,
         to origin: (lat: Double, lon: Double),
@@ -62,8 +66,8 @@ public struct NearestStationResolver: Sendable {
             .map { (station: $0.station, distance: $0.distance) }
     }
 
-    /// Returns every station within `radiusMeters`, sorted by distance.
-    /// Used for the dashboard "Near you" cluster view.
+    /// Returns every station within `radiusMeters`, sorted by Haversine
+    /// distance ascending. Used for the dashboard "Near you" cluster view.
     public func all(
         within radiusMeters: Double,
         of origin: (lat: Double, lon: Double),
