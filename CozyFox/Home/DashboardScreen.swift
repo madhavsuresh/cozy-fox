@@ -5,6 +5,7 @@ import SwiftUI
 import TransitDomain
 import TransitModels
 import TransitUI
+import UIKit
 
 struct DashboardScreen: View {
     @Environment(AppViewModel.self) private var model
@@ -40,6 +41,7 @@ struct DashboardScreen: View {
     @State private var selectedTrainChoiceIds: Set<String> = []
     @State private var selectedBusChoiceIds: Set<String> = []
     @State private var selectedMetraChoiceIds: Set<String> = []
+    @FocusState private var isDestinationSearchFocused: Bool
     /// Flipped to `true` 300ms after the pinned-line card mounts (or
     /// re-mounts at a new origin/line) if MapKit hasn't produced any
     /// walking data yet. While false, the chip strip shows shimmer
@@ -88,6 +90,7 @@ struct DashboardScreen: View {
                 .padding(ChicagoSpacing.md)
             }
             .background(ChicagoPalette.Surface.background)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -129,6 +132,7 @@ struct DashboardScreen: View {
                     .environment(model)
             }
         }
+        .dismissKeyboardOnTapAway()
     }
 
     private func reloadPinnedFromPreferences() {
@@ -204,6 +208,7 @@ struct DashboardScreen: View {
                     TextField("Type a destination", text: $destinationQuery)
                         .textInputAutocapitalization(.words)
                         .submitLabel(.go)
+                        .focused($isDestinationSearchFocused)
                         .onSubmit { planTypedDestination() }
                         .onChange(of: destinationQuery) { _, newValue in
                             scheduleDestinationSearch(newValue)
@@ -309,6 +314,7 @@ struct DashboardScreen: View {
     }
 
     private func planAnchoredTrip(_ kind: DestinationAnchorKind) {
+        isDestinationSearchFocused = false
         homePinStatusText = nil
         homePinStatusIsError = false
         guard let anchor = kind.anchor(in: commuteAnchors) else {
@@ -344,6 +350,7 @@ struct DashboardScreen: View {
     }
 
     private func pickDestinationSuggestion(_ suggestion: DestinationSuggestion) {
+        isDestinationSearchFocused = false
         destinationResolveTask?.cancel()
         isPinningHome = true
         homePinStatusText = nil
@@ -364,6 +371,7 @@ struct DashboardScreen: View {
     private func planTypedDestination() {
         let query = destinationQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
+        isDestinationSearchFocused = false
         destinationResolveTask?.cancel()
         isPinningHome = true
         homePinStatusText = nil
@@ -382,6 +390,7 @@ struct DashboardScreen: View {
     }
 
     private func planResolvedDestination(_ resolved: ResolvedDestination) {
+        isDestinationSearchFocused = false
         destinationQuery = resolved.title
         destinationSuggestions = []
         planTrip(to: PlannedTripPin.Destination(
@@ -3346,6 +3355,99 @@ struct DashboardScreen: View {
             .font(ChicagoTypography.displaySM(relativeTo: .caption))
             .tracking(0.5)
             .foregroundStyle(ChicagoPalette.bahama)
+    }
+}
+
+private extension View {
+    func dismissKeyboardOnTapAway() -> some View {
+        background(KeyboardDismissTapBridge())
+    }
+}
+
+private struct KeyboardDismissTapBridge: UIViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> KeyboardDismissTapView {
+        let view = KeyboardDismissTapView()
+        let coordinator = context.coordinator
+        view.onWindowChange = { [weak coordinator] window in
+            coordinator?.attach(to: window)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: KeyboardDismissTapView, context: Context) {
+        let coordinator = context.coordinator
+        uiView.onWindowChange = { [weak coordinator] window in
+            coordinator?.attach(to: window)
+        }
+        coordinator.attach(to: uiView.window)
+    }
+
+    static func dismantleUIView(_ uiView: KeyboardDismissTapView, coordinator: Coordinator) {
+        uiView.onWindowChange = nil
+        coordinator.detach()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        private weak var window: UIWindow?
+        private weak var recognizer: UITapGestureRecognizer?
+
+        func attach(to newWindow: UIWindow?) {
+            if let window, let newWindow, window === newWindow { return }
+            if window == nil, newWindow == nil { return }
+
+            detach()
+
+            guard let newWindow else { return }
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            newWindow.addGestureRecognizer(recognizer)
+            window = newWindow
+            self.recognizer = recognizer
+        }
+
+        func detach() {
+            if let recognizer, let view = recognizer.view {
+                view.removeGestureRecognizer(recognizer)
+            }
+            recognizer = nil
+            window = nil
+        }
+
+        @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+            recognizer.view?.endEditing(true)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let view = touch.view else { return true }
+            return !view.isInsideEditableTextInput
+        }
+    }
+}
+
+private final class KeyboardDismissTapView: UIView {
+    var onWindowChange: ((UIWindow?) -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onWindowChange?(window)
+    }
+}
+
+private extension UIView {
+    var isInsideEditableTextInput: Bool {
+        var view: UIView? = self
+        while let currentView = view {
+            if currentView is UITextField || currentView is UITextView || currentView is UISearchTextField {
+                return true
+            }
+            view = currentView.superview
+        }
+        return false
     }
 }
 
