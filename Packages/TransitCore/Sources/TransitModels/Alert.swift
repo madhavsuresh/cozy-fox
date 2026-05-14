@@ -17,7 +17,13 @@ public struct ServiceAlert: Codable, Sendable, Hashable, Identifiable {
     public let beginsAt: Date
     public let endsAt: Date?
     public let isMajor: Bool
-    public let detailURL: URL?
+
+    /// Public CTA service-alerts page. The Customer Alerts API hands out a
+    /// per-alert `alert_detail.aspx` URL, but CTA stopped rendering that page
+    /// — every per-alert link resolves to a "not found" view. The alerts hub
+    /// is the page CTA actually maintains and surfaces from their site nav,
+    /// so every "Details" link in the app deep-links there instead.
+    public static let detailsURL = URL(string: "https://www.transitchicago.com/alerts/")!
 
     public init(
         id: String,
@@ -28,8 +34,7 @@ public struct ServiceAlert: Codable, Sendable, Hashable, Identifiable {
         impactedLineColors: [LineColor],
         beginsAt: Date,
         endsAt: Date?,
-        isMajor: Bool,
-        detailURL: URL? = nil
+        isMajor: Bool
     ) {
         self.id = id
         self.headline = headline
@@ -40,7 +45,6 @@ public struct ServiceAlert: Codable, Sendable, Hashable, Identifiable {
         self.beginsAt = beginsAt
         self.endsAt = endsAt
         self.isMajor = isMajor
-        self.detailURL = detailURL
     }
 
     public func isActive(at moment: Date = .now) -> Bool {

@@ -67,8 +67,7 @@ extension ServiceAlert {
             impactedLineColors: colors,
             beginsAt: begin,
             endsAt: end,
-            isMajor: (raw.MajorAlert ?? "0") == "1",
-            detailURL: raw.AlertURL?.url
+            isMajor: (raw.MajorAlert ?? "0") == "1"
         )
     }
 }
@@ -130,50 +129,6 @@ struct AlertsEnvelope: Decodable {
             let EventStart: String
             let EventEnd: String?
             let ImpactedService: Impacted?
-            let AlertURL: AlertURLValue?
-
-            /// CTA's `AlertURL` arrives in three shapes depending on the response:
-            ///   - A bare string: `"http://…"`
-            ///   - A CDATA wrapper from the XML→JSON shim: `{"#cdata-section": "http://…"}` (the common case)
-            ///   - A keyed wrapper: `{"URL": "http://…"}`
-            /// The previous decoder only accepted the first two-ish shapes and
-            /// silently dropped the CDATA case — which is what every real alert
-            /// returned, so every link fell through to a synthesized fallback URL.
-            /// The fallback URL pattern itself was also wrong (made-up path that
-            /// 404'd), so users saw a missing page either way. The fix is to
-            /// extract the URL from any of the three shapes and upgrade `http://`
-            /// to `https://` since CTA serves the same content on both schemes
-            /// and iOS Safari prefers the secure variant.
-            struct AlertURLValue: Decodable {
-                let url: URL?
-
-                init(from decoder: Decoder) throws {
-                    let single = try decoder.singleValueContainer()
-                    if let raw = try? single.decode(String.self) {
-                        self.url = AlertURLValue.parse(raw)
-                        return
-                    }
-                    let keyed = try decoder.container(keyedBy: CodingKeys.self)
-                    let raw =
-                        (try? keyed.decode(String.self, forKey: .cdataSection))
-                        ?? (try? keyed.decode(String.self, forKey: .URL))
-                    self.url = raw.flatMap(AlertURLValue.parse)
-                }
-
-                private static func parse(_ raw: String) -> URL? {
-                    var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return nil }
-                    if trimmed.hasPrefix("http://") {
-                        trimmed = "https://" + trimmed.dropFirst("http://".count)
-                    }
-                    return URL(string: trimmed)
-                }
-
-                private enum CodingKeys: String, CodingKey {
-                    case URL
-                    case cdataSection = "#cdata-section"
-                }
-            }
 
             struct Impacted: Decodable {
                 // Property is `services` (lowercased + plural) so it doesn't

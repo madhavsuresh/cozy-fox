@@ -1020,19 +1020,17 @@ private struct AlertRow: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Text(accessibilitySummary))
 
-            if let url = alert.detailURL {
-                Link(destination: url) {
-                    HStack(spacing: 2) {
-                        Text("Details on transitchicago.com")
-                        Image(systemName: "arrow.up.right")
-                            .font(.caption2)
-                    }
-                    .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
-                    .foregroundStyle(ChicagoPalette.bahama)
+            Link(destination: ServiceAlert.detailsURL) {
+                HStack(spacing: 2) {
+                    Text("Details on transitchicago.com")
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption2)
                 }
-                .padding(.leading, badgeLeadingInset)
-                .accessibilityLabel("Open this alert on transitchicago.com")
+                .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.bahama)
             }
+            .padding(.leading, badgeLeadingInset)
+            .accessibilityLabel("Open service alerts on transitchicago.com")
         }
     }
 

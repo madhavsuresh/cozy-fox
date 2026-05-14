@@ -20,110 +20,11 @@ struct CTAAlertsClientTests {
         #expect(alert.severity == .medium, "severity 30 should map to medium")
         #expect(alert.impactedRoutes == ["Red"])
         #expect(alert.impactedLineColors == [.red])
-        // The fixture wraps AlertURL in `#cdata-section` (the real wire shape) and
-        // uses `http://` — the decoder must unwrap and upgrade to `https://`.
-        #expect(
-            alert.detailURL?.absoluteString
-                == "https://www.transitchicago.com/travel_information/alert_detail.aspx?AlertId=12345"
-        )
     }
 
-    @Test func detailURLIsNilWhenAlertURLAbsent() async throws {
-        let json = """
-        {
-          "CTAAlerts": {
-            "TimeStamp": "20260513 08:00:00",
-            "ErrorCode": "0",
-            "Alert": [
-              {
-                "AlertId": "99999",
-                "Headline": "Blue Line: Reduced service",
-                "SeverityScore": "20",
-                "EventStart": "20260512 06:00:00",
-                "ImpactedService": {
-                  "Service": {
-                    "ServiceType": "R",
-                    "ServiceId": "Blue",
-                    "ServiceName": "Blue Line"
-                  }
-                }
-              }
-            ]
-          }
-        }
-        """
-        let stub = StubHTTPClient()
-        await stub.register(path: "/api/1.0/alerts.aspx", data: Data(json.utf8))
-        let client = CTAAlertsClient(http: stub)
-        let alerts = try await client.fetchActiveAlerts(forRoutes: [])
-        let alert = try #require(alerts.first)
-        // No fabricated fallback — a broken link is worse than no link.
-        #expect(alert.detailURL == nil)
-    }
-
-    @Test func decodesAlertURLAsBareString() async throws {
-        let json = """
-        {
-          "CTAAlerts": {
-            "TimeStamp": "20260513 08:00:00",
-            "ErrorCode": "0",
-            "Alert": [
-              {
-                "AlertId": "55555",
-                "Headline": "Orange Line: Single-tracking",
-                "SeverityScore": "40",
-                "EventStart": "20260512 06:00:00",
-                "AlertURL": "https://www.transitchicago.com/alert/55555",
-                "ImpactedService": {
-                  "Service": {
-                    "ServiceType": "R",
-                    "ServiceId": "Org",
-                    "ServiceName": "Orange Line"
-                  }
-                }
-              }
-            ]
-          }
-        }
-        """
-        let stub = StubHTTPClient()
-        await stub.register(path: "/api/1.0/alerts.aspx", data: Data(json.utf8))
-        let client = CTAAlertsClient(http: stub)
-        let alerts = try await client.fetchActiveAlerts(forRoutes: [])
-        let alert = try #require(alerts.first)
-        #expect(alert.detailURL?.absoluteString == "https://www.transitchicago.com/alert/55555")
-    }
-
-    @Test func decodesAlertURLWrappedInObject() async throws {
-        let json = """
-        {
-          "CTAAlerts": {
-            "TimeStamp": "20260513 08:00:00",
-            "ErrorCode": "0",
-            "Alert": [
-              {
-                "AlertId": "77777",
-                "Headline": "Brown Line: Track work",
-                "SeverityScore": "60",
-                "EventStart": "20260512 06:00:00",
-                "AlertURL": { "URL": "https://www.transitchicago.com/alert/77777" },
-                "ImpactedService": {
-                  "Service": {
-                    "ServiceType": "R",
-                    "ServiceId": "Brn",
-                    "ServiceName": "Brown Line"
-                  }
-                }
-              }
-            ]
-          }
-        }
-        """
-        let stub = StubHTTPClient()
-        await stub.register(path: "/api/1.0/alerts.aspx", data: Data(json.utf8))
-        let client = CTAAlertsClient(http: stub)
-        let alerts = try await client.fetchActiveAlerts(forRoutes: [])
-        let alert = try #require(alerts.first)
-        #expect(alert.detailURL?.absoluteString == "https://www.transitchicago.com/alert/77777")
+    @Test func detailsURLPointsAtAlertsHub() {
+        // Every "Details" link in the app goes to the same CTA service-alerts
+        // hub, since per-alert detail pages from the API are no longer rendered.
+        #expect(ServiceAlert.detailsURL.absoluteString == "https://www.transitchicago.com/alerts/")
     }
 }
