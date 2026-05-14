@@ -203,6 +203,13 @@ final class AppViewModel {
         Task { await refreshIfNeeded(force: true) }
     }
 
+    func saveIntercampusPreferences(_ update: (inout UserRoutePreferences) -> Void) {
+        var prefs = preferences.loadRoutePreferences()
+        update(&prefs)
+        preferences.saveRoutePreferences(prefs)
+        pinRevision += 1
+    }
+
     func setHomeAnchor(latitude: Double, longitude: Double) {
         var anchors = preferences.loadCommuteAnchors()
         anchors.home = .init(latitude: latitude, longitude: longitude, label: "Home")

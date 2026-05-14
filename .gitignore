@@ -5,6 +5,7 @@
 xcuserdata/
 *.xcuserstate
 DerivedData/
+.deriveddata/
 build/
 *.xcworkspace/xcuserdata
 *.xcodeproj/xcuserdata
@@ -12,6 +13,8 @@ build/
 
 ## SwiftPM
 .swiftpm/
+.sourcepackages/
+.xcodehome/
 .build/
 Package.resolved
 

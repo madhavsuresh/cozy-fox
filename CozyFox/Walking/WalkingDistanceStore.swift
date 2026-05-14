@@ -131,6 +131,10 @@ final class WalkingDistanceStore {
         "metra-\(stationId)"
     }
 
+    static func intercampusStopDestinationKey(stopId: String) -> String {
+        "intercampus-\(stopId)"
+    }
+
     static func bucketKey(origin: (lat: Double, lon: Double), stationId: Int) -> String {
         bucketKey(origin: origin, destinationKey: stationDestinationKey(stationId: stationId))
     }

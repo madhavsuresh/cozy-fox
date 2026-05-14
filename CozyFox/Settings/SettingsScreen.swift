@@ -117,6 +117,10 @@ struct SettingsScreen: View {
                     get: { prefs.includeFreeFloatingBikes },
                     set: { prefs.includeFreeFloatingBikes = $0; save() }
                 ))
+                Toggle("Include Northwestern Intercampus", isOn: Binding(
+                    get: { prefs.includeIntercampus },
+                    set: { setIntercampusEnabled($0) }
+                ))
                 Toggle("Auto-pin commute routes",
                        isOn: Binding(
                         get: { prefs.autopinEnabled },
@@ -136,7 +140,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Behavior")
             } footer: {
-                Text("Auto-pin predicts a commute direction locally from home/work context and coarse time patterns. Manual pins override it for 30 minutes. With \"Always show\" on, the Live Activity stays in the Dynamic Island / Lock Screen and refreshes whenever the app updates.")
+                Text("Intercampus adds nearby Northwestern shuttle arrivals to the dashboard only. Auto-pin predicts a commute direction locally from home/work context and coarse time patterns. Manual pins override it for 30 minutes. With \"Always show\" on, the Live Activity stays in the Dynamic Island / Lock Screen and refreshes whenever the app updates.")
                     .font(.footnote)
             }
 
@@ -270,6 +274,17 @@ struct SettingsScreen: View {
 
     private func save() {
         model.preferences.saveRoutePreferences(prefs)
+    }
+
+    private func setIntercampusEnabled(_ enabled: Bool) {
+        prefs.includeIntercampus = enabled
+        if !enabled {
+            prefs.pinnedIntercampusDirection = nil
+            prefs.pinnedIntercampusStopId = nil
+        }
+        save()
+        model.pinRevision += 1
+        Task { await model.refreshIfNeeded(force: true) }
     }
 
     private func setAutopinEnabled(_ enabled: Bool) {

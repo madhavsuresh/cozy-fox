@@ -1,0 +1,25 @@
+import Testing
+import TransitModels
+
+@Suite("IntercampusCatalog")
+struct IntercampusCatalogTests {
+    @Test func loadsRoutesAndStopsByDirection() {
+        let northbound = IntercampusCatalog.route(for: .northbound)
+        let southbound = IntercampusCatalog.route(for: .southbound)
+
+        #expect(northbound?.id == "23174203-507c-48fe-811a-5d13fcf7be65")
+        #expect(southbound?.id == "ebee9228-c993-4279-b7ce-8fca0a46ca65")
+        #expect(IntercampusCatalog.stops(for: .northbound).contains { $0.name == "Ward" })
+        #expect(IntercampusCatalog.stops(for: .southbound).contains { $0.name == "Ryan Field" })
+    }
+
+    @Test func sharedStopsServeBothDirections() throws {
+        let ward = try #require(IntercampusCatalog.stop(id: "6983f6d3-fcd9-4932-b9fb-7120f8c2f999"))
+        let ryanField = try #require(IntercampusCatalog.stop(id: "60e7b447-b29d-4812-bf93-7a77a1d5ae5b"))
+
+        #expect(ward.servedDirections.contains(.northbound))
+        #expect(ward.servedDirections.contains(.southbound))
+        #expect(ryanField.servedDirections.contains(.northbound))
+        #expect(ryanField.servedDirections.contains(.southbound))
+    }
+}
