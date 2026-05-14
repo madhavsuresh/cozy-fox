@@ -60,13 +60,15 @@ actor LiveActivityCoordinator {
 
     private func makeIdentity(prefs: UserRoutePreferences) -> (train: String?, bus: String?, metra: String?) {
         var trainId: String?
-        if let tripTrain = prefs.plannedTripPin?.train {
-            trainId = [
-                prefs.plannedTripPin?.id.uuidString,
-                tripTrain.stationId.map(String.init),
-                tripTrain.destinationName,
-                tripTrain.line.rawValue
-            ].compactMap { $0 }.joined(separator: "-")
+        if let tripPin = prefs.plannedTripPin, !tripPin.trainLegs.isEmpty {
+            let pieces = tripPin.trainLegs.map { tripTrain in
+                [
+                    tripTrain.stationId.map(String.init),
+                    tripTrain.destinationName,
+                    tripTrain.line.rawValue
+                ].compactMap { $0 }.joined(separator: "-")
+            }
+            trainId = ([tripPin.id.uuidString] + pieces).joined(separator: "|")
         } else if prefs.pinnedLine != nil {
             // Use mapId + destination if we know them, else just "<line>"
             let parts: [String] = [
@@ -77,13 +79,15 @@ actor LiveActivityCoordinator {
             trainId = parts.joined(separator: "-")
         }
         var busId: String?
-        if let tripBus = prefs.plannedTripPin?.bus {
-            busId = [
-                prefs.plannedTripPin?.id.uuidString,
-                tripBus.route,
-                tripBus.directionLabel,
-                tripBus.stopId.map(String.init)
-            ].compactMap { $0 }.joined(separator: "-")
+        if let tripPin = prefs.plannedTripPin, !tripPin.busLegs.isEmpty {
+            let pieces = tripPin.busLegs.map { tripBus in
+                [
+                    tripBus.route,
+                    tripBus.directionLabel,
+                    tripBus.stopId.map(String.init)
+                ].compactMap { $0 }.joined(separator: "-")
+            }
+            busId = ([tripPin.id.uuidString] + pieces).joined(separator: "|")
         } else if let route = prefs.pinnedBusRoute {
             busId = [
                 route,
@@ -101,11 +105,14 @@ actor LiveActivityCoordinator {
     ) -> CommuteAttributes.TrainLeg? {
         // Prefer the pinned line if present; else first tracked; else nothing
         // (we don't auto-fill a "fallback" arrival when only bus is pinned).
+        if let tripPin = prefs.plannedTripPin, !tripPin.trainLegs.isEmpty {
+            return tripPin.trainLegs
+                .compactMap { makeTripTrainLeg($0, snapshot: snapshot) }
+                .min { $0.nextArrival < $1.nextArrival }
+        }
+
         let line: LineColor
-        let tripTrain = prefs.plannedTripPin?.train
-        if let tripTrain {
-            line = tripTrain.line
-        } else if let pinned = prefs.pinnedLine {
+        if let pinned = prefs.pinnedLine {
             line = pinned
         } else if let tracked = prefs.trains.first {
             line = tracked.line
@@ -120,10 +127,10 @@ actor LiveActivityCoordinator {
         }
 
         var arrivals = snapshot.trainArrivals.filter { $0.line == line }
-        if let stationId = tripTrain?.stationId ?? prefs.pinnedStationId {
+        if let stationId = prefs.pinnedStationId {
             arrivals = arrivals.filter { $0.stationId == stationId }
         }
-        if let destination = tripTrain?.destinationName ?? prefs.pinnedTrainDestination {
+        if let destination = prefs.pinnedTrainDestination {
             arrivals = arrivals.filter { $0.destinationName == destination }
         }
         // Drop already-departed predictions so the published `nextArrival`
@@ -138,7 +145,7 @@ actor LiveActivityCoordinator {
         return CommuteAttributes.TrainLeg(
             routeLabel: line.displayName,
             lineColorRaw: line.rawValue,
-            stopName: tripTrain?.stationName ?? first.stationName,
+            stopName: first.stationName,
             destination: first.destinationName,
             nextArrival: first.arrivalAt,
             followingArrival: following?.arrivalAt,
@@ -149,17 +156,52 @@ actor LiveActivityCoordinator {
         )
     }
 
+    private func makeTripTrainLeg(
+        _ tripTrain: PlannedTripPin.TrainLeg,
+        snapshot: TransitSnapshot
+    ) -> CommuteAttributes.TrainLeg? {
+        var arrivals = snapshot.trainArrivals.filter { $0.line == tripTrain.line }
+        if let stationId = tripTrain.stationId {
+            arrivals = arrivals.filter { $0.stationId == stationId }
+        }
+        if let destination = tripTrain.destinationName {
+            arrivals = arrivals.filter { $0.destinationName == destination }
+        }
+        let now = Date()
+        let sorted = arrivals
+            .filter { $0.arrivalAt > now }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+        guard let first = sorted.first else { return nil }
+        return CommuteAttributes.TrainLeg(
+            routeLabel: tripTrain.line.displayName,
+            lineColorRaw: tripTrain.line.rawValue,
+            stopName: tripTrain.stationName,
+            destination: first.destinationName,
+            nextArrival: first.arrivalAt,
+            followingArrival: sorted.dropFirst().first?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: tripTrain.line, busRoute: nil)
+                .first?.headline,
+            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+        )
+    }
+
     private func makeBusLeg(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot
     ) -> CommuteAttributes.BusLeg? {
-        let tripBus = prefs.plannedTripPin?.bus
-        guard let route = tripBus?.route ?? prefs.pinnedBusRoute else { return nil }
+        if let tripPin = prefs.plannedTripPin, !tripPin.busLegs.isEmpty {
+            return tripPin.busLegs
+                .compactMap { makeTripBusLeg($0, snapshot: snapshot) }
+                .min { $0.nextArrival < $1.nextArrival }
+        }
+
+        guard let route = prefs.pinnedBusRoute else { return nil }
         var predictions = snapshot.busPredictions.filter { $0.route == route }
-        if let direction = tripBus?.directionLabel ?? prefs.pinnedBusDirection {
+        if let direction = prefs.pinnedBusDirection {
             predictions = predictions.filter { $0.directionName == direction }
         }
-        if let stopId = tripBus?.stopId ?? prefs.pinnedBusStopId {
+        if let stopId = prefs.pinnedBusStopId {
             predictions = predictions.filter { $0.stopId == stopId }
         }
         let now = Date()
@@ -170,13 +212,43 @@ actor LiveActivityCoordinator {
         let following = sorted.dropFirst().first
         return CommuteAttributes.BusLeg(
             routeLabel: "Route \(route)",
-            stopName: tripBus?.stopName ?? first.stopName,
-            directionLabel: tripBus?.directionLabel ?? prefs.pinnedBusDirection ?? first.directionName,
+            stopName: first.stopName,
+            directionLabel: prefs.pinnedBusDirection ?? first.directionName,
             destination: first.destinationName,
             nextArrival: first.arrivalAt,
             followingArrival: following?.arrivalAt,
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: nil, busRoute: route)
+                .first?.headline,
+            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+        )
+    }
+
+    private func makeTripBusLeg(
+        _ tripBus: PlannedTripPin.BusLeg,
+        snapshot: TransitSnapshot
+    ) -> CommuteAttributes.BusLeg? {
+        var predictions = snapshot.busPredictions.filter { $0.route == tripBus.route }
+        if let direction = tripBus.directionLabel {
+            predictions = predictions.filter { $0.directionName == direction }
+        }
+        if let stopId = tripBus.stopId {
+            predictions = predictions.filter { $0.stopId == stopId }
+        }
+        let now = Date()
+        let sorted = predictions
+            .filter { $0.arrivalAt > now }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+        guard let first = sorted.first else { return nil }
+        return CommuteAttributes.BusLeg(
+            routeLabel: "Route \(tripBus.route)",
+            stopName: tripBus.stopName,
+            directionLabel: tripBus.directionLabel ?? first.directionName,
+            destination: first.destinationName,
+            nextArrival: first.arrivalAt,
+            followingArrival: sorted.dropFirst().first?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: nil, busRoute: tripBus.route)
                 .first?.headline,
             upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
         )

@@ -202,11 +202,11 @@ final class RefreshCoordinator {
             targets.append(contentsOf: nearest.map { ($0.id, nil) })
         }
 
-        if let tripTrain = prefs.plannedTripPin?.train,
-           let stationId = tripTrain.stationId,
-           !targets.contains(where: { $0.mapId == stationId })
-        {
-            targets.append((stationId, nil))
+        for tripTrain in prefs.plannedTripPin?.trainLegs ?? [] {
+            guard let stationId = tripTrain.stationId else { continue }
+            if !targets.contains(where: { $0.mapId == stationId }) {
+                targets.append((stationId, nil))
+            }
         }
 
         // Pinned line: include the user's chosen station (or the nearest
@@ -312,11 +312,11 @@ final class RefreshCoordinator {
             }
         }
 
-        if let tripBus = prefs.plannedTripPin?.bus,
-           let stopId = tripBus.stopId,
-           !targets.contains(where: { $0.route == tripBus.route && $0.stopId == stopId })
-        {
-            targets.append((tripBus.route, stopId))
+        for tripBus in prefs.plannedTripPin?.busLegs ?? [] {
+            guard let stopId = tripBus.stopId else { continue }
+            if !targets.contains(where: { $0.route == tripBus.route && $0.stopId == stopId }) {
+                targets.append((tripBus.route, stopId))
+            }
         }
 
         var collected: [BusPrediction] = []
@@ -355,11 +355,11 @@ final class RefreshCoordinator {
             targets.append(contentsOf: nearest.map { ($0.routeId, $0.station.id, nil) })
         }
 
-        if let tripMetra = prefs.plannedTripPin?.metra,
-           let stationId = tripMetra.stationId,
-           !targets.contains(where: { $0.routeId == tripMetra.routeId && $0.stationId == stationId })
-        {
-            targets.append((tripMetra.routeId, stationId, tripMetra.directionId))
+        for tripMetra in prefs.plannedTripPin?.metraLegs ?? [] {
+            guard let stationId = tripMetra.stationId else { continue }
+            if !targets.contains(where: { $0.routeId == tripMetra.routeId && $0.stationId == stationId }) {
+                targets.append((tripMetra.routeId, stationId, tripMetra.directionId))
+            }
         }
 
         if let pinnedRoute = prefs.pinnedMetraRoute, let lastLocation {
@@ -477,18 +477,24 @@ final class RefreshCoordinator {
     /// pin is active to avoid burning rate-limit budget on unused data.
     private func refreshPositions(prefs: UserRoutePreferences) async {
         var collected: [VehiclePosition] = []
-        if let line = prefs.plannedTripPin?.train?.line ?? prefs.pinnedLine {
-            if let trains = try? await trainClient.fetchPositions(lines: [line]) {
+        var trainLines = Set(prefs.plannedTripPin?.trainLegs.map(\.line) ?? [])
+        if let line = prefs.pinnedLine { trainLines.insert(line) }
+        if !trainLines.isEmpty {
+            if let trains = try? await trainClient.fetchPositions(lines: Array(trainLines)) {
                 collected.append(contentsOf: trains)
             }
         }
-        if let route = prefs.plannedTripPin?.bus?.route ?? prefs.pinnedBusRoute {
-            if let buses = try? await busClient.fetchVehicles(routes: [route]) {
+        var busRoutes = Set(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+        if let route = prefs.pinnedBusRoute { busRoutes.insert(route) }
+        if !busRoutes.isEmpty {
+            if let buses = try? await busClient.fetchVehicles(routes: Array(busRoutes)) {
                 collected.append(contentsOf: buses)
             }
         }
-        if let route = prefs.plannedTripPin?.metra?.routeId ?? prefs.pinnedMetraRoute {
-            if let trains = try? await metraClient.fetchPositions(routes: [route]) {
+        var metraRoutes = Set(prefs.plannedTripPin?.metraLegs.map(\.routeId) ?? [])
+        if let route = prefs.pinnedMetraRoute { metraRoutes.insert(route) }
+        if !metraRoutes.isEmpty {
+            if let trains = try? await metraClient.fetchPositions(routes: Array(metraRoutes)) {
                 collected.append(contentsOf: trains)
             }
         }
@@ -499,9 +505,9 @@ final class RefreshCoordinator {
         let routes = Set(
             prefs.trains.map { $0.line.rawValue.capitalized }
             + prefs.buses.map { $0.route }
-            + [prefs.plannedTripPin?.train?.line.rawValue.capitalized].compactMap { $0 }
-            + [prefs.plannedTripPin?.bus?.route].compactMap { $0 }
-            + [prefs.plannedTripPin?.metra?.routeId].compactMap { $0 }
+            + (prefs.plannedTripPin?.trainLegs.map { $0.line.rawValue.capitalized } ?? [])
+            + (prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+            + (prefs.plannedTripPin?.metraLegs.map(\.routeId) ?? [])
         )
         async let metraAlerts = (try? metraClient.fetchAlerts()) ?? []
         do {
