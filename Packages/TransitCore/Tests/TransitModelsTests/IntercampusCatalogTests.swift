@@ -49,5 +49,6 @@ struct IntercampusCatalogTests {
         #expect(arrivals.count >= 2)
         #expect(arrivals.first?.direction == .southbound)
         #expect(arrivals.first?.arrivalAt ?? now > now)
+        #expect(arrivals.first?.timeSource == .schedule)
     }
 }

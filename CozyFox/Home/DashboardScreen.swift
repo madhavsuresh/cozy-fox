@@ -1616,12 +1616,23 @@ struct DashboardScreen: View {
                         unit: "min",
                         size: .md,
                         tone: first.isDelayed ? .alert : .primary,
-                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle"
+                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle, \(first.timeSource.label.lowercased()) time"
                     )
-                    Text("→ \(first.destinationName)")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: ChicagoSpacing.xs) {
+                            Text("→ \(first.destinationName)")
+                                .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                                .foregroundStyle(ChicagoPalette.Gray.medium)
+                                .lineLimit(1)
+                            intercampusTimeSourceBadge(first.timeSource)
+                        }
+                        if let vehicleLabel = first.vehicleLabel, !vehicleLabel.isEmpty {
+                            Text("Bus \(vehicleLabel)")
+                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                .foregroundStyle(ChicagoPalette.Gray.light)
+                                .lineLimit(1)
+                        }
+                    }
                 }
                 HeadwayDotStrip(
                     arrivals: arrivals.prefix(8).map(\.arrivalAt),
@@ -1629,6 +1640,21 @@ struct DashboardScreen: View {
                 )
             }
         }
+    }
+
+    private func intercampusTimeSourceBadge(_ source: IntercampusArrivalTimeSource) -> some View {
+        let isLive = source == .liveMap
+        return Text(source.label)
+            .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+            .foregroundStyle(isLive ? intercampusAccent : ChicagoPalette.Gray.medium)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                (isLive ? intercampusAccent.opacity(0.14) : ChicagoPalette.Gray.light.opacity(0.16)),
+                in: Capsule()
+            )
+            .accessibilityLabel(source == .liveMap ? "Live map time" : "Schedule time")
     }
 
     private func intercampusArrivals(

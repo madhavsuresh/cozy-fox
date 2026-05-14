@@ -174,7 +174,8 @@ private enum TripShotIntercampusParser {
                     generatedAt: generatedAt,
                     arrivalAt: arrivalAt,
                     delaySeconds: delay,
-                    isDelayed: abs(delay ?? 0) >= 60
+                    isDelayed: abs(delay ?? 0) >= 60,
+                    timeSource: .liveMap
                 )
             }
     }
@@ -318,7 +319,8 @@ private extension IntercampusArrival {
             generatedAt: generatedAt,
             arrivalAt: arrivalAt,
             delaySeconds: delaySeconds,
-            isDelayed: isDelayed
+            isDelayed: isDelayed,
+            timeSource: timeSource
         )
     }
 }

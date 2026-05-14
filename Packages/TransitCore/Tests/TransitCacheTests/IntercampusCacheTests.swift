@@ -23,13 +23,15 @@ struct IntercampusCacheTests {
             generatedAt: now,
             arrivalAt: now.addingTimeInterval(300),
             delaySeconds: nil,
-            isDelayed: false
+            isDelayed: false,
+            timeSource: .schedule
         )
 
         await store.replaceIntercampusArrivals([arrival])
         let snapshot = await store.currentSnapshot(now: now)
 
         #expect(snapshot.intercampusArrivals == [arrival])
+        #expect(snapshot.intercampusArrivals.first?.timeSource == .schedule)
         #expect(snapshot.intercampusFetchedAt != nil)
     }
 }
