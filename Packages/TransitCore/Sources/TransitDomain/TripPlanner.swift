@@ -104,6 +104,8 @@ public enum TripPlanFlavor: String, Sendable, Hashable {
     case busToBus
     /// L train ride followed by a CTA bus to the destination.
     case trainToBus
+    /// Three or more CTA bus/L legs.
+    case multiTransfer
     /// The fastest Metra option we found.
     case metra
 }
@@ -289,11 +291,12 @@ public struct TripPlanner: Sendable {
         case .busToTrain: return 0
         case .busToBus: return 1
         case .trainToBus: return 2
-        case .train: return 3
-        case .metra: return 4
-        case .busShortestRide: return 5
-        case .busShortestWalk: return 6
-        case .standard: return 7
+        case .multiTransfer: return 3
+        case .train: return 4
+        case .metra: return 5
+        case .busShortestRide: return 6
+        case .busShortestWalk: return 7
+        case .standard: return 8
         }
     }
 

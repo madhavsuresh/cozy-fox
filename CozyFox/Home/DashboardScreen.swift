@@ -1457,7 +1457,7 @@ struct DashboardScreen: View {
             switch plan.flavor {
             case .standard:
                 return summary
-            case .train, .busShortestRide, .busShortestWalk, .busToTrain, .busToBus, .trainToBus, .metra:
+            case .train, .busShortestRide, .busShortestWalk, .busToTrain, .busToBus, .trainToBus, .multiTransfer, .metra:
                 return summary
             }
         }
@@ -1468,6 +1468,7 @@ struct DashboardScreen: View {
         case .busToTrain: return "Bus + train route"
         case .busToBus: return "Bus + bus route"
         case .trainToBus: return "Train + bus route"
+        case .multiTransfer: return "Transfer route"
         case .busShortestRide: return "Bus route"
         case .busShortestWalk: return "Low-walk bus route"
         case .standard: return "Transit route"
