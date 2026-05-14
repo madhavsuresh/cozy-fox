@@ -82,6 +82,35 @@ struct LocalTransitPlannerTests {
         #expect(plans.last?.flavor == .busShortestRide)
     }
 
+    @Test func producesBusToTrainPlanWhenBusFeedsTrainStation() throws {
+        let stations: [LStation] = [
+            LStation(id: 1, name: "Transfer Station", latitude: 41.880, longitude: -87.680,
+                     servedLines: [.blue]),
+            LStation(id: 2, name: "Destination Station", latitude: 41.880, longitude: -87.641,
+                     servedLines: [.blue]),
+        ]
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "65", name: "Origin Bus Stop",
+                    latitude: 41.880, longitude: -87.699, directionLabel: "Westbound"),
+            BusStop(id: 101, route: "65", name: "Transfer Bus Stop",
+                    latitude: 41.880, longitude: -87.6805, directionLabel: "Westbound"),
+        ]
+        let planner = LocalTransitPlanner()
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
+            to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
+            stations: stations,
+            busStops: stops,
+            metraStations: []
+        )
+        let plan = try #require(plans.first)
+        #expect(plan.flavor == .busToTrain)
+        #expect(plans.count == 1)
+        let transitResolutions = plan.legs.compactMap(\.transit?.resolution)
+        #expect(transitResolutions == [.bus("65"), .line(.blue)])
+        #expect(plan.legs.count == 5)
+    }
+
     /// Two bus routes where each represents a different tradeoff: route 22
     /// requires more walking but a shorter bus ride; route 7 has closer stops
     /// but takes the bus further to its alighting stop. Both should appear,
