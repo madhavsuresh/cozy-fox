@@ -48,6 +48,18 @@ public actor TransitStore {
         }
     }
 
+    public func replaceMetraPredictions(_ predictions: [MetraPrediction]) async {
+        let now = Date()
+        await MainActor.run {
+            let ctx = ModelContext(container)
+            try? ctx.delete(model: CachedMetraPrediction.self)
+            for prediction in predictions {
+                ctx.insert(CachedMetraPrediction(prediction: prediction, fetchedAt: now))
+            }
+            try? ctx.save()
+        }
+    }
+
     public func replaceAlerts(_ alerts: [ServiceAlert]) async {
         let now = Date()
         await MainActor.run {
@@ -86,12 +98,19 @@ public actor TransitStore {
 
     /// Replaces the cached "closest e-bikes" list (rank 0 = closest). The
     /// dashboard reads all rows; the widget / Live Activity reads rank 0.
-    public func replaceNearbyBikePicks(_ picks: [NearestBikePick]) async {
+    public func replaceNearbyBikePicks(
+        _ picks: [NearestBikePick],
+        freeFloatingPicks: [NearestFreeBikePick] = []
+    ) async {
         await MainActor.run {
             let ctx = ModelContext(container)
             try? ctx.delete(model: CachedNearestBike.self)
+            try? ctx.delete(model: CachedNearestFreeBike.self)
             for (rank, pick) in picks.enumerated() {
                 ctx.insert(CachedNearestBike(pick: pick, rank: rank))
+            }
+            for (rank, pick) in freeFloatingPicks.enumerated() {
+                ctx.insert(CachedNearestFreeBike(pick: pick, rank: rank))
             }
             try? ctx.save()
         }

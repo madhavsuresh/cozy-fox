@@ -81,3 +81,60 @@ public struct ArrivalTile: View {
         )
     }
 }
+
+/// Tile variant for scheduled departures where clock time is more useful
+/// than relative minutes.
+public struct DepartureTimeTile: View {
+    public let badge: RouteBadge
+    public let departureAt: Date?
+    public let subtitle: String?
+    public let isAlert: Bool
+
+    public init(
+        badge: RouteBadge,
+        departureAt: Date?,
+        subtitle: String? = nil,
+        isAlert: Bool = false
+    ) {
+        self.badge = badge
+        self.departureAt = departureAt
+        self.subtitle = subtitle
+        self.isAlert = isAlert
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            badge
+            if let departureAt {
+                MetraDepartureTimeView(
+                    date: departureAt,
+                    size: .md,
+                    tone: isAlert ? .alert : .primary,
+                    accessibilityPrefix: "Departs at"
+                )
+            } else {
+                Text("—")
+                    .font(ChicagoTypography.bigNumber(44))
+                    .foregroundStyle(ChicagoPalette.Gray.light)
+            }
+            if let subtitle {
+                Text(subtitle)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(ChicagoSpacing.sm)
+        .frame(minWidth: 88, maxWidth: 120, alignment: .leading)
+        .background(
+            ChicagoPalette.Surface.card,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                              lineWidth: ChicagoSpacing.Stroke.hairline)
+        )
+    }
+}

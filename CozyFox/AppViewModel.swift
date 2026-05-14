@@ -173,6 +173,7 @@ final class AppViewModel {
     func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {
         var prefs = preferences.loadRoutePreferences()
         update(&prefs)
+        prefs.plannedTripPin = nil
         prefs.markManualPin()
         preferences.saveRoutePreferences(prefs)
         recordManualRouteChoice(prefs)
@@ -183,15 +184,46 @@ final class AppViewModel {
         preferences.clearMobilityProfile()
     }
 
+    func savePlannedTripPin(_ pin: PlannedTripPin) {
+        var prefs = preferences.loadRoutePreferences()
+        prefs.plannedTripPin = pin
+        prefs.markManualPin()
+        preferences.saveRoutePreferences(prefs)
+        recordManualRouteChoice(prefs)
+        pinRevision += 1
+        Task { await refreshIfNeeded(force: true) }
+    }
+
+    func clearPlannedTripPin() {
+        var prefs = preferences.loadRoutePreferences()
+        guard prefs.plannedTripPin != nil else { return }
+        prefs.plannedTripPin = nil
+        preferences.saveRoutePreferences(prefs)
+        pinRevision += 1
+        Task { await refreshIfNeeded(force: true) }
+    }
+
+    func setHomeAnchor(latitude: Double, longitude: Double) {
+        var anchors = preferences.loadCommuteAnchors()
+        anchors.home = .init(latitude: latitude, longitude: longitude, label: "Home")
+        preferences.saveCommuteAnchors(anchors)
+        location.updateAnchors(anchors)
+        pinRevision += 1
+        Task { await refreshIfNeeded(force: true) }
+    }
+
     private func recordManualRouteChoice(_ prefs: UserRoutePreferences) {
         var profile = preferences.loadMobilityProfile()
         profile.recordRouteObservation(
             direction: inferredManualPinDirection(),
             context: location.context,
-            line: prefs.pinnedLine,
-            stationId: prefs.pinnedStationId,
-            busRoute: prefs.pinnedBusRoute,
-            busDirection: prefs.pinnedBusDirection,
+            line: prefs.plannedTripPin?.train?.line ?? prefs.pinnedLine,
+            stationId: prefs.plannedTripPin?.train?.stationId ?? prefs.pinnedStationId,
+            busRoute: prefs.plannedTripPin?.bus?.route ?? prefs.pinnedBusRoute,
+            busDirection: prefs.plannedTripPin?.bus?.directionLabel ?? prefs.pinnedBusDirection,
+            metraRoute: prefs.plannedTripPin?.metra?.routeId ?? prefs.pinnedMetraRoute,
+            metraStationId: prefs.plannedTripPin?.metra?.stationId ?? prefs.pinnedMetraStationId,
+            metraDirectionId: prefs.plannedTripPin?.metra?.directionId ?? prefs.pinnedMetraDirectionId,
             motion: location.motion,
             at: .now,
             calendar: SystemClock().calendar
@@ -218,12 +250,14 @@ final class AppViewModel {
 enum DetailDestination: Identifiable, Hashable {
     case train(stationId: Int)
     case bus(route: String, stopId: Int)
+    case metra(route: String, stationId: String)
     case bikeNearest
 
     var id: String {
         switch self {
         case .train(let id): "train-\(id)"
         case .bus(let r, let s): "bus-\(r)-\(s)"
+        case .metra(let r, let s): "metra-\(r)-\(s)"
         case .bikeNearest: "bike-nearest"
         }
     }
@@ -242,6 +276,11 @@ enum DetailDestination: Identifiable, Hashable {
             let comps = url.pathComponents.filter { !["/", ""].contains($0) }
             if comps.count >= 2, let stop = Int(comps[1]) {
                 return .bus(route: comps[0], stopId: stop)
+            }
+        case "metra":
+            let comps = url.pathComponents.filter { !["/", ""].contains($0) }
+            if comps.count >= 2 {
+                return .metra(route: comps[0], stationId: comps[1])
             }
         case "bike":
             return .bikeNearest

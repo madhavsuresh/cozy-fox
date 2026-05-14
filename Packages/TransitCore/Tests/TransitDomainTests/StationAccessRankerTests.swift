@@ -26,7 +26,7 @@ struct StationAccessRankerTests {
         #expect(ranked.first?.isApproximateTravelTime == true)
     }
 
-    @Test func visibleCandidatesIncludeDirectDistanceTiesBeyondTopThree() {
+    @Test func visibleCandidatesCutAfterClusterBreak() {
         let ranker = StationAccessRanker()
         let ranked = ranker.rank([
             candidate(id: 1, directMeters: 670),
@@ -41,25 +41,84 @@ struct StationAccessRankerTests {
 
         let visibleIds = ranker.visibleCandidates(from: ranked).map(\.station.id)
 
-        #expect(visibleIds.contains(7))
-        #expect(!visibleIds.contains(8))
+        #expect(visibleIds == [1, 2, 3, 4])
     }
 
-    @Test func pinnedStationRemainsVisibleOutsideTieBand() {
+    @Test func visibleCandidatesFollowRollingMeanStdDevCutoff() {
+        let ranker = StationAccessRanker(
+            routeDirectnessMultiplier: 1.0,
+            routeNoiseAllowanceMeters: 0
+        )
+        let ranked = ranker.rank([
+            candidate(id: 1, directMeters: 2_500),
+            candidate(id: 2, directMeters: 2_600),
+            candidate(id: 3, directMeters: 2_700),
+            candidate(id: 4, directMeters: 2_700),
+            candidate(id: 5, directMeters: 3_100),
+            candidate(id: 6, directMeters: 3_500),
+            candidate(id: 7, directMeters: 3_700),
+            candidate(id: 8, directMeters: 4_100),
+        ])
+
+        let visibleIds = ranker.visibleCandidates(from: ranked).map(\.station.id)
+
+        #expect(visibleIds == [1, 2, 3, 4])
+    }
+
+    @Test func visibleCandidatesCutSmoothWalkingSlope() {
+        let ranker = StationAccessRanker()
+        let ranked = ranker.rank([
+            candidate(id: 1, directMeters: 1_600, walkingMeters: 1_800),
+            candidate(id: 2, directMeters: 1_700, walkingMeters: 1_950),
+            candidate(id: 3, directMeters: 1_760, walkingMeters: 2_100),
+            candidate(id: 4, directMeters: 2_000, walkingMeters: 2_250),
+            candidate(id: 5, directMeters: 2_180, walkingMeters: 2_400),
+            candidate(id: 6, directMeters: 2_330, walkingMeters: 2_550),
+            candidate(id: 7, directMeters: 2_510, walkingMeters: 2_700),
+        ])
+
+        let visibleIds = ranker.visibleCandidates(from: ranked).map(\.station.id)
+
+        #expect(visibleIds == [1, 2, 3, 4])
+    }
+
+    @Test func redLineFromNavyPierCutsBeforeHarrison() {
+        let navyPier = (lat: 41.8917, lon: -87.6086)
+        let candidates = LStationCatalog.all
+            .filter { $0.servedLines.contains(.red) }
+            .map { station in
+                StationAccessRanker.Candidate(
+                    station: station,
+                    directDistanceMeters: Distance.meters(
+                        from: navyPier,
+                        to: (station.latitude, station.longitude)
+                    )
+                )
+            }
+        let ranker = StationAccessRanker()
+        let visibleNames = ranker
+            .visibleCandidates(from: ranker.rank(candidates))
+            .map(\.station.name)
+
+        #expect(visibleNames.contains("Grand"))
+        #expect(visibleNames.contains("Lake"))
+        #expect(visibleNames.count <= 4)
+        #expect(!visibleNames.contains("Harrison"))
+    }
+
+    @Test func visibleCandidatesDoNotPreserveDistantOutliers() {
         let ranker = StationAccessRanker()
         let ranked = ranker.rank([
             candidate(id: 1, directMeters: 600),
             candidate(id: 2, directMeters: 800),
             candidate(id: 3, directMeters: 900),
+            candidate(id: 4, directMeters: 950),
             candidate(id: 99, directMeters: 3_000),
         ])
 
-        let visibleIds = ranker.visibleCandidates(
-            from: ranked,
-            pinnedStationId: 99
-        ).map(\.station.id)
+        let visibleIds = ranker.visibleCandidates(from: ranked).map(\.station.id)
 
-        #expect(visibleIds.contains(99))
+        #expect(visibleIds == [1, 2, 3, 4])
     }
 
     private func candidate(

@@ -18,12 +18,14 @@ final class RefreshCoordinator {
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
+    private let metraClient: MetraClient
     private let alertsClient: CTAAlertsClient
     private let divvyClient: DivvyGBFSClient
 
     private let resolver = NearestBikeResolver()
     private let stationResolver = NearestStationResolver()
     private let busStopResolver = NearestBusStopResolver()
+    private let metraStationResolver = NearestMetraStationResolver()
     private let autopinner = CommuteAutopinner()
 
     /// Day-stamp of the last walking-cache invalidation so a single 30 s
@@ -56,6 +58,9 @@ final class RefreshCoordinator {
         self.busClient = CTABusClient(http: http) {
             APIKeys.read(.busTracker)
         }
+        self.metraClient = MetraClient(http: http) {
+            APIKeys.read(.metra)
+        }
         self.alertsClient = CTAAlertsClient(http: http)
         self.divvyClient = DivvyGBFSClient(http: http)
     }
@@ -64,6 +69,7 @@ final class RefreshCoordinator {
     /// closed before recommending nearby trains; the rest run in parallel.
     @discardableResult
     func refreshAll() async -> Bool {
+        let expiredTripChanged = clearExpiredPlannedTripPinIfNeeded()
         let autopinChanged = await applyAutopinIfNeeded()
         let prefs = preferences.loadRoutePreferences()
         let lastLocation = preferences.loadLastKnownLocation()
@@ -88,6 +94,7 @@ final class RefreshCoordinator {
                 )
             }
             group.addTask { await self.refreshBuses(prefs: prefs, lastLocation: lastLocation) }
+            group.addTask { await self.refreshMetra(prefs: prefs, lastLocation: lastLocation) }
             group.addTask {
                 await self.refreshBikes(
                     origin: lastLocation,
@@ -103,7 +110,7 @@ final class RefreshCoordinator {
         await LiveActivityCoordinator.shared.ensureRunning(snapshot: snapshot, prefs: prefs)
 
         WidgetCenter.shared.reloadAllTimelines()
-        return autopinChanged
+        return expiredTripChanged || autopinChanged
     }
 
     /// Called whenever the location coordinator detects a region transition.
@@ -141,6 +148,9 @@ final class RefreshCoordinator {
     }
 
     private func applyAutopinIfNeeded() async -> Bool {
+        if preferences.loadRoutePreferences().plannedTripPin != nil {
+            return false
+        }
         let motion = await location?.refreshMotion() ?? .unknown
         let result = autopinner.apply(
             preferences: preferences.loadRoutePreferences(),
@@ -154,6 +164,13 @@ final class RefreshCoordinator {
             preferences.saveRoutePreferences(result.preferences)
         }
         return result.changed
+    }
+
+    private func clearExpiredPlannedTripPinIfNeeded() -> Bool {
+        var prefs = preferences.loadRoutePreferences()
+        guard prefs.clearExpiredPlannedTripPin() else { return false }
+        preferences.saveRoutePreferences(prefs)
+        return true
     }
 
     // MARK: - Per-service refreshers
@@ -179,6 +196,13 @@ final class RefreshCoordinator {
                 excludingStationIds: closedStations
             )
             targets.append(contentsOf: nearest.map { ($0.id, nil) })
+        }
+
+        if let tripTrain = prefs.plannedTripPin?.train,
+           let stationId = tripTrain.stationId,
+           !targets.contains(where: { $0.mapId == stationId })
+        {
+            targets.append((stationId, nil))
         }
 
         // Pinned line: include the user's chosen station (or the nearest
@@ -255,19 +279,40 @@ final class RefreshCoordinator {
             targets.append(contentsOf: nearest.map { ($0.route, $0.id) })
         }
 
-        // Pinned bus route: fetch the nearest stop in EACH direction so the
-        // dashboard can show both legs (e.g., #22 northbound + southbound).
+        // Pinned bus route: fetch the nearest stops in EACH direction so the
+        // dashboard can show both adjacent stop choices for a rider standing
+        // between stops.
         if let pinnedRoute = prefs.pinnedBusRoute, let lastLocation {
-            let directionalStops = busStopResolver.nearestPerDirection(
+            if let pinnedStopId = prefs.pinnedBusStopId,
+               let explicitStop = BusStopCatalog.all.first(where: {
+                   $0.route == pinnedRoute
+                       && $0.id == pinnedStopId
+                       && (prefs.pinnedBusDirection == nil
+                           || $0.directionLabel == prefs.pinnedBusDirection)
+               }),
+               !targets.contains(where: { $0.route == pinnedRoute && $0.stopId == explicitStop.id })
+            {
+                targets.append((pinnedRoute, explicitStop.id))
+            }
+
+            let directionalStops = busStopResolver.nearestStopsPerDirection(
                 onRoute: pinnedRoute,
                 to: (lastLocation.latitude, lastLocation.longitude),
+                limitPerDirection: 2,
                 catalog: BusStopCatalog.all
             )
             for stop in directionalStops where !targets.contains(where: {
-                $0.route == pinnedRoute && $0.stopId == stop.id
+                $0.route == pinnedRoute && $0.stopId == stop.stop.id
             }) {
-                targets.append((pinnedRoute, stop.id))
+                targets.append((pinnedRoute, stop.stop.id))
             }
+        }
+
+        if let tripBus = prefs.plannedTripPin?.bus,
+           let stopId = tripBus.stopId,
+           !targets.contains(where: { $0.route == tripBus.route && $0.stopId == stopId })
+        {
+            targets.append((tripBus.route, stopId))
         }
 
         var collected: [BusPrediction] = []
@@ -287,6 +332,89 @@ final class RefreshCoordinator {
         }
     }
 
+    private func refreshMetra(
+        prefs: UserRoutePreferences,
+        lastLocation: LastKnownLocation?
+    ) async {
+        var targets: [(routeId: String, stationId: String, directionId: Int?)] = []
+
+        if !prefs.metra.isEmpty {
+            targets.append(contentsOf: prefs.metra.map {
+                ($0.routeId, $0.stationId, $0.directionId)
+            })
+        } else if let lastLocation {
+            let nearest = metraStationResolver.nearestPerRoute(
+                to: (lastLocation.latitude, lastLocation.longitude),
+                limit: 5,
+                catalog: MetraStationCatalog.all
+            )
+            targets.append(contentsOf: nearest.map { ($0.routeId, $0.station.id, nil) })
+        }
+
+        if let tripMetra = prefs.plannedTripPin?.metra,
+           let stationId = tripMetra.stationId,
+           !targets.contains(where: { $0.routeId == tripMetra.routeId && $0.stationId == stationId })
+        {
+            targets.append((tripMetra.routeId, stationId, tripMetra.directionId))
+        }
+
+        if let pinnedRoute = prefs.pinnedMetraRoute, let lastLocation {
+            if let pinnedStationId = prefs.pinnedMetraStationId,
+               MetraStationCatalog.all.contains(where: {
+                   $0.id == pinnedStationId && $0.servedRoutes.contains(pinnedRoute)
+               }),
+               !targets.contains(where: { $0.routeId == pinnedRoute && $0.stationId == pinnedStationId })
+            {
+                targets.append((pinnedRoute, pinnedStationId, prefs.pinnedMetraDirectionId))
+            }
+
+            let nearest = metraStationResolver.closestStations(
+                onRoute: pinnedRoute,
+                to: (lastLocation.latitude, lastLocation.longitude),
+                limit: 3,
+                catalog: MetraStationCatalog.all
+            )
+            for station in nearest where !targets.contains(where: {
+                $0.routeId == pinnedRoute && $0.stationId == station.station.id
+            }) {
+                targets.append((pinnedRoute, station.station.id, prefs.pinnedMetraDirectionId))
+            }
+        }
+
+        guard !targets.isEmpty else { return }
+
+        let updates = (try? await metraClient.fetchTripUpdates()) ?? []
+        let updateByTripStop = Dictionary(grouping: updates) { update in
+            "\(update.tripId)|\(update.stopId)"
+        }
+
+        var collected: [MetraPrediction] = []
+        for target in targets {
+            let scheduled = MetraScheduleCatalog.upcomingDepartures(
+                stationId: target.stationId,
+                routeId: target.routeId,
+                directionId: target.directionId,
+                now: .now,
+                limit: 4
+            )
+            collected.append(contentsOf: scheduled.map { prediction in
+                let key = "\(prediction.tripId)|\(prediction.stationId)"
+                guard let latest = updateByTripStop[key]?.max(by: { $0.generatedAt < $1.generatedAt }) else {
+                    return prediction
+                }
+                return prediction.applying(latest)
+            })
+        }
+
+        var seen: Set<String> = []
+        let unique = collected
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+            .filter { seen.insert($0.id).inserted }
+        if !unique.isEmpty {
+            await store.replaceMetraPredictions(unique)
+        }
+    }
+
 
     /// Fetches live vehicle positions for whichever line + bus route the user
     /// has pinned, so the dashboard's "where's my train/bus" strip can show
@@ -294,14 +422,19 @@ final class RefreshCoordinator {
     /// pin is active to avoid burning rate-limit budget on unused data.
     private func refreshPositions(prefs: UserRoutePreferences) async {
         var collected: [VehiclePosition] = []
-        if let line = prefs.pinnedLine {
+        if let line = prefs.plannedTripPin?.train?.line ?? prefs.pinnedLine {
             if let trains = try? await trainClient.fetchPositions(lines: [line]) {
                 collected.append(contentsOf: trains)
             }
         }
-        if let route = prefs.pinnedBusRoute {
+        if let route = prefs.plannedTripPin?.bus?.route ?? prefs.pinnedBusRoute {
             if let buses = try? await busClient.fetchVehicles(routes: [route]) {
                 collected.append(contentsOf: buses)
+            }
+        }
+        if let route = prefs.plannedTripPin?.metra?.routeId ?? prefs.pinnedMetraRoute {
+            if let trains = try? await metraClient.fetchPositions(routes: [route]) {
+                collected.append(contentsOf: trains)
             }
         }
         latestPositions = collected
@@ -311,12 +444,16 @@ final class RefreshCoordinator {
         let routes = Set(
             prefs.trains.map { $0.line.rawValue.capitalized }
             + prefs.buses.map { $0.route }
+            + [prefs.plannedTripPin?.train?.line.rawValue.capitalized].compactMap { $0 }
+            + [prefs.plannedTripPin?.bus?.route].compactMap { $0 }
+            + [prefs.plannedTripPin?.metra?.routeId].compactMap { $0 }
         )
+        async let metraAlerts = (try? metraClient.fetchAlerts()) ?? []
         do {
             let alerts = try await alertsClient.fetchActiveAlerts(forRoutes: Array(routes))
-            await store.replaceAlerts(alerts)
+            await store.replaceAlerts(alerts + (await metraAlerts))
         } catch {
-            // ignore — Alerts API is best-effort
+            await store.replaceAlerts(await metraAlerts)
         }
     }
 
@@ -326,7 +463,7 @@ final class RefreshCoordinator {
     ) async {
         do {
             async let stationsTask = divvyClient.fetchStations()
-            async let bikesTask = includeFreeFloating ? divvyClient.fetchEBikes() : []
+            async let bikesTask = divvyClient.fetchEBikes()
             let (stations, ebikes) = try await (stationsTask, bikesTask)
             await store.recordStationSnapshots(stations)
 
@@ -334,14 +471,18 @@ final class RefreshCoordinator {
                 await store.replaceNearbyBikePicks([])
                 return
             }
-            let picks = resolver.picks(
-                top: 3,
+            let picks = resolver.nearby(
+                topStations: 3,
+                topFreeFloating: 3,
                 from: (origin.latitude, origin.longitude),
                 stations: stations,
                 eBikes: ebikes,
                 includeFreeFloating: includeFreeFloating
             )
-            await store.replaceNearbyBikePicks(picks)
+            await store.replaceNearbyBikePicks(
+                picks.stationPicks,
+                freeFloatingPicks: picks.freeFloatingPicks
+            )
         } catch {
             // leave previous nearest bike in place
         }

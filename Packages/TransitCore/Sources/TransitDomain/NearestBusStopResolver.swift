@@ -81,6 +81,24 @@ public struct NearestBusStopResolver: Sendable {
         to origin: (lat: Double, lon: Double),
         catalog: [BusStop]
     ) -> [BusStop] {
+        nearestStopsPerDirection(
+            onRoute: route,
+            to: origin,
+            limitPerDirection: 1,
+            catalog: catalog
+        )
+        .map(\.stop)
+    }
+
+    /// For a pinned route, returns the closest stops in each dominant
+    /// direction, with up to `limitPerDirection` stops per direction. This
+    /// lets the UI show both adjacent stops when the user is between them.
+    public func nearestStopsPerDirection(
+        onRoute route: String,
+        to origin: (lat: Double, lon: Double),
+        limitPerDirection: Int = 2,
+        catalog: [BusStop]
+    ) -> [(stop: BusStop, distance: Double)] {
         let onRoute = catalog.filter { $0.route == route }
         let byDirection = Dictionary(grouping: onRoute, by: \.directionLabel)
 
@@ -91,14 +109,15 @@ public struct NearestBusStopResolver: Sendable {
         let dominant = byDirection.filter { $0.value.count >= threshold }
 
         return dominant
-            .compactMap { (_, stops) -> (BusStop, Double)? in
-                stops
+            .flatMap { (_, stops) -> [(BusStop, Double)] in
+                Array(stops
                     .map { ($0, Distance.meters(from: origin, to: ($0.latitude, $0.longitude))) }
                     .filter { $0.1 <= maxDistanceMeters }
-                    .min { $0.1 < $1.1 }
+                    .sorted { $0.1 < $1.1 }
+                    .prefix(max(1, limitPerDirection)))
             }
             .sorted { $0.1 < $1.1 }
-            .map(\.0)
+            .map { (stop: $0.0, distance: $0.1) }
     }
 
     /// Returns all stops within the radius, sorted by distance. Useful for

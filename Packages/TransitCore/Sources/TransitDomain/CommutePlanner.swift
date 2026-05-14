@@ -24,6 +24,13 @@ public struct CommutePlanner: Sendable {
         select(preferences, direction: preferredDirection(context: context))
     }
 
+    public func primaryMetra(
+        from preferences: [MetraPreference],
+        context: CommuteContext
+    ) -> MetraPreference? {
+        select(preferences, direction: preferredDirection(context: context))
+    }
+
     private func select<T>(_ items: [T], direction: CommuteDirection) -> T?
     where T: PreferenceCommute {
         // Prefer items that match the inferred direction. Then anytime. Then any.
@@ -52,3 +59,4 @@ public protocol PreferenceCommute {
 
 extension TrainPreference: PreferenceCommute {}
 extension BusPreference: PreferenceCommute {}
+extension MetraPreference: PreferenceCommute {}

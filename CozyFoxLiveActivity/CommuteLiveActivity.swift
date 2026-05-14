@@ -356,6 +356,7 @@ private struct LockScreenView: View {
             )
         }
     }
+
 }
 
 private struct LegRow: View {

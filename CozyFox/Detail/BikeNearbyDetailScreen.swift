@@ -12,22 +12,22 @@ struct BikeNearbyDetailScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    let picks = model.snapshot.nearbyBikePicks
-                    if let headline = picks.first {
-                        map(for: picks)
-                        ChicagoCard(title: headline.station.name,
+                    let options = model.snapshot.nearbyBikeOptions
+                    if let headline = options.first {
+                        map(for: options)
+                        ChicagoCard(title: title(for: headline),
                                     eyebrow: "Closest e-bike",
                                     ornament: .icon(systemName: "bicycle")) {
                             headlineBlock(for: headline)
                         }
-                        if picks.count > 1 {
+                        if options.count > 1 {
                             ChicagoCard(title: "Also nearby",
                                         eyebrow: "Divvy",
                                         ornament: .icon(systemName: "list.bullet")) {
                                 VStack(spacing: ChicagoSpacing.xs) {
-                                    ForEach(Array(picks.dropFirst().enumerated()), id: \.element.station.id) { index, pick in
-                                        secondaryRow(for: pick)
-                                        if index < picks.count - 2 {
+                                    ForEach(Array(options.dropFirst().enumerated()), id: \.element.id) { index, option in
+                                        secondaryRow(for: option)
+                                        if index < options.count - 2 {
                                             Rectangle()
                                                 .fill(ChicagoPalette.cornflower.opacity(0.25))
                                                 .frame(height: ChicagoSpacing.Stroke.hairline)
@@ -54,7 +54,16 @@ struct BikeNearbyDetailScreen: View {
     }
 
     @ViewBuilder
-    private func headlineBlock(for pick: NearestBikePick) -> some View {
+    private func headlineBlock(for option: NearbyBikeOption) -> some View {
+        switch option {
+        case .station(let pick):
+            stationHeadlineBlock(for: pick)
+        case .freeFloating(let pick):
+            freeBikeHeadlineBlock(for: pick)
+        }
+    }
+
+    private func stationHeadlineBlock(for pick: NearestBikePick) -> some View {
         VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
             HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.md) {
                 BigNumber(
@@ -74,41 +83,59 @@ struct BikeNearbyDetailScreen: View {
                     )
                 }
             }
+            BikeInventorySummary(
+                dockedCount: pick.station.eBikesAvailable,
+                chargeSummary: pick.dockedChargeSummary,
+                scarce: pick.station.isScarce
+            )
             BikeAvailabilityBar(
                 current: pick.station.eBikesAvailable,
                 capacity: max(1, pick.station.capacity),
                 scarce: pick.station.isScarce
             )
-            if pick.freeFloatingNearby > 0 {
-                Text("\(pick.freeFloatingNearby) free-floating e-bike\(pick.freeFloatingNearby == 1 ? "" : "s") nearby")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
+        }
+    }
+
+    private func freeBikeHeadlineBlock(for pick: NearestFreeBikePick) -> some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+            HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.md) {
+                BigNumber(
+                    pick.walkingMinutes,
+                    unit: "min walk",
+                    size: .lg,
+                    tone: .primary,
+                    accessibilityLabel: "\(pick.walkingMinutes) minute walk"
+                )
+                BigNumber(
+                    Int(pick.bestRangeMiles.rounded()),
+                    unit: "mi charge",
+                    size: .md,
+                    tone: .accent,
+                    accessibilityLabel: "\(Int(pick.bestRangeMiles.rounded())) miles of range"
+                )
             }
+            Label("Free-floating e-bike", systemImage: "bicycle")
+                .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.green)
         }
     }
 
     @ViewBuilder
-    private func secondaryRow(for pick: NearestBikePick) -> some View {
-        Button(action: { openInAppleMaps(pick: pick) }) {
+    private func secondaryRow(for option: NearbyBikeOption) -> some View {
+        Button(action: { openInAppleMaps(option: option) }) {
             HStack(alignment: .center, spacing: ChicagoSpacing.md) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(pick.station.name)
+                    Text(title(for: option))
                         .font(ChicagoTypography.displaySM())
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Text("\(pick.walkingMinutes) min walk")
+                    Text("\(option.walkingMinutes) min walk")
                         .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                 }
                 Spacer(minLength: ChicagoSpacing.sm)
-                BigNumber(
-                    pick.station.eBikesAvailable,
-                    unit: pick.station.eBikesAvailable == 1 ? "e-bike" : "e-bikes",
-                    size: .md,
-                    tone: pick.station.isScarce ? .warning : .accent,
-                    accessibilityLabel: "\(pick.station.eBikesAvailable) e-bikes available"
-                )
+                secondaryTrailing(for: option)
             }
             .frame(minHeight: 44)
             .contentShape(Rectangle())
@@ -118,25 +145,71 @@ struct BikeNearbyDetailScreen: View {
         .accessibilityHint("Opens this station in Apple Maps")
     }
 
-    private func openInAppleMaps(pick: NearestBikePick) {
-        let coord = CLLocationCoordinate2D(
-            latitude: pick.station.latitude,
-            longitude: pick.station.longitude
-        )
+    @ViewBuilder
+    private func secondaryTrailing(for option: NearbyBikeOption) -> some View {
+        switch option {
+        case .station(let pick):
+            BikeInventorySummary(
+                dockedCount: pick.station.eBikesAvailable,
+                chargeSummary: pick.dockedChargeSummary,
+                scarce: pick.station.isScarce
+            )
+        case .freeFloating(let pick):
+            VStack(alignment: .trailing, spacing: ChicagoSpacing.xs) {
+                Image(systemName: "bicycle")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(ChicagoPalette.green)
+                Text("\(Int(pick.bestRangeMiles.rounded())) mi charge")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func openInAppleMaps(option: NearbyBikeOption) {
+        let coord: CLLocationCoordinate2D
+        let name: String
+        switch option {
+        case .station(let pick):
+            coord = CLLocationCoordinate2D(
+                latitude: pick.station.latitude,
+                longitude: pick.station.longitude
+            )
+            name = pick.station.name
+        case .freeFloating(let pick):
+            coord = CLLocationCoordinate2D(
+                latitude: pick.bike.latitude,
+                longitude: pick.bike.longitude
+            )
+            name = "Free e-bike"
+        }
         let item = MKMapItem(placemark: MKPlacemark(coordinate: coord))
-        item.name = pick.station.name
+        item.name = name
         item.openInMaps()
     }
 
-    private func map(for picks: [NearestBikePick]) -> some View {
-        Map(initialPosition: .region(fittingRegion(for: picks))) {
-            ForEach(picks, id: \.station.id) { pick in
+    private func map(for options: [NearbyBikeOption]) -> some View {
+        let stationPicks = stationPicks(for: options)
+        let freePicks = freeBikePicks(for: options)
+        return Map(initialPosition: .region(fittingRegion(for: stationPicks, freePicks: freePicks))) {
+            ForEach(stationPicks, id: \.station.id) { pick in
                 Marker(pick.station.name,
                        coordinate: CLLocationCoordinate2D(
                         latitude: pick.station.latitude,
                         longitude: pick.station.longitude
                        ))
                     .tint(ChicagoPalette.flagBlue)
+            }
+            ForEach(freePicks) { pick in
+                Annotation("Free e-bike",
+                           coordinate: CLLocationCoordinate2D(
+                            latitude: pick.bike.latitude,
+                            longitude: pick.bike.longitude
+                           ),
+                           anchor: .center) {
+                    freeBikeMapIcon
+                }
             }
             UserAnnotation()
         }
@@ -150,9 +223,45 @@ struct BikeNearbyDetailScreen: View {
         )
     }
 
-    private func fittingRegion(for picks: [NearestBikePick]) -> MKCoordinateRegion {
+    private var freeBikeMapIcon: some View {
+        Image(systemName: "bicycle")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(ChicagoPalette.green))
+            .overlay(
+                Circle()
+                    .strokeBorder(.white, lineWidth: ChicagoSpacing.Stroke.regular)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 3, x: 0, y: 1)
+    }
+
+    private func title(for option: NearbyBikeOption) -> String {
+        switch option {
+        case .station(let pick): pick.station.name
+        case .freeFloating: "Free e-bike"
+        }
+    }
+
+    private func stationPicks(for options: [NearbyBikeOption]) -> [NearestBikePick] {
+        options.compactMap {
+            if case .station(let pick) = $0 { return pick }
+            return nil
+        }
+    }
+
+    private func freeBikePicks(for options: [NearbyBikeOption]) -> [NearestFreeBikePick] {
+        options.compactMap {
+            if case .freeFloating(let pick) = $0 { return pick }
+            return nil
+        }
+    }
+
+    private func fittingRegion(for picks: [NearestBikePick], freePicks: [NearestFreeBikePick]) -> MKCoordinateRegion {
         var lats = picks.map(\.station.latitude)
         var lons = picks.map(\.station.longitude)
+        lats.append(contentsOf: freePicks.map(\.bike.latitude))
+        lons.append(contentsOf: freePicks.map(\.bike.longitude))
         if let user = model.location.lastKnown {
             lats.append(user.latitude)
             lons.append(user.longitude)

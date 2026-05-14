@@ -17,11 +17,14 @@ public struct LocalTransitPlanner: Sendable {
     public let walkingMetersPerMinute: Double
     public let lTrainMetersPerMinute: Double
     public let busMetersPerMinute: Double
+    public let metraMetersPerMinute: Double
     public let lTrainBoardingWaitMinutes: Double
     public let busBoardingWaitMinutes: Double
+    public let metraBoardingWaitMinutes: Double
     public let minimumTripSavingsFactor: Double
     public let maxStationWalkMeters: Double
     public let maxStopWalkMeters: Double
+    public let maxMetraStationWalkMeters: Double
     public let minDirectWalkMeters: Double
     public let minBusTransitMeters: Double
 
@@ -29,22 +32,28 @@ public struct LocalTransitPlanner: Sendable {
         walkingMetersPerMinute: Double = 84,
         lTrainMetersPerMinute: Double = 670,
         busMetersPerMinute: Double = 270,
+        metraMetersPerMinute: Double = 900,
         lTrainBoardingWaitMinutes: Double = 3,
         busBoardingWaitMinutes: Double = 5,
+        metraBoardingWaitMinutes: Double = 8,
         minimumTripSavingsFactor: Double = 0.85,
         maxStationWalkMeters: Double = 1_500,
         maxStopWalkMeters: Double = 750,
+        maxMetraStationWalkMeters: Double = 3_000,
         minDirectWalkMeters: Double = 800,
         minBusTransitMeters: Double = 500
     ) {
         self.walkingMetersPerMinute = walkingMetersPerMinute
         self.lTrainMetersPerMinute = lTrainMetersPerMinute
         self.busMetersPerMinute = busMetersPerMinute
+        self.metraMetersPerMinute = metraMetersPerMinute
         self.lTrainBoardingWaitMinutes = lTrainBoardingWaitMinutes
         self.busBoardingWaitMinutes = busBoardingWaitMinutes
+        self.metraBoardingWaitMinutes = metraBoardingWaitMinutes
         self.minimumTripSavingsFactor = minimumTripSavingsFactor
         self.maxStationWalkMeters = maxStationWalkMeters
         self.maxStopWalkMeters = maxStopWalkMeters
+        self.maxMetraStationWalkMeters = maxMetraStationWalkMeters
         self.minDirectWalkMeters = minDirectWalkMeters
         self.minBusTransitMeters = minBusTransitMeters
     }
@@ -53,7 +62,8 @@ public struct LocalTransitPlanner: Sendable {
         from origin: PlannerCoordinate,
         to destination: PlannerCoordinate,
         stations: [LStation] = LStationCatalog.all,
-        busStops: [BusStop] = BusStopCatalog.all
+        busStops: [BusStop] = BusStopCatalog.all,
+        metraStations: [MetraStation] = MetraStationCatalog.all
     ) -> [TripPlan] {
         let originPair: (lat: Double, lon: Double) = (origin.latitude, origin.longitude)
         let destinationPair: (lat: Double, lon: Double) = (destination.latitude, destination.longitude)
@@ -91,6 +101,14 @@ public struct LocalTransitPlanner: Sendable {
                 displayName: line.displayName,
                 originStopName: originStation.entry.name,
                 destinationStopName: destStation.entry.name,
+                originStopCoordinate: PlannerCoordinate(
+                    latitude: originStation.entry.latitude,
+                    longitude: originStation.entry.longitude
+                ),
+                destinationStopCoordinate: PlannerCoordinate(
+                    latitude: destStation.entry.latitude,
+                    longitude: destStation.entry.longitude
+                ),
                 originWalkMeters: originStation.distance,
                 transitMeters: transitMeters,
                 destinationWalkMeters: destStation.distance,
@@ -98,6 +116,50 @@ public struct LocalTransitPlanner: Sendable {
             )
             if bestTrain == nil || totalMinutes < bestTrain!.totalMinutes {
                 bestTrain = candidate
+            }
+        }
+
+        var bestMetra: Candidate?
+        for line in MetraStationCatalog.routes {
+            let onLine = metraStations.filter { $0.servedRoutes.contains(line.id) }
+            guard
+                let originStation = closest(in: onLine, to: originPair, maxMeters: maxMetraStationWalkMeters),
+                let destStation = closest(in: onLine, to: destinationPair, maxMeters: maxMetraStationWalkMeters),
+                originStation.entry.id != destStation.entry.id
+            else { continue }
+
+            let transitMeters = Distance.meters(
+                from: (originStation.entry.latitude, originStation.entry.longitude),
+                to: (destStation.entry.latitude, destStation.entry.longitude)
+            )
+            let totalMinutes =
+                originStation.distance / walkingMetersPerMinute
+                + transitMeters / metraMetersPerMinute
+                + destStation.distance / walkingMetersPerMinute
+                + metraBoardingWaitMinutes
+
+            guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+            let candidate = Candidate(
+                resolution: .metra(line.id),
+                displayName: "Metra \(line.shortName)",
+                originStopName: originStation.entry.name,
+                destinationStopName: destStation.entry.name,
+                originStopCoordinate: PlannerCoordinate(
+                    latitude: originStation.entry.latitude,
+                    longitude: originStation.entry.longitude
+                ),
+                destinationStopCoordinate: PlannerCoordinate(
+                    latitude: destStation.entry.latitude,
+                    longitude: destStation.entry.longitude
+                ),
+                originWalkMeters: originStation.distance,
+                transitMeters: transitMeters,
+                destinationWalkMeters: destStation.distance,
+                totalMinutes: totalMinutes
+            )
+            if bestMetra == nil || totalMinutes < bestMetra!.totalMinutes {
+                bestMetra = candidate
             }
         }
 
@@ -137,6 +199,14 @@ public struct LocalTransitPlanner: Sendable {
                 displayName: "Route \(route)",
                 originStopName: originStop.entry.name,
                 destinationStopName: destStop.entry.name,
+                originStopCoordinate: PlannerCoordinate(
+                    latitude: originStop.entry.latitude,
+                    longitude: originStop.entry.longitude
+                ),
+                destinationStopCoordinate: PlannerCoordinate(
+                    latitude: destStop.entry.latitude,
+                    longitude: destStop.entry.longitude
+                ),
                 originWalkMeters: originStop.distance,
                 transitMeters: transitMeters,
                 destinationWalkMeters: destStop.distance,
@@ -152,6 +222,7 @@ public struct LocalTransitPlanner: Sendable {
 
         var plans: [TripPlan] = []
         if let bestTrain { plans.append(makePlan(from: bestTrain, flavor: .train)) }
+        if let bestMetra { plans.append(makePlan(from: bestMetra, flavor: .metra)) }
         if let shortestRide {
             plans.append(makePlan(from: shortestRide, flavor: .busShortestRide))
         }
@@ -172,7 +243,9 @@ public struct LocalTransitPlanner: Sendable {
             mode: .transit,
             distanceMeters: candidate.transitMeters,
             instructions: "Take \(candidate.displayName) from \(candidate.originStopName) to \(candidate.destinationStopName)",
-            transit: TransitLegInfo(rawName: candidate.displayName, resolution: candidate.resolution)
+            transit: TransitLegInfo(rawName: candidate.displayName, resolution: candidate.resolution),
+            startCoordinate: candidate.originStopCoordinate,
+            endCoordinate: candidate.destinationStopCoordinate
         )
         let destWalkLeg = TripLeg(
             mode: .walking,
@@ -196,6 +269,8 @@ public struct LocalTransitPlanner: Sendable {
         let displayName: String
         let originStopName: String
         let destinationStopName: String
+        let originStopCoordinate: PlannerCoordinate
+        let destinationStopCoordinate: PlannerCoordinate
         let originWalkMeters: Double
         let transitMeters: Double
         let destinationWalkMeters: Double
@@ -229,3 +304,4 @@ protocol HasGeocoordinate {
 
 extension LStation: HasGeocoordinate {}
 extension BusStop: HasGeocoordinate {}
+extension MetraStation: HasGeocoordinate {}

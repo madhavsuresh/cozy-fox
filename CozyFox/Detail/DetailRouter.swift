@@ -9,6 +9,8 @@ struct DetailRouter: View {
             TrainDetailScreen(stationId: stationId)
         case .bus(let route, let stopId):
             BusDetailScreen(route: route, stopId: stopId)
+        case .metra(let route, let stationId):
+            MetraDetailScreen(route: route, stationId: stationId)
         case .bikeNearest:
             BikeNearbyDetailScreen()
         }

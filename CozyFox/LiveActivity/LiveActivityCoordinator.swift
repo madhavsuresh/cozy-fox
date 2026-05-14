@@ -25,6 +25,9 @@ actor LiveActivityCoordinator {
 
         let trainLeg = makeTrainLeg(prefs: prefs, snapshot: snapshot)
         let busLeg = makeBusLeg(prefs: prefs, snapshot: snapshot)
+        // Metra Live Activity rendering is temporarily disabled; pinned
+        // Metra still appears in the app and widgets.
+        let metraLeg: CommuteAttributes.MetraLeg? = nil
 
         // Nothing to surface → tear down.
         guard trainLeg != nil || busLeg != nil else {
@@ -33,15 +36,16 @@ actor LiveActivityCoordinator {
         }
 
         let identity = makeIdentity(prefs: prefs)
-        let state = CommuteAttributes.ContentState(train: trainLeg, bus: busLeg)
+        let state = CommuteAttributes.ContentState(train: trainLeg, bus: busLeg, metra: metraLeg)
         // Stale at the soonest arrival itself (no grace) so iOS marks the
         // activity stale the moment its currently-published next arrival
         // passes — the on-screen number is no longer authoritative.
-        let staleDate = soonestArrival(train: trainLeg, bus: busLeg)
+        let staleDate = soonestArrival(train: trainLeg, bus: busLeg, metra: metraLeg)
 
         if let activity = current,
            activity.attributes.trainIdentity == identity.train,
-           activity.attributes.busIdentity == identity.bus
+           activity.attributes.busIdentity == identity.bus,
+           activity.attributes.metraIdentity == identity.metra
         {
             // Same legs being tracked — just push new state.
             await activity.update(ActivityContent(state: state, staleDate: staleDate))
@@ -54,9 +58,16 @@ actor LiveActivityCoordinator {
 
     // MARK: - Identity & leg builders
 
-    private func makeIdentity(prefs: UserRoutePreferences) -> (train: String?, bus: String?) {
+    private func makeIdentity(prefs: UserRoutePreferences) -> (train: String?, bus: String?, metra: String?) {
         var trainId: String?
-        if prefs.pinnedLine != nil {
+        if let tripTrain = prefs.plannedTripPin?.train {
+            trainId = [
+                prefs.plannedTripPin?.id.uuidString,
+                tripTrain.stationId.map(String.init),
+                tripTrain.destinationName,
+                tripTrain.line.rawValue
+            ].compactMap { $0 }.joined(separator: "-")
+        } else if prefs.pinnedLine != nil {
             // Use mapId + destination if we know them, else just "<line>"
             let parts: [String] = [
                 prefs.pinnedStationId.map { "\($0)" },
@@ -66,10 +77,22 @@ actor LiveActivityCoordinator {
             trainId = parts.joined(separator: "-")
         }
         var busId: String?
-        if let route = prefs.pinnedBusRoute {
-            busId = [route, prefs.pinnedBusDirection].compactMap { $0 }.joined(separator: "-")
+        if let tripBus = prefs.plannedTripPin?.bus {
+            busId = [
+                prefs.plannedTripPin?.id.uuidString,
+                tripBus.route,
+                tripBus.directionLabel,
+                tripBus.stopId.map(String.init)
+            ].compactMap { $0 }.joined(separator: "-")
+        } else if let route = prefs.pinnedBusRoute {
+            busId = [
+                route,
+                prefs.pinnedBusDirection,
+                prefs.pinnedBusStopId.map(String.init)
+            ].compactMap { $0 }.joined(separator: "-")
         }
-        return (trainId, busId)
+        let metraId: String? = nil
+        return (trainId, busId, metraId)
     }
 
     private func makeTrainLeg(
@@ -79,7 +102,10 @@ actor LiveActivityCoordinator {
         // Prefer the pinned line if present; else first tracked; else nothing
         // (we don't auto-fill a "fallback" arrival when only bus is pinned).
         let line: LineColor
-        if let pinned = prefs.pinnedLine {
+        let tripTrain = prefs.plannedTripPin?.train
+        if let tripTrain {
+            line = tripTrain.line
+        } else if let pinned = prefs.pinnedLine {
             line = pinned
         } else if let tracked = prefs.trains.first {
             line = tracked.line
@@ -94,10 +120,10 @@ actor LiveActivityCoordinator {
         }
 
         var arrivals = snapshot.trainArrivals.filter { $0.line == line }
-        if let stationId = prefs.pinnedStationId {
+        if let stationId = tripTrain?.stationId ?? prefs.pinnedStationId {
             arrivals = arrivals.filter { $0.stationId == stationId }
         }
-        if let destination = prefs.pinnedTrainDestination {
+        if let destination = tripTrain?.destinationName ?? prefs.pinnedTrainDestination {
             arrivals = arrivals.filter { $0.destinationName == destination }
         }
         // Drop already-departed predictions so the published `nextArrival`
@@ -112,7 +138,7 @@ actor LiveActivityCoordinator {
         return CommuteAttributes.TrainLeg(
             routeLabel: line.displayName,
             lineColorRaw: line.rawValue,
-            stopName: first.stationName,
+            stopName: tripTrain?.stationName ?? first.stationName,
             destination: first.destinationName,
             nextArrival: first.arrivalAt,
             followingArrival: following?.arrivalAt,
@@ -127,10 +153,14 @@ actor LiveActivityCoordinator {
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot
     ) -> CommuteAttributes.BusLeg? {
-        guard let route = prefs.pinnedBusRoute else { return nil }
+        let tripBus = prefs.plannedTripPin?.bus
+        guard let route = tripBus?.route ?? prefs.pinnedBusRoute else { return nil }
         var predictions = snapshot.busPredictions.filter { $0.route == route }
-        if let direction = prefs.pinnedBusDirection {
+        if let direction = tripBus?.directionLabel ?? prefs.pinnedBusDirection {
             predictions = predictions.filter { $0.directionName == direction }
+        }
+        if let stopId = tripBus?.stopId ?? prefs.pinnedBusStopId {
+            predictions = predictions.filter { $0.stopId == stopId }
         }
         let now = Date()
         let sorted = predictions
@@ -140,8 +170,8 @@ actor LiveActivityCoordinator {
         let following = sorted.dropFirst().first
         return CommuteAttributes.BusLeg(
             routeLabel: "Route \(route)",
-            stopName: first.stopName,
-            directionLabel: prefs.pinnedBusDirection ?? first.directionName,
+            stopName: tripBus?.stopName ?? first.stopName,
+            directionLabel: tripBus?.directionLabel ?? prefs.pinnedBusDirection ?? first.directionName,
             destination: first.destinationName,
             nextArrival: first.arrivalAt,
             followingArrival: following?.arrivalAt,
@@ -154,9 +184,10 @@ actor LiveActivityCoordinator {
 
     private func soonestArrival(
         train: CommuteAttributes.TrainLeg?,
-        bus: CommuteAttributes.BusLeg?
+        bus: CommuteAttributes.BusLeg?,
+        metra: CommuteAttributes.MetraLeg? = nil
     ) -> Date {
-        let dates = [train?.nextArrival, bus?.nextArrival].compactMap { $0 }
+        let dates = [train?.nextArrival, bus?.nextArrival, metra?.nextArrival].compactMap { $0 }
         return dates.min() ?? Date().addingTimeInterval(600)
     }
 
@@ -186,10 +217,10 @@ actor LiveActivityCoordinator {
             upcomingArrivals: upcoming.prefix(6).map(\.arrivalAt)
         )
 
-        let state = CommuteAttributes.ContentState(train: trainLeg, bus: nil)
+        let state = CommuteAttributes.ContentState(train: trainLeg, bus: nil, metra: nil)
         let staleDate = trainLeg.nextArrival
         await startInternal(
-            identity: (train: "\(preference.mapId)-\(trainLeg.destination)", bus: nil),
+            identity: (train: "\(preference.mapId)-\(trainLeg.destination)", bus: nil, metra: nil),
             state: state,
             staleDate: staleDate,
             persistent: false
@@ -199,14 +230,15 @@ actor LiveActivityCoordinator {
     // MARK: - Internals
 
     private func startInternal(
-        identity: (train: String?, bus: String?),
+        identity: (train: String?, bus: String?, metra: String?),
         state: CommuteAttributes.ContentState,
         staleDate: Date,
         persistent: Bool
     ) async {
         let attributes = CommuteAttributes(
             trainIdentity: identity.train,
-            busIdentity: identity.bus
+            busIdentity: identity.bus,
+            metraIdentity: identity.metra
         )
         do {
             let activity = try Activity.request(

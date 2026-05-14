@@ -1,9 +1,8 @@
 import Foundation
 import TransitModels
 
-/// Given a current location, available stations, and (optionally) free-floating
-/// e-bikes, pick the **nearest Divvy station that actually has an e-bike** —
-/// either docked at the station or floating within walking distance of it.
+/// Given a current location, available stations, and optional per-bike data,
+/// pick nearby Divvy station options and free-floating e-bike options.
 ///
 /// Selection is pure distance once the "has an e-bike" filter is applied. The
 /// older scoring (range-penalty + scarcity-penalty) sometimes promoted a
@@ -41,6 +40,35 @@ public struct NearestBikeResolver: Sendable {
         ).first
     }
 
+    public func nearby(
+        topStations: Int,
+        topFreeFloating: Int,
+        from origin: (lat: Double, lon: Double),
+        stations: [BikeStation],
+        eBikes: [EBike],
+        includeFreeFloating: Bool,
+        now: Date = .now
+    ) -> NearbyBikeResults {
+        NearbyBikeResults(
+            stationPicks: picks(
+                top: topStations,
+                from: origin,
+                stations: stations,
+                eBikes: eBikes,
+                includeFreeFloating: false,
+                now: now
+            ),
+            freeFloatingPicks: includeFreeFloating
+                ? freeFloatingPicks(
+                    top: topFreeFloating,
+                    from: origin,
+                    eBikes: eBikes,
+                    now: now
+                )
+                : []
+        )
+    }
+
     /// Returns up to `top` nearest stations (by walking distance) that each have
     /// at least one usable e-bike. Sorted ascending by distance. Used by the
     /// dashboard's "Closest e-bikes" list.
@@ -54,8 +82,9 @@ public struct NearestBikeResolver: Sendable {
     ) -> [NearestBikePick] {
         guard top > 0 else { return [] }
 
-        let usableBikes = eBikes.filter { !$0.isReserved && !$0.isDisabled
-            && $0.currentRangeMeters >= minimumUsableRangeMeters }
+        let dockedBikesByStation = Dictionary(grouping: usableBikes(from: eBikes).filter { !$0.isFreeFloating }) {
+            $0.stationId ?? ""
+        }
 
         let candidates: [Candidate] = stations.compactMap { station in
             let distance = Distance.meters(
@@ -64,28 +93,22 @@ public struct NearestBikeResolver: Sendable {
             )
             guard distance <= maxStationDistanceMeters else { return nil }
 
-            // Free-floating e-bikes near this station (irrespective of station_id).
-            let nearby = usableBikes.filter { bike in
-                Distance.meters(
-                    from: (bike.latitude, bike.longitude),
-                    to: (station.latitude, station.longitude)
-                ) <= freeFloatingPickRadiusMeters
-            }
-
             let stationCount = station.eBikesAvailable
-            let totalAvailable = stationCount + (includeFreeFloating ? nearby.count : 0)
-            guard totalAvailable > 0 else { return nil }
+            guard stationCount > 0 else { return nil }
+
+            let dockedBikes = (dockedBikesByStation[station.id] ?? [])
+                .sorted { $0.currentRangeMeters > $1.currentRangeMeters }
 
             let bestRange = max(
                 station.eBikesAvailable > 0 ? minimumUsableRangeMeters : 0,
-                nearby.map(\.currentRangeMeters).max() ?? 0
+                dockedBikes.map(\.currentRangeMeters).max() ?? 0
             )
 
             return Candidate(
                 station: station,
                 walkingDistance: distance,
                 bestRange: bestRange,
-                freeFloating: nearby.count,
+                dockedBikes: dockedBikes,
                 stationCount: stationCount
             )
         }
@@ -95,10 +118,62 @@ public struct NearestBikeResolver: Sendable {
                 station: winner.station,
                 walkingDistanceMeters: winner.walkingDistance,
                 bestRangeMeters: winner.bestRange,
-                freeFloatingNearby: winner.freeFloating,
+                dockedBikes: winner.dockedBikes,
+                freeFloatingNearby: 0,
+                nearbyFreeFloatingBikes: [],
                 computedAt: now
             )
         }
+    }
+
+    public func freeFloatingPicks(
+        top: Int,
+        from origin: (lat: Double, lon: Double),
+        eBikes: [EBike],
+        now: Date = .now
+    ) -> [NearestFreeBikePick] {
+        guard top > 0 else { return [] }
+
+        return usableBikes(from: eBikes)
+            .filter(\.isFreeFloating)
+            .compactMap { bike -> FreeBikeCandidate? in
+                let distance = Distance.meters(
+                    from: origin,
+                    to: (bike.latitude, bike.longitude)
+                )
+                guard distance <= maxStationDistanceMeters else { return nil }
+                return FreeBikeCandidate(bike: bike, walkingDistance: distance)
+            }
+            .sorted(by: <)
+            .prefix(top)
+            .map {
+                NearestFreeBikePick(
+                    bike: $0.bike,
+                    walkingDistanceMeters: $0.walkingDistance,
+                    computedAt: now
+                )
+            }
+    }
+
+    private func usableBikes(from eBikes: [EBike]) -> [EBike] {
+        eBikes.filter {
+            !$0.isReserved
+                && !$0.isDisabled
+                && $0.currentRangeMeters >= minimumUsableRangeMeters
+        }
+    }
+}
+
+public struct NearbyBikeResults: Sendable, Hashable {
+    public let stationPicks: [NearestBikePick]
+    public let freeFloatingPicks: [NearestFreeBikePick]
+
+    public init(
+        stationPicks: [NearestBikePick],
+        freeFloatingPicks: [NearestFreeBikePick]
+    ) {
+        self.stationPicks = stationPicks
+        self.freeFloatingPicks = freeFloatingPicks
     }
 }
 
@@ -106,7 +181,7 @@ private struct Candidate: Comparable {
     let station: BikeStation
     let walkingDistance: Double
     let bestRange: Double
-    let freeFloating: Int
+    let dockedBikes: [EBike]
     let stationCount: Int
 
     // Strictly nearest first. Tie-breaker prefers stations with more bikes
@@ -115,6 +190,18 @@ private struct Candidate: Comparable {
         if lhs.walkingDistance != rhs.walkingDistance {
             return lhs.walkingDistance < rhs.walkingDistance
         }
-        return (lhs.stationCount + lhs.freeFloating) > (rhs.stationCount + rhs.freeFloating)
+        return lhs.stationCount > rhs.stationCount
+    }
+}
+
+private struct FreeBikeCandidate: Comparable {
+    let bike: EBike
+    let walkingDistance: Double
+
+    static func < (lhs: FreeBikeCandidate, rhs: FreeBikeCandidate) -> Bool {
+        if lhs.walkingDistance != rhs.walkingDistance {
+            return lhs.walkingDistance < rhs.walkingDistance
+        }
+        return lhs.bike.currentRangeMeters > rhs.bike.currentRangeMeters
     }
 }

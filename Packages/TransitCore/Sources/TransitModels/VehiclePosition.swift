@@ -4,7 +4,7 @@ import Foundation
 /// `ttpositions.aspx` for trains and `getvehicles` for buses.
 public struct VehiclePosition: Codable, Sendable, Hashable, Identifiable {
     public enum Mode: String, Codable, Sendable {
-        case train, bus
+        case train, bus, metra
     }
 
     /// Run number for trains (e.g. "401"), vehicle id for buses (e.g. "1841").

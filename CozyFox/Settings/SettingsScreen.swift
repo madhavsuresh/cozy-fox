@@ -9,12 +9,15 @@ struct SettingsScreen: View {
     @State private var anchors: CommuteAnchors = .empty
     @State private var trainKey: String = ""
     @State private var busKey: String = ""
+    @State private var metraKey: String = ""
     @State private var showWorkEntry: Bool = false
     @State private var trainVerify: APIKeyCheck = .untested
     @State private var busVerify: APIKeyCheck = .untested
+    @State private var metraVerify: APIKeyCheck = .untested
     @State private var isVerifying: Bool = false
     @State private var trainSaveStatus: String = "—"
     @State private var busSaveStatus: String = "—"
+    @State private var metraSaveStatus: String = "—"
     @State private var learningDataVersion: Int = 0
     @State private var currentApproximateAddress: String?
     @State private var homeApproximateAddress: String?
@@ -50,6 +53,19 @@ struct SettingsScreen: View {
                     .foregroundStyle(.secondary)
                 statusRow(for: busVerify, label: "Bus key")
 
+                SecureField("Metra GTFS key", text: $metraKey)
+                    .textContentType(.password)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .onChange(of: metraKey) { _, newValue in
+                        metraSaveStatus = saveAndRoundtrip(.metra, value: newValue)
+                        metraVerify = .untested
+                    }
+                Text("Metra key: \(metraSaveStatus)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                statusRow(for: metraVerify, label: "Metra key")
+
                 Button("Reload from Keychain") {
                     reloadFromKeychain()
                 }
@@ -59,14 +75,14 @@ struct SettingsScreen: View {
                 } label: {
                     HStack {
                         if isVerifying { ProgressView().scaleEffect(0.8) }
-                        Text(isVerifying ? "Verifying…" : "Verify keys against CTA")
+                        Text(isVerifying ? "Verifying…" : "Verify keys")
                     }
                 }
-                .disabled(isVerifying || (trainKey.isEmpty && busKey.isEmpty))
+                .disabled(isVerifying || (trainKey.isEmpty && busKey.isEmpty && metraKey.isEmpty))
             } header: {
                 Text("API keys")
             } footer: {
-                Text("Keys auto-save to the iOS Keychain on every keystroke; the status line below each field shows the round-trip read-back. Tap Verify to confirm each key is accepted by the CTA API.")
+                Text("Keys auto-save to the iOS Keychain on every keystroke; the status line below each field shows the round-trip read-back. Tap Verify to confirm each key is accepted by its transit API.")
                     .font(.footnote)
             }
 
@@ -243,10 +259,13 @@ struct SettingsScreen: View {
     private func reloadFromKeychain() {
         let t = APIKeys.read(.trainTracker) ?? ""
         let b = APIKeys.read(.busTracker) ?? ""
+        let m = APIKeys.read(.metra) ?? ""
         trainKey = t
         busKey = b
+        metraKey = m
         trainSaveStatus = t.isEmpty ? "Keychain empty" : "✓ Loaded \(t.count) chars from Keychain"
         busSaveStatus = b.isEmpty ? "Keychain empty" : "✓ Loaded \(b.count) chars from Keychain"
+        metraSaveStatus = m.isEmpty ? "Keychain empty" : "✓ Loaded \(m.count) chars from Keychain"
     }
 
     private func save() {
@@ -261,6 +280,11 @@ struct SettingsScreen: View {
             prefs.pinnedTrainDestination = nil
             prefs.pinnedBusRoute = nil
             prefs.pinnedBusDirection = nil
+            prefs.pinnedBusStopId = nil
+            prefs.pinnedMetraRoute = nil
+            prefs.pinnedMetraStationId = nil
+            prefs.pinnedMetraDirectionId = nil
+            prefs.pinnedMetraDestination = nil
             prefs.autoPinnedDirection = nil
             prefs.pinSource = .manual
         }
@@ -540,10 +564,25 @@ struct SettingsScreen: View {
             }
         }
         if let route = preferences.pinnedBusRoute {
-            if let direction = preferences.pinnedBusDirection {
+            if let stopId = preferences.pinnedBusStopId,
+               let stop = BusStopCatalog.all.first(where: { $0.route == route && $0.id == stopId })
+            {
+                pieces.append("Bus #\(route) at \(stop.name)")
+            } else if let direction = preferences.pinnedBusDirection {
                 pieces.append("Bus #\(route) \(direction)")
             } else {
                 pieces.append("Bus #\(route)")
+            }
+        }
+        if let route = preferences.pinnedMetraRoute {
+            if let stationId = preferences.pinnedMetraStationId,
+               let station = MetraStationCatalog.station(id: stationId)
+            {
+                pieces.append("Metra \(route) at \(station.name)")
+            } else if let destination = preferences.pinnedMetraDestination {
+                pieces.append("Metra \(route) to \(destination)")
+            } else {
+                pieces.append("Metra \(route)")
             }
         }
         return pieces.isEmpty ? nil : pieces.joined(separator: " + ")
@@ -607,7 +646,7 @@ struct SettingsScreen: View {
         case .untested:
             EmptyView()
         case .ok:
-            Label("\(label) accepted by CTA", systemImage: "checkmark.circle.fill")
+            Label("\(label) accepted", systemImage: "checkmark.circle.fill")
                 .font(.footnote)
                 .foregroundStyle(.green)
         case .badKey(let reason):
@@ -615,7 +654,7 @@ struct SettingsScreen: View {
                 .font(.footnote)
                 .foregroundStyle(.red)
         case .unreachable:
-            Label("\(label): couldn't reach CTA (network?)", systemImage: "wifi.exclamationmark")
+            Label("\(label): couldn't reach transit API (network?)", systemImage: "wifi.exclamationmark")
                 .font(.footnote)
                 .foregroundStyle(.orange)
         }
@@ -626,9 +665,11 @@ struct SettingsScreen: View {
         defer { isVerifying = false }
         async let train = APIKeyVerifier.checkTrainKey()
         async let bus = APIKeyVerifier.checkBusKey()
-        let (t, b) = await (train, bus)
+        async let metra = APIKeyVerifier.checkMetraKey()
+        let (t, b, m) = await (train, bus, metra)
         trainVerify = t
         busVerify = b
+        metraVerify = m
     }
 }
 
@@ -695,6 +736,27 @@ enum APIKeyVerifier {
                 return .badKey(msg)
             }
             if body["routes"] != nil { return .ok }
+            return .unreachable
+        } catch {
+            return .unreachable
+        }
+    }
+
+    static func checkMetraKey() async -> APIKeyCheck {
+        guard let key = APIKeys.read(.metra), !key.isEmpty else { return .untested }
+        guard let url = URL(string: "https://gtfspublic.metrarr.com/gtfs/public/tripupdates") else {
+            return .unreachable
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/x-protobuf", forHTTPHeaderField: "Accept")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return .unreachable }
+            if (200..<300).contains(http.statusCode) { return .ok }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                return .badKey("Metra rejected the bearer token")
+            }
             return .unreachable
         } catch {
             return .unreachable

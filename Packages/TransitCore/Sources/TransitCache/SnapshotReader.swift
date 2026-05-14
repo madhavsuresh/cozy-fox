@@ -20,8 +20,10 @@ public struct SnapshotReader: Sendable {
 
         let trainArrivals = (try? context.fetch(FetchDescriptor<CachedTrainArrival>())) ?? []
         let busPredictions = (try? context.fetch(FetchDescriptor<CachedBusPrediction>())) ?? []
+        let metraPredictions = (try? context.fetch(FetchDescriptor<CachedMetraPrediction>())) ?? []
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
+        let nearestFreeBikes = (try? context.fetch(FetchDescriptor<CachedNearestFreeBike>())) ?? []
 
         let arrivals = trainArrivals.compactMap(\.asModel)
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
@@ -31,12 +33,18 @@ public struct SnapshotReader: Sendable {
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
             .sorted { $0.arrivalAt < $1.arrivalAt }
 
+        let metra = metraPredictions.map(\.asModel)
+            .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+
         let activeAlerts = alerts.map(\.asModel)
             .filter { $0.isActive(at: now) }
 
         let nearbyPicks = nearestBikes
             .sorted { $0.rank < $1.rank }
             .map { row -> NearestBikePick in
+                let dockedBikes = Self.decodeBikes(from: row.dockedBikesJSON)
+                let freeFloatingBikes = Self.decodeBikes(from: row.freeFloatingBikesJSON)
                 let station = BikeStation(
                     id: row.stationId,
                     name: row.stationName,
@@ -54,10 +62,16 @@ public struct SnapshotReader: Sendable {
                     station: station,
                     walkingDistanceMeters: row.walkingDistanceMeters,
                     bestRangeMeters: row.bestRangeMeters,
+                    dockedBikes: dockedBikes,
                     freeFloatingNearby: row.freeFloatingNearby,
+                    nearbyFreeFloatingBikes: freeFloatingBikes,
                     computedAt: row.computedAt
                 )
             }
+
+        let nearbyFreePicks = nearestFreeBikes
+            .sorted { $0.rank < $1.rank }
+            .map(\.asModel)
 
         return TransitSnapshot(
             // 50 / 50 is enough headroom for: 3 nearest stations × ~5 trains
@@ -67,13 +81,21 @@ public struct SnapshotReader: Sendable {
             // stations once a busy primary station filled the budget.
             trainArrivals: Array(arrivals.prefix(50)),
             busPredictions: Array(predictions.prefix(50)),
+            metraPredictions: Array(metra.prefix(50)),
             nearestBike: nearbyPicks.first,
             nearbyBikePicks: nearbyPicks,
+            nearbyFreeBikePicks: nearbyFreePicks,
             activeAlerts: activeAlerts,
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
-            bikesFetchedAt: nearbyPicks.first?.computedAt,
+            metraFetchedAt: metraPredictions.first?.fetchedAt,
+            bikesFetchedAt: nearbyPicks.first?.computedAt ?? nearbyFreePicks.first?.computedAt,
             alertsFetchedAt: alerts.first?.fetchedAt
         )
+    }
+
+    private static func decodeBikes(from json: String?) -> [EBike] {
+        guard let json else { return [] }
+        return (try? JSONDecoder().decode([EBike].self, from: Data(json.utf8))) ?? []
     }
 }

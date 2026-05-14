@@ -107,6 +107,68 @@ public final class CachedBusPrediction {
     }
 }
 
+@Model
+public final class CachedMetraPrediction {
+    @Attribute(.unique) public var id: String
+    public var routeId: String
+    public var routeShortName: String
+    public var tripId: String
+    public var trainNumber: String
+    public var stationId: String
+    public var stationName: String
+    public var destinationName: String
+    public var directionId: Int?
+    public var generatedAt: Date
+    public var scheduledAt: Date
+    public var arrivalAt: Date
+    public var delaySeconds: Int?
+    public var isDelayed: Bool
+    public var isCanceled: Bool
+    public var isScheduled: Bool
+    public var fetchedAt: Date
+
+    public init(prediction: MetraPrediction, fetchedAt: Date) {
+        self.id = prediction.id
+        self.routeId = prediction.routeId
+        self.routeShortName = prediction.routeShortName
+        self.tripId = prediction.tripId
+        self.trainNumber = prediction.trainNumber
+        self.stationId = prediction.stationId
+        self.stationName = prediction.stationName
+        self.destinationName = prediction.destinationName
+        self.directionId = prediction.directionId
+        self.generatedAt = prediction.generatedAt
+        self.scheduledAt = prediction.scheduledAt
+        self.arrivalAt = prediction.arrivalAt
+        self.delaySeconds = prediction.delaySeconds
+        self.isDelayed = prediction.isDelayed
+        self.isCanceled = prediction.isCanceled
+        self.isScheduled = prediction.isScheduled
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: MetraPrediction {
+        MetraPrediction(
+            id: id,
+            routeId: routeId,
+            routeShortName: routeShortName,
+            tripId: tripId,
+            trainNumber: trainNumber,
+            stationId: stationId,
+            stationName: stationName,
+            destinationName: destinationName,
+            directionId: directionId,
+            generatedAt: generatedAt,
+            scheduledAt: scheduledAt,
+            arrivalAt: arrivalAt,
+            delaySeconds: delaySeconds,
+            isDelayed: isDelayed,
+            isCanceled: isCanceled,
+            isScheduled: isScheduled
+        )
+    }
+}
+
 /// One row per (stationId, snappedAt). Retained 14 days so the future
 /// `EBikeChurnEstimator` can read historical depletion rates.
 @Model
@@ -169,7 +231,9 @@ public final class CachedNearestBike {
     public var capacity: Int
     public var walkingDistanceMeters: Double
     public var bestRangeMeters: Double
+    public var dockedBikesJSON: String?
     public var freeFloatingNearby: Int
+    public var freeFloatingBikesJSON: String?
     public var computedAt: Date
 
     public init(pick: NearestBikePick, rank: Int = 0) {
@@ -183,8 +247,57 @@ public final class CachedNearestBike {
         self.capacity = pick.station.capacity
         self.walkingDistanceMeters = pick.walkingDistanceMeters
         self.bestRangeMeters = pick.bestRangeMeters
+        if let data = try? JSONEncoder().encode(pick.dockedBikes) {
+            self.dockedBikesJSON = String(data: data, encoding: .utf8)
+        } else {
+            self.dockedBikesJSON = nil
+        }
         self.freeFloatingNearby = pick.freeFloatingNearby
+        if let data = try? JSONEncoder().encode(pick.nearbyFreeFloatingBikes) {
+            self.freeFloatingBikesJSON = String(data: data, encoding: .utf8)
+        } else {
+            self.freeFloatingBikesJSON = nil
+        }
         self.computedAt = pick.computedAt
+    }
+}
+
+@Model
+public final class CachedNearestFreeBike {
+    @Attribute(.unique) public var key: String
+    public var rank: Int = 0
+    public var bikeId: String
+    public var latitude: Double
+    public var longitude: Double
+    public var currentRangeMeters: Double
+    public var walkingDistanceMeters: Double
+    public var computedAt: Date
+
+    public init(pick: NearestFreeBikePick, rank: Int = 0) {
+        self.key = "free-rank-\(rank)"
+        self.rank = rank
+        self.bikeId = pick.bike.id
+        self.latitude = pick.bike.latitude
+        self.longitude = pick.bike.longitude
+        self.currentRangeMeters = pick.bike.currentRangeMeters
+        self.walkingDistanceMeters = pick.walkingDistanceMeters
+        self.computedAt = pick.computedAt
+    }
+
+    public var asModel: NearestFreeBikePick {
+        NearestFreeBikePick(
+            bike: EBike(
+                id: bikeId,
+                latitude: latitude,
+                longitude: longitude,
+                currentRangeMeters: currentRangeMeters,
+                isReserved: false,
+                isDisabled: false,
+                stationId: nil
+            ),
+            walkingDistanceMeters: walkingDistanceMeters,
+            computedAt: computedAt
+        )
     }
 }
 
@@ -214,7 +327,7 @@ public final class CachedAlert {
         self.beginsAt = alert.beginsAt
         self.endsAt = alert.endsAt
         self.isMajor = alert.isMajor
-        self.detailURLString = nil
+        self.detailURLString = alert.detailURL?.absoluteString
         self.fetchedAt = fetchedAt
     }
 
@@ -229,7 +342,8 @@ public final class CachedAlert {
             impactedLineColors: impactedRoutes.compactMap { LineColor(ctaRouteCode: $0) },
             beginsAt: beginsAt,
             endsAt: endsAt,
-            isMajor: isMajor
+            isMajor: isMajor,
+            detailURL: detailURLString.flatMap(URL.init(string:))
         )
     }
 }

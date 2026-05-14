@@ -1,7 +1,8 @@
 import SwiftUI
 import TransitModels
 
-/// A compact, high-contrast badge identifying a CTA L line or a bus
+/// A compact, high-contrast badge identifying a CTA L line, CTA bus route,
+/// or Metra line.
 /// route. The only place in the app where CTA brand colours appear —
 /// every other surface uses the Chicago palette. Riders recognise the
 /// Red Line *by red*; that's wayfinding, not decoration, and we
@@ -13,6 +14,7 @@ public struct RouteBadge: View {
     public enum Kind: Sendable {
         case lLine(LineColor)
         case bus(route: String)
+        case metra(routeId: String)
     }
 
     public enum Size: Sendable {
@@ -50,6 +52,11 @@ public struct RouteBadge: View {
         self.size = size
     }
 
+    public init(metra routeId: String, size: Size = .md) {
+        self.kind = .metra(routeId: routeId)
+        self.size = size
+    }
+
     public var body: some View {
         Text(label)
             .font(badgeFont)
@@ -68,6 +75,7 @@ public struct RouteBadge: View {
         switch kind {
         case .lLine(let line): line.shortName
         case .bus(let route): "#\(route)"
+        case .metra(let routeId): routeId
         }
     }
 
@@ -75,6 +83,8 @@ public struct RouteBadge: View {
         switch kind {
         case .lLine(let line): line.displayName
         case .bus(let route): "Bus route \(route)"
+        case .metra(let routeId):
+            MetraStationCatalog.route(id: routeId)?.displayName ?? "Metra \(routeId)"
         }
     }
 
@@ -82,6 +92,8 @@ public struct RouteBadge: View {
         switch kind {
         case .lLine(let line): line.swiftUIColor
         case .bus: ChicagoPalette.flagBlue
+        case .metra(let routeId):
+            MetraStationCatalog.route(id: routeId)?.swiftUIColor ?? ChicagoPalette.bahama
         }
     }
 
@@ -89,6 +101,8 @@ public struct RouteBadge: View {
         switch kind {
         case .lLine(let line): line.contrastingText
         case .bus: .white
+        case .metra(let routeId):
+            MetraStationCatalog.route(id: routeId)?.contrastingText ?? .white
         }
     }
 

@@ -18,3 +18,21 @@ public extension LineColor {
         }
     }
 }
+
+public extension MetraLine {
+    var swiftUIColor: Color {
+        Color(
+            red: Double((hex >> 16) & 0xFF) / 255.0,
+            green: Double((hex >> 8) & 0xFF) / 255.0,
+            blue: Double(hex & 0xFF) / 255.0
+        )
+    }
+
+    var contrastingText: Color {
+        Color(
+            red: Double((textHex >> 16) & 0xFF) / 255.0,
+            green: Double((textHex >> 8) & 0xFF) / 255.0,
+            blue: Double(textHex & 0xFF) / 255.0
+        )
+    }
+}

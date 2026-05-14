@@ -56,6 +56,35 @@ public struct BusPreference: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+/// One of the user's tracked Metra stations: a line + station pair.
+public struct MetraPreference: Codable, Sendable, Hashable, Identifiable {
+    public let id: UUID
+    public let routeId: String
+    public let stationId: String
+    public let stationName: String
+    public let directionId: Int?
+    public let directionLabel: String
+    public let direction: CommuteDirection
+
+    public init(
+        id: UUID = UUID(),
+        routeId: String,
+        stationId: String,
+        stationName: String,
+        directionId: Int?,
+        directionLabel: String,
+        direction: CommuteDirection
+    ) {
+        self.id = id
+        self.routeId = routeId
+        self.stationId = stationId
+        self.stationName = stationName
+        self.directionId = directionId
+        self.directionLabel = directionLabel
+        self.direction = direction
+    }
+}
+
 public enum CommuteDirection: String, Codable, Sendable, Hashable, CaseIterable {
     /// The leg you take when going **toward** Home.
     case toHome
@@ -85,10 +114,128 @@ public enum RoutePinSource: String, Codable, Sendable, Hashable {
     }
 }
 
+public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
+    public enum Destination: String, Codable, Sendable, Hashable {
+        case home
+
+        public var label: String {
+            switch self {
+            case .home: "Home"
+            }
+        }
+    }
+
+    public struct TrainLeg: Codable, Sendable, Hashable {
+        public let line: LineColor
+        public let stationId: Int?
+        public let stationName: String
+        public let destinationName: String?
+
+        public init(
+            line: LineColor,
+            stationId: Int?,
+            stationName: String,
+            destinationName: String? = nil
+        ) {
+            self.line = line
+            self.stationId = stationId
+            self.stationName = stationName
+            self.destinationName = destinationName
+        }
+    }
+
+    public struct BusLeg: Codable, Sendable, Hashable {
+        public let route: String
+        public let stopId: Int?
+        public let stopName: String
+        public let directionLabel: String?
+
+        public init(
+            route: String,
+            stopId: Int?,
+            stopName: String,
+            directionLabel: String? = nil
+        ) {
+            self.route = route
+            self.stopId = stopId
+            self.stopName = stopName
+            self.directionLabel = directionLabel
+        }
+    }
+
+    public struct MetraLeg: Codable, Sendable, Hashable {
+        public let routeId: String
+        public let stationId: String?
+        public let stationName: String
+        public let directionId: Int?
+        public let destinationName: String?
+
+        public init(
+            routeId: String,
+            stationId: String?,
+            stationName: String,
+            directionId: Int? = nil,
+            destinationName: String? = nil
+        ) {
+            self.routeId = routeId
+            self.stationId = stationId
+            self.stationName = stationName
+            self.directionId = directionId
+            self.destinationName = destinationName
+        }
+    }
+
+    public let id: UUID
+    public let destination: Destination
+    public let title: String
+    public let summary: String
+    public let createdAt: Date
+    public let expectedArrivalAt: Date?
+    public let expectedTravelTime: TimeInterval
+    public let allowMultimodal: Bool
+    public let train: TrainLeg?
+    public let bus: BusLeg?
+    public let metra: MetraLeg?
+
+    public init(
+        id: UUID = UUID(),
+        destination: Destination,
+        title: String,
+        summary: String,
+        createdAt: Date = .now,
+        expectedArrivalAt: Date?,
+        expectedTravelTime: TimeInterval,
+        allowMultimodal: Bool,
+        train: TrainLeg?,
+        bus: BusLeg?,
+        metra: MetraLeg? = nil
+    ) {
+        self.id = id
+        self.destination = destination
+        self.title = title
+        self.summary = summary
+        self.createdAt = createdAt
+        self.expectedArrivalAt = expectedArrivalAt
+        self.expectedTravelTime = expectedTravelTime
+        self.allowMultimodal = allowMultimodal
+        self.train = train
+        self.bus = bus
+        self.metra = metra
+    }
+
+    public func isExpired(now: Date = .now) -> Bool {
+        guard let expectedArrivalAt else {
+            return now.timeIntervalSince(createdAt) > 2 * 60 * 60
+        }
+        return now > expectedArrivalAt.addingTimeInterval(10 * 60)
+    }
+}
+
 /// Top-level user preferences, persisted in App Group UserDefaults.
 public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var trains: [TrainPreference]
     public var buses: [BusPreference]
+    public var metra: [MetraPreference]
     public var includeFreeFloatingBikes: Bool
     /// Auto-start a Live Activity on region exit (leaving home/work).
     /// Only meaningful when `alwaysShowLiveActivity == false`.
@@ -115,6 +262,20 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// Direction label ("Northbound", "Eastbound", …) the user picked for
     /// the pinned bus route. Cleared whenever `pinnedBusRoute` changes.
     public var pinnedBusDirection: String?
+    /// Specific CTA bus stop id the user chose on the pinned route. When nil,
+    /// the dashboard auto-picks the nearest stop for `pinnedBusDirection`.
+    /// Cleared whenever `pinnedBusRoute` or `pinnedBusDirection` changes.
+    public var pinnedBusStopId: Int?
+    /// User has explicitly pinned a Metra line (for example "BNSF" or
+    /// "UP-N"). The refresh path surfaces the nearest station on that line.
+    public var pinnedMetraRoute: String?
+    /// Specific Metra station id on the pinned route. When nil, the dashboard
+    /// picks the nearest station on `pinnedMetraRoute`.
+    public var pinnedMetraStationId: String?
+    /// Optional GTFS direction id for the pinned Metra route/station.
+    public var pinnedMetraDirectionId: Int?
+    /// Destination/headsign label for the pinned Metra direction.
+    public var pinnedMetraDestination: String?
     /// User-controlled override for the 30 s foreground refresh ticker. When
     /// off, the app falls back to pull-to-refresh + background tasks (which
     /// run every 15–45 min depending on commute window). iOS Low Power Mode
@@ -132,10 +293,15 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var lastAutoPinAt: Date?
     /// Direction the current automatic pin is intended to surface.
     public var autoPinnedDirection: CommuteDirection?
+    /// A trip-level pin created from a planned route. This can point at
+    /// transfer stops that are not near the user yet, so widgets and Live
+    /// Activities should prefer it over generic route pins.
+    public var plannedTripPin: PlannedTripPin?
 
     public init(
         trains: [TrainPreference] = [],
         buses: [BusPreference] = [],
+        metra: [MetraPreference] = [],
         includeFreeFloatingBikes: Bool = true,
         autoStartLiveActivity: Bool = true,
         alwaysShowLiveActivity: Bool = true,
@@ -144,15 +310,22 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         pinnedTrainDestination: String? = nil,
         pinnedBusRoute: String? = nil,
         pinnedBusDirection: String? = nil,
+        pinnedBusStopId: Int? = nil,
+        pinnedMetraRoute: String? = nil,
+        pinnedMetraStationId: String? = nil,
+        pinnedMetraDirectionId: Int? = nil,
+        pinnedMetraDestination: String? = nil,
         liveUpdatesEnabled: Bool = true,
         autopinEnabled: Bool = true,
         pinSource: RoutePinSource = .manual,
         lastManualPinAt: Date? = nil,
         lastAutoPinAt: Date? = nil,
-        autoPinnedDirection: CommuteDirection? = nil
+        autoPinnedDirection: CommuteDirection? = nil,
+        plannedTripPin: PlannedTripPin? = nil
     ) {
         self.trains = trains
         self.buses = buses
+        self.metra = metra
         self.includeFreeFloatingBikes = includeFreeFloatingBikes
         self.autoStartLiveActivity = autoStartLiveActivity
         self.alwaysShowLiveActivity = alwaysShowLiveActivity
@@ -161,12 +334,18 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedTrainDestination = pinnedTrainDestination
         self.pinnedBusRoute = pinnedBusRoute
         self.pinnedBusDirection = pinnedBusDirection
+        self.pinnedBusStopId = pinnedBusStopId
+        self.pinnedMetraRoute = pinnedMetraRoute
+        self.pinnedMetraStationId = pinnedMetraStationId
+        self.pinnedMetraDirectionId = pinnedMetraDirectionId
+        self.pinnedMetraDestination = pinnedMetraDestination
         self.liveUpdatesEnabled = liveUpdatesEnabled
         self.autopinEnabled = autopinEnabled
         self.pinSource = pinSource
         self.lastManualPinAt = lastManualPinAt
         self.lastAutoPinAt = lastAutoPinAt
         self.autoPinnedDirection = autoPinnedDirection
+        self.plannedTripPin = plannedTripPin
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
@@ -175,6 +354,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.trains = (try? c.decode([TrainPreference].self, forKey: .trains)) ?? []
         self.buses = (try? c.decode([BusPreference].self, forKey: .buses)) ?? []
+        self.metra = (try? c.decode([MetraPreference].self, forKey: .metra)) ?? []
         self.includeFreeFloatingBikes = (try? c.decode(Bool.self, forKey: .includeFreeFloatingBikes)) ?? true
         self.autoStartLiveActivity = (try? c.decode(Bool.self, forKey: .autoStartLiveActivity)) ?? true
         self.alwaysShowLiveActivity = (try? c.decode(Bool.self, forKey: .alwaysShowLiveActivity)) ?? true
@@ -183,18 +363,24 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedTrainDestination = try? c.decode(String.self, forKey: .pinnedTrainDestination)
         self.pinnedBusRoute = try? c.decode(String.self, forKey: .pinnedBusRoute)
         self.pinnedBusDirection = try? c.decode(String.self, forKey: .pinnedBusDirection)
+        self.pinnedBusStopId = try? c.decode(Int.self, forKey: .pinnedBusStopId)
+        self.pinnedMetraRoute = try? c.decode(String.self, forKey: .pinnedMetraRoute)
+        self.pinnedMetraStationId = try? c.decode(String.self, forKey: .pinnedMetraStationId)
+        self.pinnedMetraDirectionId = try? c.decode(Int.self, forKey: .pinnedMetraDirectionId)
+        self.pinnedMetraDestination = try? c.decode(String.self, forKey: .pinnedMetraDestination)
         self.liveUpdatesEnabled = (try? c.decode(Bool.self, forKey: .liveUpdatesEnabled)) ?? true
         self.autopinEnabled = (try? c.decode(Bool.self, forKey: .autopinEnabled)) ?? true
         self.pinSource = (try? c.decode(RoutePinSource.self, forKey: .pinSource)) ?? .manual
         self.lastManualPinAt = try? c.decode(Date.self, forKey: .lastManualPinAt)
         self.lastAutoPinAt = try? c.decode(Date.self, forKey: .lastAutoPinAt)
         self.autoPinnedDirection = try? c.decode(CommuteDirection.self, forKey: .autoPinnedDirection)
+        self.plannedTripPin = try? c.decode(PlannedTripPin.self, forKey: .plannedTripPin)
     }
 
     public static let empty = UserRoutePreferences()
 
     public var hasPinnedTransit: Bool {
-        pinnedLine != nil || pinnedBusRoute != nil
+        pinnedLine != nil || pinnedBusRoute != nil || pinnedMetraRoute != nil || plannedTripPin != nil
     }
 
     public mutating func markManualPin(at date: Date = .now) {
@@ -207,5 +393,11 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         pinSource = .automatic
         lastAutoPinAt = date
         autoPinnedDirection = direction
+    }
+
+    public mutating func clearExpiredPlannedTripPin(now: Date = .now) -> Bool {
+        guard let plannedTripPin, plannedTripPin.isExpired(now: now) else { return false }
+        self.plannedTripPin = nil
+        return true
     }
 }

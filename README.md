@@ -1,14 +1,15 @@
 # Cozy Fox
 
-A glanceable Chicago transit dashboard for iPhone. Trains, buses, and Divvy e-bikes on your home screen — context-aware to where you are, privacy-respecting, no backend.
+A glanceable Chicago transit dashboard for iPhone. CTA trains, CTA buses, Metra, and Divvy e-bikes on your home screen — context-aware to where you are, privacy-respecting, no backend.
 
 ## Requirements
 
 - macOS with Xcode 26+
 - iOS 26 device (or simulator) for full Liquid Glass widgets and Live Activities
 - Free API keys: [CTA Train Tracker](https://www.transitchicago.com/developers/traintrackerapply/) and [CTA Bus Tracker](https://www.transitchicago.com/developers/bustracker/)
+- Optional realtime key: [Metra GTFS Realtime](https://metra.com/gtfs-realtime-api-key-request-license-agreement)
 
-Divvy GBFS is public and needs no auth.
+Metra schedules and Divvy GBFS are public and need no auth.
 
 ## Quick start
 
@@ -22,7 +23,7 @@ Then in Xcode:
 
 1. Select the **CozyFox** scheme and a real device (Live Activities and region monitoring don't work in the simulator).
 2. In **Signing & Capabilities** for each target (CozyFox, CozyFoxWidget, CozyFoxLiveActivity), pick your Apple ID team. The bundle IDs are pre-set to `net.thoughtbison.cozyfox*`.
-3. Build & run. On first launch, the onboarding flow asks for your two CTA API keys, Home + Work locations, and your usual stations.
+3. Build & run. On first launch, the onboarding flow asks for your CTA API keys, optional Metra realtime key, Home + Work locations, and your usual routes.
 
 ## Architecture
 
@@ -50,10 +51,12 @@ Cozy Fox has no backend. Your phone talks directly to:
 - `gbfs.lyft.com` for Divvy data (public, no auth)
 - `lapi.transitchicago.com` for CTA train arrivals (your API key)
 - `ctabustracker.com` for CTA bus arrivals (your API key)
+- `schedules.metrarail.com` for bundled Metra schedules (public)
+- `gtfspublic.metrarr.com` for Metra realtime updates, vehicle positions, and alerts (your Metra key, if set)
 - `transitchicago.com/api/1.0/alerts.aspx` for CTA alerts (public)
 
 Location is only used for:
 - Region monitoring around your set Home and Work (entry/exit events; no continuous tracking)
 - A one-shot foreground update when you open the app or refresh
 
-API keys live in the iOS Keychain, scoped to the app + widget access group.
+API keys live in the shared app-group defaults store, scoped to the app + widget access group.

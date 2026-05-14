@@ -29,8 +29,20 @@ public struct MediumDashboardView: View {
         }
     }
 
+    public struct MetraPick: Sendable, Hashable {
+        public let route: String
+        public let stationLabel: String
+        public let predictions: [MetraPrediction]
+        public init(route: String, stationLabel: String, predictions: [MetraPrediction]) {
+            self.route = route
+            self.stationLabel = stationLabel
+            self.predictions = predictions
+        }
+    }
+
     public let train: TrainPick?
     public let bus: BusPick?
+    public let metra: MetraPick?
     public let bike: NearestBikePick?
     public let alerts: [ServiceAlert]
     public let isStale: Bool
@@ -39,6 +51,7 @@ public struct MediumDashboardView: View {
     public init(
         train: TrainPick?,
         bus: BusPick?,
+        metra: MetraPick? = nil,
         bike: NearestBikePick?,
         alerts: [ServiceAlert],
         isStale: Bool,
@@ -46,6 +59,7 @@ public struct MediumDashboardView: View {
     ) {
         self.train = train
         self.bus = bus
+        self.metra = metra
         self.bike = bike
         self.alerts = alerts
         self.isStale = isStale
@@ -74,6 +88,17 @@ public struct MediumDashboardView: View {
                 )
             } else {
                 emptyBlock("Pick a bus")
+            }
+            divider
+            if let metra {
+                MetraBlockView(
+                    predictions: metra.predictions,
+                    routeLabel: metra.route,
+                    stationLabel: metra.stationLabel,
+                    now: now
+                )
+            } else {
+                emptyBlock("Pick Metra")
             }
             divider
             BikeBlockView(pick: bike)

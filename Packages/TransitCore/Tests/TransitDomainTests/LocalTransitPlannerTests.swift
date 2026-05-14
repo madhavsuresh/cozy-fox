@@ -19,7 +19,8 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.881, longitude: -87.701),
             to: PlannerCoordinate(latitude: 41.881, longitude: -87.639),
             stations: stations,
-            busStops: []
+            busStops: [],
+            metraStations: []
         )
         let train = try #require(plans.first)
         let resolution = train.legs.first(where: { $0.mode == .transit })?.transit?.resolution
@@ -43,7 +44,8 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.880, longitude: -87.701),
             to: PlannerCoordinate(latitude: 41.880, longitude: -87.659),
             stations: [],
-            busStops: stops
+            busStops: stops,
+            metraStations: []
         )
         let bus = try #require(plans.first)
         let resolution = bus.legs.first(where: { $0.mode == .transit })?.transit?.resolution
@@ -72,7 +74,8 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
             to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
             stations: stations,
-            busStops: stops
+            busStops: stops,
+            metraStations: []
         )
         #expect(plans.count == 2)
         #expect(plans.first?.flavor == .train)
@@ -129,7 +132,8 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
             to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
             stations: [],
-            busStops: tradeoffStops
+            busStops: tradeoffStops,
+            metraStations: []
         )
         let busPlans = plans.filter { $0.flavor == .busShortestRide || $0.flavor == .busShortestWalk }
         #expect(busPlans.count == 2)
@@ -161,7 +165,8 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
             to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
             stations: [],
-            busStops: stops
+            busStops: stops,
+            metraStations: []
         )
         let busPlans = plans.filter { $0.flavor == .busShortestRide || $0.flavor == .busShortestWalk }
         #expect(busPlans.count == 1)
@@ -182,7 +187,8 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.880, longitude: -87.701),
             to: PlannerCoordinate(latitude: 41.880, longitude: -87.693),
             stations: stations,
-            busStops: []
+            busStops: [],
+            metraStations: []
         )
         #expect(plans.isEmpty)
     }
@@ -201,8 +207,44 @@ struct LocalTransitPlannerTests {
             from: PlannerCoordinate(latitude: 41.880, longitude: -87.701),
             to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
             stations: stations,
-            busStops: []
+            busStops: [],
+            metraStations: []
         )
         #expect(plans.isEmpty)
+    }
+
+    @Test func producesMetraPlanWhenStationsBracketTheTrip() throws {
+        let metraStations: [MetraStation] = [
+            MetraStation(
+                id: "origin",
+                name: "Origin Metra",
+                latitude: 41.880,
+                longitude: -87.700,
+                zoneId: nil,
+                url: nil,
+                servedRoutes: ["UP-W"]
+            ),
+            MetraStation(
+                id: "dest",
+                name: "Dest Metra",
+                latitude: 41.880,
+                longitude: -87.640,
+                zoneId: nil,
+                url: nil,
+                servedRoutes: ["UP-W"]
+            ),
+        ]
+        let planner = LocalTransitPlanner()
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.881, longitude: -87.701),
+            to: PlannerCoordinate(latitude: 41.881, longitude: -87.639),
+            stations: [],
+            busStops: [],
+            metraStations: metraStations
+        )
+        let metra = try #require(plans.first)
+        #expect(metra.flavor == .metra)
+        let resolution = metra.legs.first(where: { $0.mode == .transit })?.transit?.resolution
+        #expect(resolution == .metra("UP-W"))
     }
 }

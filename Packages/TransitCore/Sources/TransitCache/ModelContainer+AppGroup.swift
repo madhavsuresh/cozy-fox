@@ -8,8 +8,10 @@ public extension ModelContainer {
         let schema = Schema([
             CachedTrainArrival.self,
             CachedBusPrediction.self,
+            CachedMetraPrediction.self,
             CachedEBikeStation.self,
             CachedNearestBike.self,
+            CachedNearestFreeBike.self,
             CachedAlert.self,
         ])
         let groupURL = AppGroup.containerURL
@@ -28,8 +30,10 @@ public extension ModelContainer {
         let schema = Schema([
             CachedTrainArrival.self,
             CachedBusPrediction.self,
+            CachedMetraPrediction.self,
             CachedEBikeStation.self,
             CachedNearestBike.self,
+            CachedNearestFreeBike.self,
             CachedAlert.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)

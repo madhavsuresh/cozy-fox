@@ -24,8 +24,12 @@ struct LargeDashboardView: View {
 
     private var displayedAlerts: [ServiceAlert] {
         entry.snapshot.activeAlerts.filtered(
-            forLine: entry.snapshot.trainArrivals.first?.line,
-            busRoute: entry.snapshot.busPredictions.first?.route
+            forLine: entry.preferences.plannedTripPin?.train?.line
+                ?? entry.snapshot.trainArrivals.first?.line,
+            busRoute: entry.preferences.plannedTripPin?.bus?.route
+                ?? entry.snapshot.busPredictions.first?.route,
+            metraRoute: entry.preferences.plannedTripPin?.metra?.routeId
+                ?? entry.snapshot.metraPredictions.first?.routeId
         )
     }
 

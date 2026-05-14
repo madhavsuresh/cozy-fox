@@ -28,13 +28,17 @@ public struct CommuteAutopinner: Sendable {
     }
 
     private struct RouteChoice: Sendable, Hashable {
-        var line: LineColor?
-        var stationId: Int?
-        var busRoute: String?
-        var busDirection: String?
+        var line: LineColor? = nil
+        var stationId: Int? = nil
+        var busRoute: String? = nil
+        var busDirection: String? = nil
+        var busStopId: Int? = nil
+        var metraRoute: String? = nil
+        var metraStationId: String? = nil
+        var metraDirectionId: Int? = nil
 
         var isEmpty: Bool {
-            line == nil && busRoute == nil
+            line == nil && busRoute == nil && metraRoute == nil
         }
 
         mutating func fillMissing(from other: RouteChoice) {
@@ -45,8 +49,27 @@ public struct CommuteAutopinner: Sendable {
             if busRoute == nil {
                 busRoute = other.busRoute
                 busDirection = other.busDirection
+                busStopId = other.busStopId
+            }
+            if metraRoute == nil {
+                metraRoute = other.metraRoute
+                metraStationId = other.metraStationId
+                metraDirectionId = other.metraDirectionId
             }
         }
+    }
+
+    private struct PinFields: Equatable {
+        let line: LineColor?
+        let stationId: Int?
+        let trainDestination: String?
+        let busRoute: String?
+        let busDirection: String?
+        let busStopId: Int?
+        let metraRoute: String?
+        let metraStationId: String?
+        let metraDirectionId: Int?
+        let autoPinnedDirection: CommuteDirection?
     }
 
     public let clock: Clock
@@ -125,6 +148,11 @@ public struct CommuteAutopinner: Sendable {
         updated.pinnedTrainDestination = nil
         updated.pinnedBusRoute = choice.busRoute
         updated.pinnedBusDirection = choice.busDirection
+        updated.pinnedBusStopId = choice.busStopId
+        updated.pinnedMetraRoute = choice.metraRoute
+        updated.pinnedMetraStationId = choice.metraStationId
+        updated.pinnedMetraDirectionId = choice.metraDirectionId
+        updated.pinnedMetraDestination = nil
         updated.markAutomaticPin(direction: direction, at: clock.now)
 
         let changed = pinFields(from: preferences) != pinFields(from: updated)
@@ -216,6 +244,11 @@ public struct CommuteAutopinner: Sendable {
         updated.pinnedTrainDestination = nil
         updated.pinnedBusRoute = nil
         updated.pinnedBusDirection = nil
+        updated.pinnedBusStopId = nil
+        updated.pinnedMetraRoute = nil
+        updated.pinnedMetraStationId = nil
+        updated.pinnedMetraDirectionId = nil
+        updated.pinnedMetraDestination = nil
         updated.autoPinnedDirection = nil
         return .init(preferences: updated, changed: true, direction: nil, reason: .cleared)
     }
@@ -226,11 +259,16 @@ public struct CommuteAutopinner: Sendable {
     ) -> RouteChoice {
         let train = select(preferences.trains, direction: direction)
         let bus = select(preferences.buses, direction: direction)
+        let metra = select(preferences.metra, direction: direction)
         return RouteChoice(
             line: train?.line,
             stationId: train?.mapId,
             busRoute: bus?.route,
-            busDirection: bus?.directionLabel
+            busDirection: bus?.directionLabel,
+            busStopId: bus?.stopId,
+            metraRoute: metra?.routeId,
+            metraStationId: metra?.stationId,
+            metraDirectionId: metra?.directionId
         )
     }
 
@@ -241,6 +279,7 @@ public struct CommuteAutopinner: Sendable {
     ) -> RouteChoice {
         var lineScores: [LineColor: (score: Double, latest: Date, stationId: Int?)] = [:]
         var busScores: [String: (score: Double, latest: Date, direction: String?)] = [:]
+        var metraScores: [String: (score: Double, latest: Date, stationId: String?, directionId: Int?)] = [:]
 
         for observation in profile.routeObservations where observation.direction == direction {
             let score = score(observation)
@@ -262,10 +301,25 @@ public struct CommuteAutopinner: Sendable {
                     busScores[route] = (score, observation.recordedAt, observation.busDirection)
                 }
             }
+            if let route = observation.metraRoute {
+                let current = metraScores[route]
+                if current == nil
+                    || score > current!.score
+                    || (score == current!.score && observation.recordedAt > current!.latest)
+                {
+                    metraScores[route] = (
+                        score,
+                        observation.recordedAt,
+                        observation.metraStationId,
+                        observation.metraDirectionId
+                    )
+                }
+            }
         }
 
         let bestLine = lineScores.max { $0.value.score < $1.value.score }
         let bestBus = busScores.max { $0.value.score < $1.value.score }
+        let bestMetra = metraScores.max { $0.value.score < $1.value.score }
 
         let validatedLine: (line: LineColor, stationId: Int?)? = bestLine.flatMap { line, value in
             validate(line: line, stationId: value.stationId, origin: origin)
@@ -273,12 +327,24 @@ public struct CommuteAutopinner: Sendable {
         let validatedBus: (route: String, direction: String?)? = bestBus.flatMap { route, value in
             validate(busRoute: route, direction: value.direction, origin: origin)
         }
+        let validatedMetra: (route: String, stationId: String?, directionId: Int?)? = bestMetra.flatMap { route, value in
+            validate(
+                metraRoute: route,
+                stationId: value.stationId,
+                directionId: value.directionId,
+                origin: origin
+            )
+        }
 
         return RouteChoice(
             line: validatedLine?.line,
             stationId: validatedLine?.stationId,
             busRoute: validatedBus?.route,
-            busDirection: validatedBus?.direction
+            busDirection: validatedBus?.direction,
+            busStopId: nil,
+            metraRoute: validatedMetra?.route,
+            metraStationId: validatedMetra?.stationId,
+            metraDirectionId: validatedMetra?.directionId
         )
     }
 
@@ -298,6 +364,8 @@ public struct CommuteAutopinner: Sendable {
             case .bus(let route) where choice.busRoute == nil:
                 choice.busRoute = route
                 choice.busDirection = inferredBusDirection(route: route, from: origin, to: destination)
+            case .metra(let route) where choice.metraRoute == nil:
+                choice.metraRoute = route
             default:
                 continue
             }
@@ -342,6 +410,31 @@ public struct CommuteAutopinner: Sendable {
         return (busRoute, nil)
     }
 
+    private func validate(
+        metraRoute: String,
+        stationId: String?,
+        directionId: Int?,
+        origin: PlannerCoordinate
+    ) -> (route: String, stationId: String?, directionId: Int?)? {
+        let resolver = NearestMetraStationResolver(maxDistanceMeters: 20_000)
+        let originPair = (lat: origin.latitude, lon: origin.longitude)
+        if let stationId,
+           MetraStationCatalog.all.contains(where: {
+               $0.id == stationId && $0.servedRoutes.contains(metraRoute)
+           })
+        {
+            return (metraRoute, stationId, directionId)
+        }
+        let nearest = resolver.closestStations(
+            onRoute: metraRoute,
+            to: originPair,
+            limit: 1,
+            catalog: MetraStationCatalog.all
+        )
+        guard let station = nearest.first?.station else { return nil }
+        return (metraRoute, station.id, directionId)
+    }
+
     private func inferredBusDirection(
         route: String,
         from origin: PlannerCoordinate,
@@ -381,14 +474,18 @@ public struct CommuteAutopinner: Sendable {
 
     private func pinFields(
         from preferences: UserRoutePreferences
-    ) -> (LineColor?, Int?, String?, String?, String?, CommuteDirection?) {
-        (
-            preferences.pinnedLine,
-            preferences.pinnedStationId,
-            preferences.pinnedTrainDestination,
-            preferences.pinnedBusRoute,
-            preferences.pinnedBusDirection,
-            preferences.autoPinnedDirection
+    ) -> PinFields {
+        PinFields(
+            line: preferences.pinnedLine,
+            stationId: preferences.pinnedStationId,
+            trainDestination: preferences.pinnedTrainDestination,
+            busRoute: preferences.pinnedBusRoute,
+            busDirection: preferences.pinnedBusDirection,
+            busStopId: preferences.pinnedBusStopId,
+            metraRoute: preferences.pinnedMetraRoute,
+            metraStationId: preferences.pinnedMetraStationId,
+            metraDirectionId: preferences.pinnedMetraDirectionId,
+            autoPinnedDirection: preferences.autoPinnedDirection
         )
     }
 

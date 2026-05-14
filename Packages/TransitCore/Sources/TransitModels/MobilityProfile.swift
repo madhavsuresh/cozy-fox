@@ -67,6 +67,9 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         public let stationId: Int?
         public let busRoute: String?
         public let busDirection: String?
+        public let metraRoute: String?
+        public let metraStationId: String?
+        public let metraDirectionId: Int?
         public let weekday: Int
         public let hour: Int
         public let motion: MotionContext?
@@ -80,6 +83,9 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             stationId: Int?,
             busRoute: String?,
             busDirection: String?,
+            metraRoute: String? = nil,
+            metraStationId: String? = nil,
+            metraDirectionId: Int? = nil,
             weekday: Int,
             hour: Int,
             motion: MotionContext? = nil
@@ -92,6 +98,9 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             self.stationId = stationId
             self.busRoute = busRoute
             self.busDirection = busDirection
+            self.metraRoute = metraRoute
+            self.metraStationId = metraStationId
+            self.metraDirectionId = metraDirectionId
             self.weekday = weekday
             self.hour = hour
             self.motion = motion
@@ -152,11 +161,14 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         stationId: Int?,
         busRoute: String?,
         busDirection: String?,
+        metraRoute: String? = nil,
+        metraStationId: String? = nil,
+        metraDirectionId: Int? = nil,
         motion: MotionContext? = nil,
         at date: Date = .now,
         calendar: Calendar = .current
     ) {
-        guard line != nil || busRoute != nil else { return }
+        guard line != nil || busRoute != nil || metraRoute != nil else { return }
         routeObservations.append(RouteObservation(
             recordedAt: date,
             direction: direction,
@@ -165,6 +177,9 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             stationId: stationId,
             busRoute: busRoute,
             busDirection: busDirection,
+            metraRoute: metraRoute,
+            metraStationId: metraStationId,
+            metraDirectionId: metraDirectionId,
             weekday: calendar.component(.weekday, from: date),
             hour: calendar.component(.hour, from: date),
             motion: motion

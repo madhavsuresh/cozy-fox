@@ -33,27 +33,36 @@ public struct StationAccessRanker: Sendable {
         public let isApproximateTravelTime: Bool
     }
 
-    /// About half a mile. In dense downtown station choice, this is close
-    /// enough that route noise, river crossings, and personal preference can
-    /// reasonably flip the best stop.
-    public let visibleDirectDeltaMeters: Double
-    public let visibleAccessDeltaMeters: Double
-    public let baseVisibleCount: Int
+    /// Minimum size of the initial candidate cluster before we trust a
+    /// rolling standard-deviation break.
+    public let minimumClusterCount: Int
+    /// If the next candidate sits this many standard deviations above the
+    /// rolling prefix mean, treat it as outside the close cluster.
+    public let clusterBreakStandardDeviations: Double
+    /// Keeps tiny variance among the first few stops from making a normal city
+    /// block look like an outlier.
+    public let minimumClusterStandardDeviationMeters: Double
+    /// Absolute guardrail for smooth downtown stop sequences where every
+    /// station is only a little farther than the previous one. Candidates
+    /// beyond this spread are not "nearby choices" even without one big gap.
+    public let maximumClusterAccessSpreadMeters: Double
     public let routeDirectnessMultiplier: Double
     public let routeNoiseAllowanceMeters: Double
     public let walkingMetersPerSecond: Double
 
     public init(
-        visibleDirectDeltaMeters: Double = 800,
-        visibleAccessDeltaMeters: Double = 650,
-        baseVisibleCount: Int = 3,
+        minimumClusterCount: Int = 4,
+        clusterBreakStandardDeviations: Double = 2.0,
+        minimumClusterStandardDeviationMeters: Double = 75,
+        maximumClusterAccessSpreadMeters: Double = 1_000,
         routeDirectnessMultiplier: Double = 1.35,
         routeNoiseAllowanceMeters: Double = 300,
         walkingMetersPerSecond: Double = 1.34
     ) {
-        self.visibleDirectDeltaMeters = visibleDirectDeltaMeters
-        self.visibleAccessDeltaMeters = visibleAccessDeltaMeters
-        self.baseVisibleCount = baseVisibleCount
+        self.minimumClusterCount = minimumClusterCount
+        self.clusterBreakStandardDeviations = clusterBreakStandardDeviations
+        self.minimumClusterStandardDeviationMeters = minimumClusterStandardDeviationMeters
+        self.maximumClusterAccessSpreadMeters = maximumClusterAccessSpreadMeters
         self.routeDirectnessMultiplier = routeDirectnessMultiplier
         self.routeNoiseAllowanceMeters = routeNoiseAllowanceMeters
         self.walkingMetersPerSecond = walkingMetersPerSecond
@@ -70,25 +79,14 @@ public struct StationAccessRanker: Sendable {
             }
     }
 
-    public func visibleCandidates(
-        from ranked: [RankedCandidate],
-        pinnedStationId: Int? = nil
-    ) -> [RankedCandidate] {
-        guard let first = ranked.first else { return [] }
-        let bestAccess = first.accessDistanceMeters
-        let bestDirect = ranked.map(\.directDistanceMeters).min() ?? first.directDistanceMeters
-
-        return ranked.enumerated().compactMap { index, entry in
-            if index < baseVisibleCount { return entry }
-            if pinnedStationId == entry.station.id { return entry }
-            if entry.accessDistanceMeters <= bestAccess + visibleAccessDeltaMeters {
-                return entry
-            }
-            if entry.directDistanceMeters <= bestDirect + visibleDirectDeltaMeters {
-                return entry
-            }
-            return nil
-        }
+    public func visibleCandidates(from ranked: [RankedCandidate]) -> [RankedCandidate] {
+        guard !ranked.isEmpty else { return [] }
+        let distances = ranked.map(\.accessDistanceMeters)
+        let cutoff = min(
+            clusterCutoffIndex(for: distances),
+            spreadCutoffIndex(for: distances)
+        )
+        return Array(ranked.prefix(cutoff))
     }
 
     private func rankedCandidate(_ candidate: Candidate) -> RankedCandidate {
@@ -121,5 +119,33 @@ public struct StationAccessRanker: Sendable {
 
     private func directnessProxyDistance(for directDistanceMeters: Double) -> Double {
         directDistanceMeters * routeDirectnessMultiplier
+    }
+
+    private func clusterCutoffIndex(for distances: [Double]) -> Int {
+        guard distances.count > minimumClusterCount else { return distances.count }
+        for index in minimumClusterCount..<distances.count {
+            let prefix = distances[..<index]
+            let mean = prefix.reduce(0, +) / Double(prefix.count)
+            let variance = prefix.reduce(0) { partial, value in
+                let delta = value - mean
+                return partial + delta * delta
+            } / Double(prefix.count)
+            let standardDeviation = max(
+                sqrt(variance),
+                minimumClusterStandardDeviationMeters
+            )
+            let candidate = distances[index]
+            let zScore = (candidate - mean) / standardDeviation
+            if zScore >= clusterBreakStandardDeviations {
+                return index
+            }
+        }
+        return distances.count
+    }
+
+    private func spreadCutoffIndex(for distances: [Double]) -> Int {
+        guard let best = distances.first else { return 0 }
+        let limit = best + maximumClusterAccessSpreadMeters
+        return distances.firstIndex { $0 > limit } ?? distances.count
     }
 }

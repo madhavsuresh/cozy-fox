@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import ChicagoTheme
 import TransitDomain
 import TransitModels
 import TransitUI
@@ -347,6 +348,12 @@ struct TripPlannerScreen: View {
                 return ("Train · \(color.displayName)", "tram.fill", color.swiftUIColor)
             }
             return ("Train option", "tram.fill", .secondary)
+        case .metra:
+            if case .metra(let route) = resolution {
+                let line = MetraStationCatalog.route(id: route)
+                return ("Metra · \(line?.shortName ?? route)", "train.side.front.car", line?.swiftUIColor ?? .brown)
+            }
+            return ("Metra option", "train.side.front.car", .brown)
         case .busShortestRide:
             if case .bus(let route) = resolution {
                 return ("More walking · Route \(route)", "bus.fill", .indigo)
@@ -363,6 +370,9 @@ struct TripPlannerScreen: View {
                 return ("Train · \(color.displayName)", "tram.fill", color.swiftUIColor)
             case .bus(let route):
                 return ("Bus · Route \(route)", "bus.fill", .indigo)
+            case .metra(let route):
+                let line = MetraStationCatalog.route(id: route)
+                return ("Metra · \(line?.shortName ?? route)", "train.side.front.car", line?.swiftUIColor ?? .brown)
             case .unknown, .none:
                 return ("Transit option", "arrow.triangle.swap", .secondary)
             }
@@ -476,6 +486,14 @@ struct TripPlannerScreen: View {
             model.saveManualRoutePreferences {
                 $0.pinnedBusRoute = route
                 $0.pinnedBusDirection = nil
+                $0.pinnedBusStopId = nil
+            }
+        case .metra(let route):
+            model.saveManualRoutePreferences {
+                $0.pinnedMetraRoute = route
+                $0.pinnedMetraStationId = nil
+                $0.pinnedMetraDirectionId = nil
+                $0.pinnedMetraDestination = nil
             }
         case .unknown:
             return
@@ -548,6 +566,9 @@ private struct TripLegRow: View {
             switch leg.transit?.resolution {
             case .line(let c): return ("tram.fill", c.swiftUIColor, c.contrastingText)
             case .bus: return ("bus.fill", .indigo, .white)
+            case .metra(let route):
+                let line = MetraStationCatalog.route(id: route)
+                return ("train.side.front.car", line?.swiftUIColor ?? .brown, line?.contrastingText ?? .white)
             default: return ("arrow.triangle.swap", Color(uiColor: .tertiarySystemFill), .secondary)
             }
         case .other:
@@ -570,6 +591,9 @@ private struct TripLegRow: View {
             }
         case (.transit, .bus(let r)?):
             Text("Route \(r)").font(.subheadline.weight(.semibold))
+        case (.transit, .metra(let r)?):
+            Text(MetraStationCatalog.route(id: r)?.displayName ?? "Metra \(r)")
+                .font(.subheadline.weight(.semibold))
         case (.transit, .unknown(let raw)?):
             Text(raw).font(.subheadline.weight(.semibold))
         case (.transit, nil):
@@ -588,6 +612,8 @@ private struct TripLegRow: View {
                 pinButton(tint: c.swiftUIColor)
             case .bus:
                 pinButton(tint: .indigo)
+            case .metra(let route):
+                pinButton(tint: MetraStationCatalog.route(id: route)?.swiftUIColor ?? .brown)
             case .unknown:
                 EmptyView()
             }

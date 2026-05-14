@@ -40,12 +40,12 @@ struct TransitMatcherTests {
         }
     }
 
-    @Test func returnsUnknownForUnrecognizedTransit() {
+    @Test func matchesMetraRoute() {
         let info = TransitMatcher.match(in: ["Take Metra UP-N toward Kenosha"])
-        if case .unknown = info.resolution {
-            // expected
+        if case .metra(let route) = info.resolution {
+            #expect(route == "UP-N")
         } else {
-            Issue.record("Expected unknown for Metra, got \(info.resolution)")
+            Issue.record("Expected metra(UP-N), got \(info.resolution)")
         }
     }
 

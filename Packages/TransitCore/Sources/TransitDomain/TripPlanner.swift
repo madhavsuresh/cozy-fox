@@ -30,6 +30,8 @@ public enum TransitResolution: Sendable, Hashable {
     case line(LineColor)
     /// Matched a CTA bus route in `BusStopCatalog.allRoutes`.
     case bus(String)
+    /// Matched a Metra commuter-rail line, e.g. "BNSF" or "UP-N".
+    case metra(String)
     /// Apple returned a transit string we could not map (commuter rail,
     /// out-of-area bus, etc.). Surface the raw text so the UI can still show
     /// something useful.
@@ -56,19 +58,29 @@ public struct TripLeg: Sendable, Hashable, Identifiable {
     public let instructions: String
     /// Populated only when `mode == .transit`.
     public let transit: TransitLegInfo?
+    /// Approximate leg start coordinate. Populated when MapKit or the local
+    /// fallback planner exposes geometry; used to pin transfer stops.
+    public let startCoordinate: PlannerCoordinate?
+    /// Approximate leg end coordinate. Populated when MapKit or the local
+    /// fallback planner exposes geometry.
+    public let endCoordinate: PlannerCoordinate?
 
     public init(
         id: UUID = UUID(),
         mode: TripLegMode,
         distanceMeters: Double,
         instructions: String,
-        transit: TransitLegInfo?
+        transit: TransitLegInfo?,
+        startCoordinate: PlannerCoordinate? = nil,
+        endCoordinate: PlannerCoordinate? = nil
     ) {
         self.id = id
         self.mode = mode
         self.distanceMeters = distanceMeters
         self.instructions = instructions
         self.transit = transit
+        self.startCoordinate = startCoordinate
+        self.endCoordinate = endCoordinate
     }
 }
 
@@ -86,6 +98,8 @@ public enum TripPlanFlavor: String, Sendable, Hashable {
     /// ride). Only emitted when it's on a different route than the
     /// `busShortestRide` pick — same-route picks would set the same `pinnedBusRoute`.
     case busShortestWalk
+    /// The fastest Metra option we found.
+    case metra
 }
 
 public struct TripPlan: Sendable, Hashable {
@@ -194,11 +208,14 @@ public struct TripPlanner: Sendable {
             } else {
                 transit = nil
             }
+            let endpoints = Self.endpoints(for: step)
             legs.append(TripLeg(
                 mode: mode,
                 distanceMeters: step.distance,
                 instructions: step.instructions,
-                transit: transit
+                transit: transit,
+                startCoordinate: endpoints.start,
+                endCoordinate: endpoints.end
             ))
         }
 
@@ -207,6 +224,20 @@ public struct TripPlanner: Sendable {
             expectedTravelTime: route.expectedTravelTime,
             totalDistanceMeters: route.distance,
             legs: legs
+        )
+    }
+
+    private static func endpoints(
+        for step: MKRoute.Step
+    ) -> (start: PlannerCoordinate?, end: PlannerCoordinate?) {
+        let pointCount = step.polyline.pointCount
+        guard pointCount > 0 else { return (nil, nil) }
+        let points = step.polyline.points()
+        let start = points[0].coordinate
+        let end = points[pointCount - 1].coordinate
+        return (
+            PlannerCoordinate(latitude: start.latitude, longitude: start.longitude),
+            PlannerCoordinate(latitude: end.latitude, longitude: end.longitude)
         )
     }
 }
@@ -229,6 +260,14 @@ public enum TransitMatcher {
 
         if let route = matchBusRoute(in: combined) {
             return TransitLegInfo(rawName: "Route \(route)", resolution: .bus(route))
+        }
+
+        if let route = matchMetraRoute(in: combined) {
+            let line = MetraStationCatalog.route(id: route)
+            return TransitLegInfo(
+                rawName: line?.displayName ?? "Metra \(route)",
+                resolution: .metra(route)
+            )
         }
 
         let fallback = candidates.first(where: { !$0.isEmpty }) ?? "Transit"
@@ -284,5 +323,26 @@ public enum TransitMatcher {
             }
         }
         return nil
+    }
+
+    static func matchMetraRoute(in text: String) -> String? {
+        let lower = text.lowercased()
+        for line in MetraStationCatalog.routes.sorted(by: { $0.shortName.count > $1.shortName.count }) {
+            let shortName = line.shortName.lowercased()
+            let longName = line.longName.lowercased()
+            if lower.contains(longName) || lower.contains("metra \(shortName)") || containsRouteToken(shortName, in: lower) {
+                return line.id
+            }
+        }
+        return nil
+    }
+
+    private static func containsRouteToken(_ token: String, in text: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: token)
+        let pattern = "(^|[^a-z0-9])\(escaped)($|[^a-z0-9])"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return false
+        }
+        return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 }

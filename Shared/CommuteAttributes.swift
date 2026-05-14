@@ -15,10 +15,12 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
     public struct ContentState: Codable, Hashable, Sendable {
         public var train: TrainLeg?
         public var bus: BusLeg?
+        public var metra: MetraLeg?
 
-        public init(train: TrainLeg? = nil, bus: BusLeg? = nil) {
+        public init(train: TrainLeg? = nil, bus: BusLeg? = nil, metra: MetraLeg? = nil) {
             self.train = train
             self.bus = bus
+            self.metra = metra
         }
     }
 
@@ -119,6 +121,50 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
         }
     }
 
+    public struct MetraLeg: Codable, Hashable, Sendable {
+        public var routeLabel: String
+        public var routeId: String
+        public var stopName: String
+        public var destination: String
+        public var nextArrival: Date
+        public var followingArrival: Date?
+        public var alertHeadline: String?
+        public var upcomingArrivals: [Date]
+
+        public init(
+            routeLabel: String,
+            routeId: String,
+            stopName: String,
+            destination: String,
+            nextArrival: Date,
+            followingArrival: Date? = nil,
+            alertHeadline: String? = nil,
+            upcomingArrivals: [Date] = []
+        ) {
+            self.routeLabel = routeLabel
+            self.routeId = routeId
+            self.stopName = stopName
+            self.destination = destination
+            self.nextArrival = nextArrival
+            self.followingArrival = followingArrival
+            self.alertHeadline = alertHeadline
+            self.upcomingArrivals = upcomingArrivals
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            routeLabel = try c.decode(String.self, forKey: .routeLabel)
+            routeId = try c.decode(String.self, forKey: .routeId)
+            stopName = try c.decode(String.self, forKey: .stopName)
+            destination = try c.decode(String.self, forKey: .destination)
+            nextArrival = try c.decode(Date.self, forKey: .nextArrival)
+            followingArrival = try c.decodeIfPresent(Date.self, forKey: .followingArrival)
+            alertHeadline = try c.decodeIfPresent(String.self, forKey: .alertHeadline)
+            upcomingArrivals = (try? c.decode([Date].self, forKey: .upcomingArrivals))
+                ?? [nextArrival, followingArrival].compactMap { $0 }
+        }
+    }
+
     // MARK: - Identity (immutable per activity instance)
 
     /// String identifier for what the train leg is tracking. If this changes,
@@ -130,9 +176,11 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
 
     /// Same idea for bus: `"<route>-<direction>"` e.g. `"22-Northbound"`.
     public let busIdentity: String?
+    public let metraIdentity: String?
 
-    public init(trainIdentity: String? = nil, busIdentity: String? = nil) {
+    public init(trainIdentity: String? = nil, busIdentity: String? = nil, metraIdentity: String? = nil) {
         self.trainIdentity = trainIdentity
         self.busIdentity = busIdentity
+        self.metraIdentity = metraIdentity
     }
 }

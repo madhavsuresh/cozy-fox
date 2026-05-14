@@ -31,6 +31,32 @@ public struct EBike: Codable, Sendable, Hashable, Identifiable {
     }
 
     public var rangeMiles: Double { currentRangeMeters / 1609.344 }
+    public var isFreeFloating: Bool { stationId?.isEmpty ?? true }
+}
+
+public struct EBikeChargeSummary: Codable, Sendable, Hashable {
+    public let sortedRangeMeters: [Double]
+
+    public init?(bikes: [EBike]) {
+        let ranges = bikes
+            .map(\.currentRangeMeters)
+            .filter { $0 > 0 }
+            .sorted()
+        guard !ranges.isEmpty else { return nil }
+        self.sortedRangeMeters = ranges
+    }
+
+    public var count: Int { sortedRangeMeters.count }
+    public var minRangeMeters: Double { sortedRangeMeters.first ?? 0 }
+    public var maxRangeMeters: Double { sortedRangeMeters.last ?? 0 }
+    public var medianRangeMeters: Double {
+        guard !sortedRangeMeters.isEmpty else { return 0 }
+        let middle = sortedRangeMeters.count / 2
+        if sortedRangeMeters.count.isMultiple(of: 2) {
+            return (sortedRangeMeters[middle - 1] + sortedRangeMeters[middle]) / 2
+        }
+        return sortedRangeMeters[middle]
+    }
 }
 
 /// A Divvy docking station and its real-time availability.
@@ -82,26 +108,115 @@ public struct NearestBikePick: Codable, Sendable, Hashable {
     public let station: BikeStation
     public let walkingDistanceMeters: Double
     public let bestRangeMeters: Double
+    public let dockedBikes: [EBike]
     public let freeFloatingNearby: Int
+    public let nearbyFreeFloatingBikes: [EBike]
     public let computedAt: Date
 
     public init(
         station: BikeStation,
         walkingDistanceMeters: Double,
         bestRangeMeters: Double,
-        freeFloatingNearby: Int,
+        dockedBikes: [EBike] = [],
+        freeFloatingNearby: Int? = nil,
+        nearbyFreeFloatingBikes: [EBike] = [],
         computedAt: Date
     ) {
         self.station = station
         self.walkingDistanceMeters = walkingDistanceMeters
         self.bestRangeMeters = bestRangeMeters
-        self.freeFloatingNearby = freeFloatingNearby
+        self.dockedBikes = dockedBikes
+        self.freeFloatingNearby = freeFloatingNearby ?? nearbyFreeFloatingBikes.count
+        self.nearbyFreeFloatingBikes = nearbyFreeFloatingBikes
         self.computedAt = computedAt
     }
 
+    enum CodingKeys: String, CodingKey {
+        case station
+        case walkingDistanceMeters
+        case bestRangeMeters
+        case dockedBikes
+        case freeFloatingNearby
+        case nearbyFreeFloatingBikes
+        case computedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        station = try container.decode(BikeStation.self, forKey: .station)
+        walkingDistanceMeters = try container.decode(Double.self, forKey: .walkingDistanceMeters)
+        bestRangeMeters = try container.decode(Double.self, forKey: .bestRangeMeters)
+        dockedBikes = try container.decodeIfPresent([EBike].self, forKey: .dockedBikes) ?? []
+        let decodedFreeBikes = try container.decodeIfPresent([EBike].self, forKey: .nearbyFreeFloatingBikes) ?? []
+        freeFloatingNearby = try container.decodeIfPresent(Int.self, forKey: .freeFloatingNearby) ?? decodedFreeBikes.count
+        nearbyFreeFloatingBikes = decodedFreeBikes
+        computedAt = try container.decode(Date.self, forKey: .computedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(station, forKey: .station)
+        try container.encode(walkingDistanceMeters, forKey: .walkingDistanceMeters)
+        try container.encode(bestRangeMeters, forKey: .bestRangeMeters)
+        try container.encode(dockedBikes, forKey: .dockedBikes)
+        try container.encode(freeFloatingNearby, forKey: .freeFloatingNearby)
+        try container.encode(nearbyFreeFloatingBikes, forKey: .nearbyFreeFloatingBikes)
+        try container.encode(computedAt, forKey: .computedAt)
+    }
+
     public var bestRangeMiles: Double { bestRangeMeters / 1609.344 }
+    public var totalEBikesAvailable: Int { station.eBikesAvailable }
+    public var dockedChargeSummary: EBikeChargeSummary? { EBikeChargeSummary(bikes: dockedBikes) }
     public var walkingMinutes: Int {
         // 1.4 m/s typical walking pace = 84 m/min.
         max(1, Int((walkingDistanceMeters / 84.0).rounded()))
+    }
+}
+
+public struct NearestFreeBikePick: Codable, Sendable, Hashable, Identifiable {
+    public let bike: EBike
+    public let walkingDistanceMeters: Double
+    public let computedAt: Date
+
+    public init(
+        bike: EBike,
+        walkingDistanceMeters: Double,
+        computedAt: Date
+    ) {
+        self.bike = bike
+        self.walkingDistanceMeters = walkingDistanceMeters
+        self.computedAt = computedAt
+    }
+
+    public var id: String { bike.id }
+    public var bestRangeMiles: Double { bike.rangeMiles }
+    public var walkingMinutes: Int {
+        max(1, Int((walkingDistanceMeters / 84.0).rounded()))
+    }
+}
+
+public enum NearbyBikeOption: Sendable, Hashable, Identifiable {
+    case station(NearestBikePick)
+    case freeFloating(NearestFreeBikePick)
+
+    public var id: String {
+        switch self {
+        case .station(let pick): "station-\(pick.station.id)"
+        case .freeFloating(let pick): "free-\(pick.bike.id)"
+        }
+    }
+
+    public var walkingDistanceMeters: Double {
+        switch self {
+        case .station(let pick): pick.walkingDistanceMeters
+        case .freeFloating(let pick): pick.walkingDistanceMeters
+        }
+    }
+
+    public var walkingMinutes: Int {
+        switch self {
+        case .station(let pick): pick.walkingMinutes
+        case .freeFloating(let pick): pick.walkingMinutes
+        }
     }
 }

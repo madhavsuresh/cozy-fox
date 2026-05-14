@@ -1,10 +1,10 @@
 import Foundation
 import TransitCache
 
-/// Reads / writes the CTA API keys.
+/// Reads / writes the transit API keys.
 ///
 /// We use the App Group's shared `UserDefaults` rather than the Keychain.
-/// Rationale: CTA Train/Bus Tracker keys are public-API rate-limit identifiers,
+/// Rationale: CTA and Metra keys are public-API rate-limit identifiers,
 /// not credentials — losing encryption-at-rest doesn't expose anything that
 /// access to the app's container wouldn't already expose. UserDefaults gives
 /// us reliable persistence across rebuilds with zero entitlement plumbing and
@@ -13,6 +13,7 @@ enum APIKeys {
     enum Service: String {
         case trainTracker = "cta.train.tracker"
         case busTracker = "cta.bus.tracker"
+        case metra = "metra.gtfs"
 
         /// Key used inside the App Group defaults dictionary.
         fileprivate var defaultsKey: String { "apiKey.\(rawValue)" }

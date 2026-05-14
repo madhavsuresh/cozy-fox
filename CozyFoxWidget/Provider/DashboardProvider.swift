@@ -18,6 +18,7 @@ struct DashboardProvider: AppIntentTimelineProvider {
         DashboardEntry(
             date: .now,
             snapshot: await loadSnapshot(),
+            preferences: loadPreferences(),
             configuration: configuration
         )
     }
@@ -36,6 +37,7 @@ struct DashboardProvider: AppIntentTimelineProvider {
             DashboardEntry(
                 date: now.addingTimeInterval(Double(offset) * 90),
                 snapshot: snapshot,
+                preferences: loadPreferences(),
                 configuration: configuration
             )
         }
@@ -49,5 +51,11 @@ struct DashboardProvider: AppIntentTimelineProvider {
             return .empty
         }
         return SnapshotReader(container: container).loadSnapshot()
+    }
+
+    private func loadPreferences() -> UserRoutePreferences {
+        var prefs = PreferencesStore().loadRoutePreferences()
+        _ = prefs.clearExpiredPlannedTripPin()
+        return prefs
     }
 }
