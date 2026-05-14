@@ -25,6 +25,7 @@ struct DashboardScreen: View {
     @State private var pinSource: RoutePinSource = .manual
     @State private var autoPinnedDirection: CommuteDirection?
     @State private var plannedTripPin: PlannedTripPin?
+    @State private var routePreferences: UserRoutePreferences = .empty
     @State private var commuteAnchors: CommuteAnchors = .empty
     @State private var selectedTripDestination: PlannedTripPin.Destination?
     @State private var destinationQuery: String = ""
@@ -56,35 +57,45 @@ struct DashboardScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    flagHeader
-                    homePinControl
                     if let plannedTripPin {
                         activeHomeTripCard(plannedTripPin)
-                    } else if !homeTripOptions.isEmpty {
-                        homeTripOptionsCard
                     }
-                    alertsCard
-                    liveUpdatesBar
-                    if shouldShowAutopinBanner {
-                        contextBanner
-                    }
-                    if includeIntercampus {
-                        intercampusCard
-                    }
-                    linePickerCard
                     if let line = pinnedLine {
                         pinnedLineCard(line: line)
                     }
-                    busRoutePickerCard
                     if let route = pinnedBusRoute {
                         pinnedBusCard(route: route)
                     }
-                    metraRoutePickerCard
                     if let route = pinnedMetraRoute {
                         pinnedMetraCard(route: route)
                     }
-                    bikeCard
-                    nearYouSection
+                    alertsCard
+                    if shouldShowAutopinBanner {
+                        contextBanner
+                    }
+                    liveUpdatesBar
+                    homePinControl
+                    if !homeTripOptions.isEmpty {
+                        homeTripOptionsCard
+                    }
+                    if shouldShowIntercampusSurface {
+                        intercampusCard
+                    }
+                    if shouldShowTrainSurfaces {
+                        linePickerCard
+                    }
+                    if shouldShowBusSurfaces {
+                        busRoutePickerCard
+                    }
+                    if shouldShowMetraSurfaces {
+                        metraRoutePickerCard
+                    }
+                    if routePreferences.isModeVisible(.bikes) {
+                        bikeCard
+                    }
+                    if shouldShowDiscovery {
+                        nearYouSection
+                    }
                 }
                 .padding(ChicagoSpacing.md)
             }
@@ -96,10 +107,9 @@ struct DashboardScreen: View {
                     HStack(spacing: ChicagoSpacing.xs) {
                         ChicagoStar()
                             .fill(ChicagoPalette.starRed)
-                            .frame(width: 18, height: 18)
+                            .frame(width: 14, height: 14)
                         Text("Cozy Fox")
-                            .font(ChicagoTypography.displayMD(relativeTo: .headline))
-                            .tracking(0.5)
+                            .font(ChicagoTypography.body(.bold, relativeTo: .headline))
                             .foregroundStyle(ChicagoPalette.Gray.darkest)
                     }
                     .accessibilityLabel("Cozy Fox")
@@ -131,6 +141,7 @@ struct DashboardScreen: View {
 
     private func reloadPinnedFromPreferences() {
         let prefs = model.preferences.loadRoutePreferences()
+        routePreferences = prefs
         pinnedLine = prefs.pinnedLine
         pinnedStationId = prefs.pinnedStationId
         pinnedTrainDestination = prefs.pinnedTrainDestination
@@ -151,30 +162,39 @@ struct DashboardScreen: View {
         commuteAnchors = model.preferences.loadCommuteAnchors()
     }
 
-    // MARK: - Flag header band
-
-    /// A thin Chicago-flag-style header stripe — two narrow Flag Blue
-    /// bands enclosing a white field carrying a single red star. Civic
-    /// visual identity in 14 vertical points.
-    private var flagHeader: some View {
-        VStack(spacing: 0) {
-            band
-            ZStack {
-                Rectangle().fill(Color.white)
-                ChicagoStar()
-                    .fill(ChicagoPalette.starRed)
-                    .frame(width: 10, height: 10)
-            }
-            .frame(height: 14)
-            band
-        }
-        .frame(height: 24)
-        .clipShape(RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm))
-        .accessibilityHidden(true)
+    private var shouldShowTrainSurfaces: Bool {
+        routePreferences.isModeVisible(.trains)
     }
 
-    private var band: some View {
-        Rectangle().fill(ChicagoPalette.flagBlue).frame(height: 5)
+    private var shouldShowBusSurfaces: Bool {
+        routePreferences.isModeVisible(.buses)
+    }
+
+    private var shouldShowMetraSurfaces: Bool {
+        routePreferences.isModeVisible(.metra)
+    }
+
+    private var shouldShowIntercampusSurface: Bool {
+        includeIntercampus
+            && (routePreferences.isModeVisible(.intercampus) || pinnedIntercampusStopId != nil)
+    }
+
+    private var shouldShowDiscovery: Bool {
+        routePreferences.isModeVisible(.trains)
+            || routePreferences.isModeVisible(.buses)
+            || routePreferences.isModeVisible(.metra)
+    }
+
+    private func isTrainLineDiscoverable(_ line: LineColor) -> Bool {
+        routePreferences.isTrainLineVisible(line)
+    }
+
+    private func isBusRouteDiscoverable(_ route: String) -> Bool {
+        routePreferences.isBusRouteVisible(route)
+    }
+
+    private func isMetraRouteDiscoverable(_ routeId: String) -> Bool {
+        routePreferences.isMetraRouteVisible(routeId)
     }
 
     // MARK: - Destination pin
@@ -458,8 +478,7 @@ struct DashboardScreen: View {
                     pinSelectedHomeTrip()
                 } label: {
                     Label("Pin selected pieces", systemImage: "pin.fill")
-                        .font(ChicagoTypography.displaySM(relativeTo: .callout))
-                        .tracking(0.5)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .callout))
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -1026,6 +1045,7 @@ struct DashboardScreen: View {
                 guard let resolution = leg.transit?.resolution else { continue }
                 switch resolution {
                 case .line(let line):
+                    guard isTrainLineDiscoverable(line) else { continue }
                     trainChoices.append(contentsOf: trainChoicesForHomeTrip(
                         line: line,
                         legIndex: index,
@@ -1033,6 +1053,7 @@ struct DashboardScreen: View {
                         fallbackOrigin: origin
                     ))
                 case .bus(let route):
+                    guard isBusRouteDiscoverable(route) else { continue }
                     busChoices.append(contentsOf: busChoicesForHomeTrip(
                         route: route,
                         legIndex: index,
@@ -1040,6 +1061,7 @@ struct DashboardScreen: View {
                         fallbackOrigin: origin
                     ))
                 case .metra(let route):
+                    guard isMetraRouteDiscoverable(route) else { continue }
                     metraChoices.append(contentsOf: metraChoicesForHomeTrip(
                         route: route,
                         legIndex: index,
@@ -1535,11 +1557,10 @@ struct DashboardScreen: View {
         HStack(spacing: ChicagoSpacing.sm) {
             Circle()
                 .fill(liveStatusDotColor)
-                .frame(width: 10, height: 10)
+                .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
-                Text(model.liveUpdatesActive ? "Live updates on" : "Live updates off")
-                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .tracking(0.5)
+                Text("Live updates")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Text(liveStatusDescription)
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
@@ -1554,7 +1575,8 @@ struct DashboardScreen: View {
             .tint(ChicagoPalette.flagBlue)
             .disabled(model.isLowPowerMode)
         }
-        .padding(ChicagoSpacing.md)
+        .padding(.horizontal, ChicagoSpacing.md)
+        .padding(.vertical, ChicagoSpacing.sm)
         .background(ChicagoPalette.Surface.elevated,
                     in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
     }
@@ -1566,38 +1588,35 @@ struct DashboardScreen: View {
 
     private var liveStatusDescription: String {
         if model.isLowPowerMode {
-            return "Low Power Mode is on — auto-refresh paused"
+            return "Paused by Low Power Mode"
         }
         if model.liveUpdatesEnabled {
-            return includeIntercampus
-                ? "Polling CTA, Metra, and Intercampus every 30 seconds"
-                : "Polling CTA and Metra every 30 seconds for fresh delays"
+            return shouldShowIntercampusSurface
+                ? "CTA, Metra, Intercampus · 30s"
+                : "CTA, Metra · 30s"
         }
-        return "Pull to refresh, or wait for background updates"
+        return "Manual refresh"
     }
 
     // MARK: - Context banner
 
     private var contextBanner: some View {
         HStack(spacing: ChicagoSpacing.sm) {
-            Image(systemName: autoPinnedDirection == .toHome ? "house.fill" : "sparkles")
+            Image(systemName: "location.north.line.fill")
                 .foregroundStyle(ChicagoPalette.flagBlue)
-            Text(autopinDescription)
-                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                .foregroundStyle(ChicagoPalette.Gray.darkest)
             Text("Autopin")
-                .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                .tracking(0.5)
-                .foregroundStyle(.white)
-                .padding(.horizontal, ChicagoSpacing.sm)
-                .padding(.vertical, 3)
-                .background(ChicagoPalette.flagBlue,
-                            in: Capsule())
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.bahama)
+            Text(autopinDescription)
+                .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(1)
             Spacer()
             if model.isRefreshing { ProgressView().scaleEffect(0.7) }
         }
-        .padding(ChicagoSpacing.md)
-        .background(ChicagoPalette.lakeMichigan,
+        .padding(.horizontal, ChicagoSpacing.md)
+        .padding(.vertical, ChicagoSpacing.sm)
+        .background(ChicagoPalette.Surface.elevated,
                     in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
     }
 
@@ -1608,11 +1627,11 @@ struct DashboardScreen: View {
     private var autopinDescription: String {
         switch autoPinnedDirection {
         case .toHome:
-            return "Auto-pin is surfacing the route home."
+            return "Route home"
         case .toWork:
-            return "Auto-pin is surfacing the route to work."
+            return "Route to work"
         case .anytime, nil:
-            return "Auto-pin is surfacing a commute route."
+            return "Commute route"
         }
     }
 
@@ -1856,8 +1875,7 @@ struct DashboardScreen: View {
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(choice.stop.name)
-                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.bahama)
                 Spacer()
                 Text(choice.walkTimeText)
@@ -1973,9 +1991,18 @@ struct DashboardScreen: View {
                     eyebrow: "Trains",
                     ornament: .icon(systemName: "tram.fill")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                if let line = visiblePinnedLine {
+                    pickerPinnedConfirmationRow(
+                        title: line.displayName,
+                        clearLabel: "Clear pinned \(line.displayName) line",
+                        clearAction: { togglePinnedLine(line) }
+                    ) {
+                        RouteBadge(line: line, size: .sm)
+                    }
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: ChicagoSpacing.xs) {
-                        ForEach(LineColor.allCases, id: \.self) { line in
+                        ForEach(linePickerLines, id: \.self) { line in
                             LineChip(
                                 line: line,
                                 isPinned: pinnedLine == line,
@@ -1984,17 +2011,21 @@ struct DashboardScreen: View {
                         }
                     }
                 }
-                Text(pinnedLine == nil
-                     ? "Tap a line to surface its nearest station and route it to the Live Activity."
-                     : "Tap again to unpin.")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
             }
         }
     }
 
+    private var visiblePinnedLine: LineColor? {
+        guard let pinnedLine, isTrainLineDiscoverable(pinnedLine) else { return nil }
+        return pinnedLine
+    }
+
+    private var linePickerLines: [LineColor] {
+        LineColor.allCases.filter { isTrainLineDiscoverable($0) }
+    }
+
     private func pinnedLineCard(line: LineColor) -> some View {
-        ChicagoCard(title: line.displayName,
+        ChicagoCard(title: "Pinned train",
                     eyebrow: isAutopinned ? "Autopinned line" : "Pinned line",
                     ornament: .icon(systemName: "tram.fill")) {
             pinnedLineBody(line: line)
@@ -2026,8 +2057,21 @@ struct DashboardScreen: View {
                 let hasWalkingData = stations.contains { $0.walkingDistanceMeters != nil }
                 let chosenId = effectivePinnedStation(stations: stations)
                 VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-                    sectionLabel("Pick a stop")
+                    pinnedRouteControlRow(
+                        title: line.displayName,
+                        detail: "Pinned train",
+                        clearLabel: "Clear pinned \(line.displayName) line",
+                        clearAction: { togglePinnedLine(line) }
+                    ) {
+                        RouteBadge(line: line, size: .md)
+                    }
                     if hasWalkingData || allowHaversineFallback {
+                        if let chosen = stations.first(where: { $0.station.id == chosenId }) {
+                            arrivalsHeadline(at: chosen.station, line: line)
+                            directionPickerForTrain(at: chosen.station, line: line)
+                            trainProgressStrip(toStation: chosen.station, line: line)
+                        }
+                        sectionLabel("Stop")
                         StationChipStrip {
                             ForEach(stations, id: \.station.id) { entry in
                                 StationChip(
@@ -2039,11 +2083,6 @@ struct DashboardScreen: View {
                                 )
                             }
                         }
-                        if let chosen = stations.first(where: { $0.station.id == chosenId }) {
-                            directionPickerForTrain(at: chosen.station, line: line)
-                            arrivalsHeadline(at: chosen.station, line: line)
-                            trainProgressStrip(toStation: chosen.station, line: line)
-                        }
                     } else {
                         placeholderChipStrip
                         // Keep arrivals visible for a user whose pin is
@@ -2053,8 +2092,8 @@ struct DashboardScreen: View {
                         if let pinnedId = pinnedStationId,
                            let stuck = candidates.first(where: { $0.station.id == pinnedId })?.station
                         {
-                            directionPickerForTrain(at: stuck, line: line)
                             arrivalsHeadline(at: stuck, line: line)
+                            directionPickerForTrain(at: stuck, line: line)
                             trainProgressStrip(toStation: stuck, line: line)
                         }
                     }
@@ -2261,8 +2300,7 @@ struct DashboardScreen: View {
                     let isGhostLikely = firstAssessment?.isGhostLikely == true
                     VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                         Text("→ \(dest)")
-                            .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                            .tracking(0.5)
+                            .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                             .foregroundStyle(ChicagoPalette.bahama)
                         HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
                             BigNumber(
@@ -2490,19 +2528,28 @@ struct DashboardScreen: View {
                     eyebrow: "Buses",
                     ornament: .icon(systemName: "bus.fill")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                if let route = visiblePinnedBusRoute {
+                    pickerPinnedConfirmationRow(
+                        title: "Route \(route)",
+                        clearLabel: "Clear pinned Route \(route)",
+                        clearAction: { setPinnedBus(nil) }
+                    ) {
+                        RouteBadge(bus: route, size: .sm)
+                    }
+                }
                 Menu {
-                    if pinnedBusRoute != nil {
+                    if visiblePinnedBusRoute != nil {
                         Button("Unpin", role: .destructive) { setPinnedBus(nil) }
                         Divider()
                     }
-                    ForEach(BusStopCatalog.allRoutes, id: \.self) { route in
+                    ForEach(busPickerRoutes, id: \.self) { route in
                         Button("Route \(route)") { setPinnedBus(route) }
                     }
                 } label: {
                     HStack(spacing: ChicagoSpacing.xs) {
                         Image(systemName: "bus.fill")
                             .foregroundStyle(ChicagoPalette.flagBlue)
-                        Text(pinnedBusRoute.map { "Route \($0)" } ?? "Choose a route")
+                        Text(visiblePinnedBusRoute == nil ? "Choose a route" : "Change route")
                             .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                             .foregroundStyle(ChicagoPalette.Gray.darkest)
                         Spacer()
@@ -2515,15 +2562,21 @@ struct DashboardScreen: View {
                     .background(ChicagoPalette.Surface.elevated,
                                 in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
                 }
-                Text("Manual pins pause autopin for 30 minutes.")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
             }
         }
     }
 
+    private var visiblePinnedBusRoute: String? {
+        guard let pinnedBusRoute, isBusRouteDiscoverable(pinnedBusRoute) else { return nil }
+        return pinnedBusRoute
+    }
+
+    private var busPickerRoutes: [String] {
+        BusStopCatalog.allRoutes.filter { isBusRouteDiscoverable($0) }
+    }
+
     private func pinnedBusCard(route: String) -> some View {
-        ChicagoCard(title: "Route \(route)",
+        ChicagoCard(title: "Pinned bus",
                     eyebrow: isAutopinned ? "Autopinned bus" : "Pinned bus",
                     ornament: .icon(systemName: "bus.fill")) {
             pinnedBusBody(route: route)
@@ -2540,8 +2593,13 @@ struct DashboardScreen: View {
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    if directionChoices.count > 1 {
-                        directionPickerForBus(choices: directionChoices)
+                    pinnedRouteControlRow(
+                        title: "Route \(route)",
+                        detail: pinnedBusDirection,
+                        clearLabel: "Clear pinned Route \(route)",
+                        clearAction: { setPinnedBus(nil) }
+                    ) {
+                        RouteBadge(bus: route, size: .md)
                     }
                     let visibleDirections: [BusDirectionStopChoice] = {
                         guard let pinned = pinnedBusDirection else { return directionChoices }
@@ -2551,11 +2609,14 @@ struct DashboardScreen: View {
                     ForEach(visibleDirections) { choice in
                         let selected = effectivePinnedBusStop(in: choice)
                         VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                            pinnedBusDirectionRow(route: route, stop: selected.stop, origin: origin)
                             if choice.stops.count > 1 {
                                 busStopSelector(choice: choice, origin: origin)
                             }
-                            pinnedBusDirectionRow(route: route, stop: selected.stop, origin: origin)
                         }
+                    }
+                    if directionChoices.count > 1 {
+                        directionPickerForBus(choices: directionChoices)
                     }
                 }
                 .task(id: accessTaskKey(prefix: "bus-\(route)", origin: origin)) {
@@ -2685,8 +2746,7 @@ struct DashboardScreen: View {
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(stop.directionLabel.isEmpty ? stop.name : stop.directionLabel)
-                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.bahama)
                 Spacer()
                 Text(AccessTimeFormatter.short(accessTime))
@@ -2770,19 +2830,28 @@ struct DashboardScreen: View {
                     eyebrow: "Metra",
                     ornament: .icon(systemName: "train.side.front.car")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                if let route = visiblePinnedMetraRoute {
+                    pickerPinnedConfirmationRow(
+                        title: MetraStationCatalog.route(id: route)?.displayName ?? route,
+                        clearLabel: "Clear pinned Metra \(route)",
+                        clearAction: { setPinnedMetra(nil) }
+                    ) {
+                        RouteBadge(metra: route, size: .sm)
+                    }
+                }
                 Menu {
-                    if pinnedMetraRoute != nil {
+                    if visiblePinnedMetraRoute != nil {
                         Button("Unpin", role: .destructive) { setPinnedMetra(nil) }
                         Divider()
                     }
-                    ForEach(MetraStationCatalog.routes, id: \.id) { line in
+                    ForEach(metraPickerRoutes, id: \.id) { line in
                         Button(line.displayName) { setPinnedMetra(line.id) }
                     }
                 } label: {
                     HStack(spacing: ChicagoSpacing.xs) {
                         Image(systemName: "train.side.front.car")
                             .foregroundStyle(ChicagoPalette.flagBlue)
-                        Text(pinnedMetraRoute.map { MetraStationCatalog.route(id: $0)?.displayName ?? $0 } ?? "Choose a line")
+                        Text(visiblePinnedMetraRoute == nil ? "Choose a line" : "Change line")
                             .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                             .foregroundStyle(ChicagoPalette.Gray.darkest)
                             .lineLimit(1)
@@ -2796,16 +2865,21 @@ struct DashboardScreen: View {
                     .background(ChicagoPalette.Surface.elevated,
                                 in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
                 }
-                Text("Uses Metra’s GTFS schedule, then overlays realtime updates when your Metra key is set.")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
             }
         }
     }
 
+    private var visiblePinnedMetraRoute: String? {
+        guard let pinnedMetraRoute, isMetraRouteDiscoverable(pinnedMetraRoute) else { return nil }
+        return pinnedMetraRoute
+    }
+
+    private var metraPickerRoutes: [MetraLine] {
+        MetraStationCatalog.routes.filter { isMetraRouteDiscoverable($0.id) }
+    }
+
     private func pinnedMetraCard(route: String) -> some View {
-        let line = MetraStationCatalog.route(id: route)
-        return ChicagoCard(title: line?.displayName ?? route,
+        return ChicagoCard(title: "Pinned Metra",
                            eyebrow: isAutopinned ? "Autopinned Metra" : "Pinned Metra",
                            ornament: .icon(systemName: "train.side.front.car")) {
             pinnedMetraBody(route: route)
@@ -2823,9 +2897,17 @@ struct DashboardScreen: View {
             } else {
                 let selected = effectivePinnedMetraStation(in: choices)
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    metraStationSelector(choices: choices, origin: origin)
-                    directionPickerForMetra(route: route, station: selected.station)
+                    pinnedRouteControlRow(
+                        title: MetraStationCatalog.route(id: route)?.displayName ?? route,
+                        detail: "Pinned Metra",
+                        clearLabel: "Clear pinned Metra \(route)",
+                        clearAction: { setPinnedMetra(nil) }
+                    ) {
+                        RouteBadge(metra: route, size: .md)
+                    }
                     pinnedMetraStationRow(route: route, station: selected.station, origin: origin)
+                    directionPickerForMetra(route: route, station: selected.station)
+                    metraStationSelector(choices: choices, origin: origin)
                 }
                 .task(id: accessTaskKey(prefix: "metra-\(route)", origin: origin)) {
                     model.walkingResolver.ensureFresh(
@@ -2941,8 +3023,7 @@ struct DashboardScreen: View {
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(station.name)
-                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.bahama)
                 Spacer()
                 Text(AccessTimeFormatter.short(accessTime))
@@ -3143,7 +3224,9 @@ struct DashboardScreen: View {
 
     @ViewBuilder
     private var nearbyLLines: some View {
-        if !nearbyLines.isEmpty {
+        if !routePreferences.isModeVisible(.trains) {
+            EmptyView()
+        } else if !nearbyLines.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Trains within walking distance")
                 SmallMultiplesRow(nearbyLines) { entry in
@@ -3165,15 +3248,11 @@ struct DashboardScreen: View {
 
     @ViewBuilder
     private var nearbyBuses: some View {
-        if !nearbyBusRoutes.isEmpty {
+        if !routePreferences.isModeVisible(.buses) {
+            EmptyView()
+        } else if !nearbyBusRoutes.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                HStack {
-                    sectionLabel("Buses nearby")
-                    Spacer()
-                    Text("Tap to pin")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                        .foregroundStyle(ChicagoPalette.Gray.light)
-                }
+                sectionLabel("Buses nearby")
                 SmallMultiplesRow(nearbyBusRoutes) { entry in
                     let pred = predictions(for: entry.stop).first
                     let minutes = pred.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
@@ -3194,15 +3273,11 @@ struct DashboardScreen: View {
 
     @ViewBuilder
     private var nearbyMetra: some View {
-        if !nearbyMetraRoutes.isEmpty {
+        if !routePreferences.isModeVisible(.metra) {
+            EmptyView()
+        } else if !nearbyMetraRoutes.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                HStack {
-                    sectionLabel("Metra nearby")
-                    Spacer()
-                    Text("Tap to pin")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                        .foregroundStyle(ChicagoPalette.Gray.light)
-                }
+                sectionLabel("Metra nearby")
                 SmallMultiplesRow(nearbyMetraRoutes) { entry in
                     let group = MetraDepartureGrouper.groups(
                         from: metraPredictions(for: entry),
@@ -3236,7 +3311,7 @@ struct DashboardScreen: View {
     }
 
     private var nearbyLines: [LineEntry] {
-        guard let origin else { return [] }
+        guard routePreferences.isModeVisible(.trains), let origin else { return [] }
         let stations = NearestStationResolver(maxDistanceMeters: 2_000)
             .all(
                 within: 2_000,
@@ -3273,16 +3348,18 @@ struct DashboardScreen: View {
 
         return byLine
             .filter { $0.key != pinnedLine }
+            .filter { isTrainLineDiscoverable($0.key) }
             .map { LineEntry(line: $0.key, station: $0.value.station, distance: $0.value.distance) }
             .sorted { $0.distance < $1.distance }
     }
 
     private var nearbyBusRoutes: [BusEntry] {
-        guard let origin else { return [] }
+        guard routePreferences.isModeVisible(.buses), let origin else { return [] }
         let resolver = NearestBusStopResolver(maxDistanceMeters: 1_500)
         let stops = resolver.nearest(to: origin, limit: 8, catalog: BusStopCatalog.all)
         return stops
             .filter { $0.route != pinnedBusRoute }
+            .filter { isBusRouteDiscoverable($0.route) }
             .prefix(5)
             .map { stop -> BusEntry in
                 let d = Distance.meters(
@@ -3294,7 +3371,7 @@ struct DashboardScreen: View {
     }
 
     private var nearbyMetraRoutes: [MetraEntry] {
-        guard let origin else { return [] }
+        guard routePreferences.isModeVisible(.metra), let origin else { return [] }
         return NearestMetraStationResolver(maxDistanceMeters: 3_000)
             .nearestPerRoute(
                 to: origin,
@@ -3302,6 +3379,7 @@ struct DashboardScreen: View {
                 catalog: MetraStationCatalog.all
             )
             .filter { $0.routeId != pinnedMetraRoute }
+            .filter { isMetraRouteDiscoverable($0.routeId) }
             .map { MetraEntry(routeId: $0.routeId, station: $0.station, distance: $0.distance) }
     }
 
@@ -3411,10 +3489,87 @@ struct DashboardScreen: View {
 
     // MARK: - Tiny helpers
 
+    private func pickerPinnedConfirmationRow<Badge: View>(
+        title: String,
+        clearLabel: String,
+        clearAction: @escaping () -> Void,
+        @ViewBuilder badge: () -> Badge
+    ) -> some View {
+        HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
+            Text("Pinned")
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.bahama)
+            badge()
+            Text(title)
+                .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: ChicagoSpacing.xs)
+            Text("Shown above")
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+                .lineLimit(1)
+            Button(action: clearAction) {
+                Image(systemName: "pin.slash")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(clearLabel)
+        }
+        .padding(.horizontal, ChicagoSpacing.sm)
+        .padding(.vertical, ChicagoSpacing.xs)
+        .background(
+            ChicagoPalette.Surface.elevated,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(
+                    ChicagoPalette.cornflower.opacity(0.28),
+                    lineWidth: ChicagoSpacing.Stroke.hairline
+                )
+        )
+    }
+
+    private func pinnedRouteControlRow<Badge: View>(
+        title: String,
+        detail: String? = nil,
+        clearLabel: String,
+        clearAction: @escaping () -> Void,
+        @ViewBuilder badge: () -> Badge
+    ) -> some View {
+        HStack(alignment: .center, spacing: ChicagoSpacing.sm) {
+            badge()
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: ChicagoSpacing.sm)
+            Button(action: clearAction) {
+                Image(systemName: "pin.slash")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(clearLabel)
+        }
+    }
+
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(ChicagoTypography.displaySM(relativeTo: .caption))
-            .tracking(0.5)
+            .font(ChicagoTypography.body(.medium, relativeTo: .caption))
             .foregroundStyle(ChicagoPalette.bahama)
     }
 }
@@ -3973,8 +4128,7 @@ private struct DirectionChip: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                .tracking(0.5)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                 .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
                 .padding(.horizontal, ChicagoSpacing.md)
                 .padding(.vertical, ChicagoSpacing.xs + 2)
@@ -4382,7 +4536,7 @@ private struct BikeOptionRow: View {
         HStack(alignment: .center, spacing: ChicagoSpacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(ChicagoTypography.displaySM())
+                    .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)

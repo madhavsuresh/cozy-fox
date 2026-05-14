@@ -19,7 +19,7 @@ struct LockScreenInlineWidget: Widget {
 
     @ViewBuilder
     private func inlineView(for entry: LockScreenEntry) -> some View {
-        if let arrival = entry.snapshot.trainArrivals.first {
+        if let arrival = entry.displayedTrainArrivals.first {
             Text("\(arrival.line.shortName) \(ArrivalFormatter.label(for: arrival).shortText)")
         } else {
             Text("Cozy Fox")
@@ -53,12 +53,8 @@ struct RectangularLockView: View {
     let entry: LockScreenEntry
 
     var body: some View {
-        if let arrival = entry.snapshot.trainArrivals.first {
+        if let arrival = entry.displayedTrainArrivals.first {
             let line = arrival.line
-            let upcoming = entry.snapshot.trainArrivals
-                .filter { $0.line == line }
-                .prefix(6)
-                .map(\.arrivalAt)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: ChicagoSpacing.xs) {
                     RouteBadge(line: line, size: .sm)
@@ -66,7 +62,7 @@ struct RectangularLockView: View {
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                         .lineLimit(1)
                 }
-                ForEach(entry.snapshot.trainArrivals.prefix(2), id: \.id) { item in
+                ForEach(entry.displayedTrainArrivals.prefix(2), id: \.id) { item in
                     Text(ArrivalFormatter.label(for: item).shortText)
                         .font(ChicagoTypography.bigNumber(16, relativeTo: .callout))
                 }
@@ -81,14 +77,13 @@ struct CircularLockView: View {
     let entry: LockScreenEntry
 
     var body: some View {
-        if let arrival = entry.snapshot.trainArrivals.first {
+        if let arrival = entry.displayedTrainArrivals.first {
             let mins = max(0, arrival.minutesUntilArrival())
             VStack(spacing: 0) {
                 Text("\(mins)")
                     .font(ChicagoTypography.bigNumber(22, relativeTo: .title3))
                 Text("MIN")
-                    .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
             }
         } else {
             ChicagoStar()
@@ -101,24 +96,53 @@ struct CircularLockView: View {
 struct LockScreenEntry: TimelineEntry {
     let date: Date
     let snapshot: TransitSnapshot
+    let preferences: UserRoutePreferences
+
+    var displayedTrainArrivals: [Arrival] {
+        if let tripTrain = preferences.plannedTripPin?.train {
+            return snapshot.trainArrivals
+                .filter { $0.line == tripTrain.line }
+                .filter { tripTrain.stationId == nil || $0.stationId == tripTrain.stationId }
+                .filter { tripTrain.destinationName == nil || $0.destinationName == tripTrain.destinationName }
+        }
+        if let pinned = preferences.pinnedLine {
+            return snapshot.trainArrivals
+                .filter { $0.line == pinned }
+                .filter { preferences.pinnedStationId == nil || $0.stationId == preferences.pinnedStationId }
+                .filter {
+                    preferences.pinnedTrainDestination == nil
+                        || $0.destinationName == preferences.pinnedTrainDestination
+                }
+        }
+        guard preferences.isModeVisible(.trains),
+              let first = snapshot.trainArrivals.first(where: {
+                  preferences.isTrainLineVisible($0.line)
+              }) else { return [] }
+        return snapshot.trainArrivals.filter { $0.line == first.line }
+    }
 }
 
 struct LockScreenProvider: TimelineProvider {
     typealias Entry = LockScreenEntry
 
     func placeholder(in context: Context) -> LockScreenEntry {
-        LockScreenEntry(date: .now, snapshot: .empty)
+        LockScreenEntry(date: .now, snapshot: .empty, preferences: .empty)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (LockScreenEntry) -> Void) {
-        completion(LockScreenEntry(date: .now, snapshot: load()))
+        completion(LockScreenEntry(date: .now, snapshot: load(), preferences: loadPreferences()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<LockScreenEntry>) -> Void) {
         let snap = load()
+        let prefs = loadPreferences()
         let now = Date()
         let entries = (0..<5).map { offset in
-            LockScreenEntry(date: now.addingTimeInterval(Double(offset) * 90), snapshot: snap)
+            LockScreenEntry(
+                date: now.addingTimeInterval(Double(offset) * 90),
+                snapshot: snap,
+                preferences: prefs
+            )
         }
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(450))))
     }
@@ -126,5 +150,11 @@ struct LockScreenProvider: TimelineProvider {
     private func load() -> TransitSnapshot {
         guard let container = try? ModelContainer.sharedAppGroup() else { return .empty }
         return SnapshotReader(container: container).loadSnapshot()
+    }
+
+    private func loadPreferences() -> UserRoutePreferences {
+        var prefs = PreferencesStore().loadRoutePreferences()
+        _ = prefs.clearExpiredPlannedTripPin()
+        return prefs
     }
 }

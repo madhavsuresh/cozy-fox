@@ -1,12 +1,8 @@
 import SwiftUI
 
-/// A flat civic card: solid surface, hairline border, and an optional
-/// eyebrow + title header set in Big Shoulders ALL CAPS — the same
-/// rhythm a Chicago bulletin uses.
-///
-/// Replaces the ad-hoc `private struct Card` previously scattered
-/// through the dashboard. Everything else flows from theme tokens, so
-/// you only change padding/colours in one place.
+/// A flat grouped surface: solid neutral fill, hairline border, and an
+/// optional compact header. Route color carries wayfinding; this container
+/// stays quiet.
 public struct ChicagoCard<Content: View>: View {
     public enum Ornament: Sendable {
         case star
@@ -57,19 +53,19 @@ public struct ChicagoCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 2) {
             if let eyebrow {
                 Text(eyebrow)
-                    .font(ChicagoTypography.displaySM())
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
                     .foregroundStyle(ChicagoPalette.bahama)
                     .accessibilityLabel(eyebrow)
             }
             if let title {
-                HStack(spacing: ChicagoSpacing.sm) {
+                HStack(spacing: ChicagoSpacing.xs) {
                     ornamentView
                     Text(title)
-                        .font(ChicagoTypography.displayLG())
-                        .tracking(0.5)
+                        .font(ChicagoTypography.body(.bold, relativeTo: .subheadline))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .accessibilityLabel(title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
         }
@@ -81,11 +77,11 @@ public struct ChicagoCard<Content: View>: View {
         case .star:
             ChicagoStar()
                 .fill(ChicagoPalette.starRed)
-                .frame(width: 20, height: 20)
+                .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
         case .icon(let name):
             Image(systemName: name)
-                .font(.title3)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(ChicagoPalette.flagBlue)
                 .accessibilityHidden(true)
         case .none:

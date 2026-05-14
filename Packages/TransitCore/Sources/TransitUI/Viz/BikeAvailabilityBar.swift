@@ -59,8 +59,7 @@ public struct BikeAvailabilityBar: View {
                     .foregroundStyle(ChicagoPalette.Gray.dark)
                 Spacer()
                 Text(statusLabel)
-                    .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
                     .foregroundStyle(fillColor)
             }
         }

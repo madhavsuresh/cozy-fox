@@ -60,7 +60,7 @@ public struct RouteBadge: View {
     public var body: some View {
         Text(label)
             .font(badgeFont)
-            .tracking(0.5)
+            .monospacedDigit()
             .foregroundStyle(textColor)
             .padding(.horizontal, size.horizontalPadding)
             .padding(.vertical, size.verticalPadding)
@@ -107,10 +107,6 @@ public struct RouteBadge: View {
     }
 
     private var badgeFont: Font {
-        switch size {
-        case .sm: ChicagoTypography.displaySM(relativeTo: .caption)
-        case .md: ChicagoTypography.displaySM(relativeTo: .footnote)
-        case .lg: ChicagoTypography.displayMD(relativeTo: .headline)
-        }
+        ChicagoTypography.body(.bold, size: size.fontSize, relativeTo: size.fontStyle)
     }
 }
