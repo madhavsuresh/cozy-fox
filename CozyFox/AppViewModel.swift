@@ -79,10 +79,23 @@ final class AppViewModel {
         liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
+        migrateMobilityProfileIfNeeded()
         await loadCachedSnapshot()
         await walkingHydration.value
         await refreshIfNeeded()
         reconcileRefreshTicker()
+    }
+
+    /// Ensures any pre-summary mobility profile on disk gets folded into the
+    /// derived summary before the 14-day raw retention starts pruning rows.
+    /// Idempotent; the summarizer only consumes observations newer than its
+    /// stored cursor.
+    private func migrateMobilityProfileIfNeeded() {
+        let profile = preferences.loadMobilityProfile()
+        let updated = MobilityProfileSummarizer().refresh(profile)
+        if updated.summary != profile.summary {
+            preferences.saveMobilityProfile(updated)
+        }
     }
 
     /// Called from the SwiftUI scene-phase observer in `CozyFoxApp`.

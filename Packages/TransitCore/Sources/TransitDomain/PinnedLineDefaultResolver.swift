@@ -18,7 +18,12 @@ public struct PinnedLineDefaultResolver: Sendable {
         context: CommuteContext,
         location: LastKnownLocation?
     ) -> String? {
-        preferredLabel(
+        let summaryLabels = profile.summary.routePatterns.values
+            .filter { $0.mode == .train && $0.routeId == line.rawValue }
+            .flatMap { pattern -> [(label: String, count: Int)] in
+                pattern.directionLabelCounts.map { ($0.key, $0.value) }
+            }
+        return preferredLabel(
             availableLabels: availableDestinations,
             preferenceLabels: preferences.trains
                 .filter { $0.line == line }
@@ -30,6 +35,7 @@ public struct PinnedLineDefaultResolver: Sendable {
                 else { return nil }
                 return (destination, observation)
             },
+            summaryLabels: summaryLabels,
             context: context,
             location: location
         )
@@ -43,7 +49,12 @@ public struct PinnedLineDefaultResolver: Sendable {
         context: CommuteContext,
         location: LastKnownLocation?
     ) -> String? {
-        preferredLabel(
+        let summaryLabels = profile.summary.routePatterns.values
+            .filter { $0.mode == .bus && $0.routeId == route }
+            .flatMap { pattern -> [(label: String, count: Int)] in
+                pattern.directionLabelCounts.map { ($0.key, $0.value) }
+            }
+        return preferredLabel(
             availableLabels: availableDirections,
             preferenceLabels: preferences.buses
                 .filter { $0.route == route }
@@ -55,6 +66,7 @@ public struct PinnedLineDefaultResolver: Sendable {
                 else { return nil }
                 return (direction, observation)
             },
+            summaryLabels: summaryLabels,
             context: context,
             location: location
         )
@@ -64,6 +76,7 @@ public struct PinnedLineDefaultResolver: Sendable {
         availableLabels: [String],
         preferenceLabels: [(label: String, direction: CommuteDirection)],
         observationLabels: [(label: String, observation: MobilityProfile.RouteObservation)],
+        summaryLabels: [(label: String, count: Int)],
         context: CommuteContext,
         location: LastKnownLocation?
     ) -> String? {
@@ -89,6 +102,12 @@ public struct PinnedLineDefaultResolver: Sendable {
             latest[entry.label] = max(latest[entry.label] ?? .distantPast, entry.observation.recordedAt)
         }
 
+        // Summary labels fold in only when we already have *some* signal for
+        // them or to break ties — they shouldn't override a recent raw pin.
+        for entry in summaryLabels where !entry.label.isEmpty {
+            scores[entry.label, default: 0] += summaryScore(count: entry.count)
+        }
+
         let ranked = scores.sorted { lhs, rhs in
             if lhs.value != rhs.value { return lhs.value > rhs.value }
             let lhsLatest = latest[lhs.key] ?? .distantPast
@@ -104,6 +123,11 @@ public struct PinnedLineDefaultResolver: Sendable {
         }
 
         return available.first
+    }
+
+    private func summaryScore(count: Int) -> Double {
+        guard count > 0 else { return 0 }
+        return 2 + log(Double(count) + 1) * 1.5
     }
 
     private func match(_ candidate: String, in availableLabels: [String]) -> String? {

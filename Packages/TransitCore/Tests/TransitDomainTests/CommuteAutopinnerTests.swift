@@ -251,6 +251,53 @@ struct CommuteAutopinnerTests {
         #expect(result.preferences.pinSource == .automatic)
     }
 
+    @Test func summaryRouteSurfacesWhenRawHistoryAgedOut() {
+        // Simulate a long-time user whose raw observations have aged out but
+        // whose summary still encodes a strong Brown Line preference at home.
+        let now = date(year: 2026, month: 5, day: 13, hour: 8)
+        var summary = MobilityProfileSummary.empty
+        let pattern = MobilityProfileSummary.RoutePattern(
+            direction: .toWork,
+            mode: .train,
+            routeId: LineColor.brown.rawValue,
+            totalCount: 60,
+            weekdayCounts: ["3": 60],
+            hourCounts: ["8": 60],
+            stationCounts: ["40540": 60],
+            directionLabelCounts: ["Loop": 60],
+            originBucketCounts: ["100:200": 60],
+            destinationBucketCounts: ["110:210": 60],
+            latestSampleAt: now.addingTimeInterval(-20 * 86_400)
+        )
+        summary.routePatterns[pattern.key] = pattern
+        summary.departureWindows[
+            MobilityProfileSummary.departureKey(source: .exitedHome, direction: .toWork)
+        ] = MobilityProfileSummary.DepartureWindow(
+            weekdayHourCounts: ["3:8": 12],
+            totalCount: 12,
+            latestSampleAt: now.addingTimeInterval(-20 * 86_400)
+        )
+        summary.lastSummarizedAt = now.addingTimeInterval(-86_400)
+
+        let profile = MobilityProfile(
+            observations: [],
+            routeObservations: [],
+            updatedAt: now,
+            summary: summary
+        )
+
+        let result = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: .empty,
+            anchors: anchors,
+            profile: profile,
+            location: homeLocation,
+            context: .atHome
+        )
+
+        #expect(result.direction == .toWork)
+        #expect(result.preferences.pinnedLine == .brown)
+    }
+
     @Test func unknownMotionFallsBackToExistingHeuristic() {
         // Smoke check: with motion == .unknown (older device or no auth),
         // the autopinner must behave identically to the pre-motion version.
