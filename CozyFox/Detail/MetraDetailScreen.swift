@@ -57,19 +57,7 @@ struct MetraDetailScreen: View {
                     .font(ChicagoTypography.displaySM(relativeTo: .subheadline))
                     .tracking(0.5)
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
-                if let terminalSummary = group.terminalSummary {
-                    Text(terminalSummary)
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .lineLimit(1)
-                }
             }
-            MetraDepartureTimesView(
-                predictions: group.departures,
-                maxCount: 3,
-                size: .md,
-                accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
-            )
             HeadwayDotStrip(
                 arrivals: group.departures.prefix(8).map(\.arrivalAt),
                 accent: MetraStationCatalog.route(id: route)?.swiftUIColor ?? ChicagoPalette.bahama

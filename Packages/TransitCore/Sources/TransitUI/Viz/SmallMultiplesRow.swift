@@ -170,11 +170,11 @@ public struct DepartureTimesTile: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            MetraDepartureTimesView(
+            MetraDepartureListView(
                 predictions: departures,
-                maxCount: 3,
-                size: .sm,
-                accessibilityPrefix: "Metra departures at"
+                maxCount: 2,
+                density: .compact,
+                accessibilityPrefix: "Metra departures"
             )
             if let subtitle {
                 Text(subtitle)

@@ -127,3 +127,116 @@ public struct MetraDepartureTimesView: View {
         }
     }
 }
+
+public struct MetraDepartureListView: View {
+    public enum Density: Sendable {
+        case compact
+        case regular
+
+        var timeWidth: CGFloat {
+            switch self {
+            case .compact: 52
+            case .regular: 62
+            }
+        }
+
+        var timeFont: Font {
+            switch self {
+            case .compact:
+                ChicagoTypography.body(.medium, size: 13, relativeTo: .caption)
+                    .monospacedDigit()
+            case .regular:
+                ChicagoTypography.body(.medium, size: 16, relativeTo: .subheadline)
+                    .monospacedDigit()
+            }
+        }
+
+        var destinationFont: Font {
+            switch self {
+            case .compact: ChicagoTypography.body(.regular, relativeTo: .caption2)
+            case .regular: ChicagoTypography.body(.medium, relativeTo: .caption)
+            }
+        }
+
+        var detailFont: Font {
+            ChicagoTypography.body(.regular, relativeTo: .caption2)
+        }
+    }
+
+    public let predictions: [MetraPrediction]
+    public let maxCount: Int
+    public let density: Density
+    public let showsTrainNumber: Bool
+    public let accessibilityPrefix: String
+
+    public init(
+        predictions: [MetraPrediction],
+        maxCount: Int = 3,
+        density: Density = .regular,
+        showsTrainNumber: Bool = false,
+        accessibilityPrefix: String = "Metra departures"
+    ) {
+        self.predictions = predictions
+        self.maxCount = maxCount
+        self.density = density
+        self.showsTrainNumber = showsTrainNumber
+        self.accessibilityPrefix = accessibilityPrefix
+    }
+
+    public var body: some View {
+        if displayed.isEmpty {
+            Text("No departures")
+                .font(density.detailFont)
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+        } else {
+            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                ForEach(displayed, id: \.id) { prediction in
+                    row(prediction)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel)
+        }
+    }
+
+    private func row(_ prediction: MetraPrediction) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: ChicagoSpacing.xs) {
+            Text(MetraDepartureFormatter.timeString(prediction.arrivalAt))
+                .font(density.timeFont)
+                .foregroundStyle(timeColor(for: prediction))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(width: density.timeWidth, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(MetraDepartureGrouper.displayDestinationName(prediction.destinationName))
+                    .font(density.destinationFont)
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if showsTrainNumber {
+                    Text("Train \(prediction.trainNumber)")
+                        .font(density.detailFont)
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private var displayed: [MetraPrediction] {
+        Array(predictions.prefix(maxCount))
+    }
+
+    private var accessibilityLabel: String {
+        let departures = displayed.map { prediction in
+            "\(MetraDepartureFormatter.accessibilityString(prediction.arrivalAt)) to \(MetraDepartureGrouper.displayDestinationName(prediction.destinationName))"
+        }
+        .joined(separator: ", ")
+        return "\(accessibilityPrefix): \(departures)"
+    }
+
+    private func timeColor(for prediction: MetraPrediction) -> Color {
+        prediction.isDelayed || prediction.isCanceled ? ChicagoPalette.starRed : ChicagoPalette.Gray.darkest
+    }
+}

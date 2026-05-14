@@ -708,17 +708,11 @@ struct DashboardScreen: View {
             }
             if let group {
                 VStack(alignment: .leading, spacing: 2) {
-                    if let terminalSummary = group.terminalSummary {
-                        Text(terminalSummary)
-                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                            .foregroundStyle(ChicagoPalette.Gray.medium)
-                            .lineLimit(1)
-                    }
-                    MetraDepartureTimesView(
+                    MetraDepartureListView(
                         predictions: group.departures,
                         maxCount: 3,
-                        size: .md,
-                        accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+                        density: .regular,
+                        accessibilityPrefix: "Metra \(group.title.lowercased()) departures"
                     )
                 }
                 HeadwayDotStrip(arrivals: group.departures.prefix(8).map(\.arrivalAt),
@@ -2345,8 +2339,8 @@ struct DashboardScreen: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: ChicagoSpacing.xs) {
                         ForEach(groups) { group in
-                            MetraDirectionGroupChip(
-                                group: group,
+                            DirectionChip(
+                                label: group.title,
                                 isSelected: pinnedMetraDirectionId == group.directionId,
                                 accent: pinnedMetraAccent,
                                 action: { togglePinnedMetraDirection(group) }
@@ -2405,17 +2399,11 @@ struct DashboardScreen: View {
                         .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .lineLimit(1)
-                    if let terminalSummary = group.terminalSummary {
-                        Text(terminalSummary)
-                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                            .foregroundStyle(ChicagoPalette.Gray.medium)
-                            .lineLimit(1)
-                    }
-                    MetraDepartureTimesView(
+                    MetraDepartureListView(
                         predictions: group.departures,
                         maxCount: 3,
-                        size: .md,
-                        accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+                        density: .regular,
+                        accessibilityPrefix: "Metra \(group.title.lowercased()) departures"
                     )
                 }
                 HeadwayDotStrip(
@@ -2654,7 +2642,7 @@ struct DashboardScreen: View {
                         badge: RouteBadge(metra: entry.routeId, size: .md),
                         title: group?.title,
                         departures: group?.departures ?? [],
-                        subtitle: group?.terminalSummary ?? entry.station.name
+                        subtitle: entry.station.name
                     )
                     .onTapGesture { setPinnedMetra(entry.routeId) }
                 }
@@ -3299,53 +3287,6 @@ private struct DirectionChip: View {
                             lineWidth: ChicagoSpacing.Stroke.thin
                         )
                 )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct MetraDirectionGroupChip: View {
-    let group: MetraDepartureGroup
-    let isSelected: Bool
-    let accent: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(group.title)
-                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
-                    .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
-                    .lineLimit(1)
-                MetraDepartureTimesView(
-                    predictions: group.departures,
-                    maxCount: 3,
-                    size: .sm,
-                    tone: isSelected ? .onDark : .primary,
-                    accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
-                )
-                if let terminalSummary = group.terminalSummary {
-                    Text(terminalSummary)
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .padding(.horizontal, ChicagoSpacing.md)
-            .padding(.vertical, ChicagoSpacing.sm)
-            .frame(minWidth: 168, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                    .fill(isSelected ? accent : ChicagoPalette.Surface.elevated)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                    .strokeBorder(
-                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
-                        lineWidth: ChicagoSpacing.Stroke.thin
-                    )
-            )
         }
         .buttonStyle(.plain)
     }
