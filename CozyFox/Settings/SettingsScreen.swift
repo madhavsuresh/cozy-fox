@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import TransitDomain
 import TransitModels
 
 struct SettingsScreen: View {
@@ -15,6 +16,10 @@ struct SettingsScreen: View {
     @State private var trainSaveStatus: String = "—"
     @State private var busSaveStatus: String = "—"
     @State private var learningDataVersion: Int = 0
+    @State private var currentApproximateAddress: String?
+    @State private var homeApproximateAddress: String?
+    @State private var workApproximateAddress: String?
+    @State private var addressLookupTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -86,6 +91,7 @@ struct SettingsScreen: View {
                         anchors.work = nil
                         model.preferences.saveCommuteAnchors(anchors)
                         model.location.updateAnchors(anchors)
+                        refreshApproximateAddresses()
                     }
                 }
             }
@@ -117,6 +123,8 @@ struct SettingsScreen: View {
                 Text("Auto-pin predicts a commute direction locally from home/work context and coarse time patterns. Manual pins override it for 30 minutes. With \"Always show\" on, the Live Activity stays in the Dynamic Island / Lock Screen and refreshes whenever the app updates.")
                     .font(.footnote)
             }
+
+            autopinBeliefSection
 
             Section("Tracked trains") {
                 if prefs.trains.isEmpty {
@@ -175,14 +183,19 @@ struct SettingsScreen: View {
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showWorkEntry, onDismiss: {
-            anchors = model.preferences.loadCommuteAnchors()
+            reloadPredictionState()
         }) {
             WorkAddressEntry()
         }
         .onAppear {
-            prefs = model.preferences.loadRoutePreferences()
-            anchors = model.preferences.loadCommuteAnchors()
+            reloadPredictionState()
             reloadFromKeychain()
+        }
+        .onDisappear {
+            addressLookupTask?.cancel()
+        }
+        .onChange(of: model.pinRevision) { _, _ in
+            reloadPredictionState()
         }
     }
 
@@ -237,6 +250,296 @@ struct SettingsScreen: View {
         }
         save()
         model.pinRevision += 1
+    }
+
+    // MARK: - Autopin belief
+
+    @ViewBuilder
+    private var autopinBeliefSection: some View {
+        let profile = model.preferences.loadMobilityProfile()
+        let preview = autopinPreview(profile: profile)
+
+        Section {
+            beliefRow("Current place", contextBeliefText)
+            beliefRow("Approximate current address", currentAddressText)
+            beliefRow("Home estimate", anchorAddressText(
+                anchor: anchors.home,
+                resolved: homeApproximateAddress,
+                missing: "No home anchor set yet."
+            ))
+            beliefRow("Work estimate", anchorAddressText(
+                anchor: anchors.work,
+                resolved: workApproximateAddress,
+                missing: "No work address set yet."
+            ))
+            beliefRow("Typical home departure", homeDepartureBeliefText(profile))
+            beliefRow("Typical work departure", workDepartureBeliefText(profile))
+            beliefRow("Next autopin decision", predictionDecisionText(preview))
+            beliefRow("Transit it would surface", surfacedTransitText(preview))
+
+            if let override = manualOverrideText {
+                beliefRow("Manual override", override)
+            }
+        } header: {
+            Text("Autopin belief")
+        } footer: {
+            Text("These are the local prediction inputs and output. Approximate addresses are reverse-geocoded for display only and are not saved by Cozy Fox.")
+                .font(.footnote)
+        }
+    }
+
+    private func reloadPredictionState() {
+        prefs = model.preferences.loadRoutePreferences()
+        anchors = model.preferences.loadCommuteAnchors()
+        refreshApproximateAddresses()
+    }
+
+    private func refreshApproximateAddresses() {
+        addressLookupTask?.cancel()
+        currentApproximateAddress = nil
+        homeApproximateAddress = nil
+        workApproximateAddress = nil
+
+        let current = model.location.lastKnown
+        let home = anchors.home
+        let work = anchors.work
+
+        addressLookupTask = Task { @MainActor in
+            async let currentAddress = ReverseGeocodeService.lookup(current)
+            async let homeAddress = ReverseGeocodeService.lookup(home)
+            async let workAddress = ReverseGeocodeService.lookup(work)
+            let resolved = await (currentAddress, homeAddress, workAddress)
+            guard !Task.isCancelled else { return }
+            currentApproximateAddress = resolved.0
+            homeApproximateAddress = resolved.1
+            workApproximateAddress = resolved.2
+        }
+    }
+
+    private func autopinPreview(profile: MobilityProfile) -> CommuteAutopinner.Result {
+        CommuteAutopinner().apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: profile,
+            location: model.location.lastKnown,
+            context: model.location.context
+        )
+    }
+
+    private var contextBeliefText: String {
+        switch model.location.context {
+        case .atHome: "Home"
+        case .atWork: "Work"
+        case .elsewhere: "Neither home nor work"
+        case .unknown: "Unknown"
+        }
+    }
+
+    private var currentAddressText: String {
+        guard let location = model.location.lastKnown else {
+            return "Waiting for a foreground location."
+        }
+        return addressText(
+            latitude: location.latitude,
+            longitude: location.longitude,
+            resolved: currentApproximateAddress
+        )
+    }
+
+    private func anchorAddressText(
+        anchor: CommuteAnchors.Anchor?,
+        resolved: String?,
+        missing: String
+    ) -> String {
+        guard let anchor else { return missing }
+        return addressText(
+            latitude: anchor.latitude,
+            longitude: anchor.longitude,
+            resolved: resolved
+        )
+    }
+
+    private func addressText(latitude: Double, longitude: Double, resolved: String?) -> String {
+        let coordinate = approximateCoordinateText(latitude: latitude, longitude: longitude)
+        guard let resolved, !resolved.isEmpty else { return coordinate }
+        return "\(resolved) (\(coordinate))"
+    }
+
+    private func approximateCoordinateText(latitude: Double, longitude: Double) -> String {
+        String(format: "%.3f, %.3f", latitude, longitude)
+    }
+
+    private func homeDepartureBeliefText(_ profile: MobilityProfile) -> String {
+        let belief = weekdayDepartureBelief(profile, source: .exitedHome, direction: .toWork)
+        guard let peakHour = belief.peakHour else {
+            return "No home departures observed yet. Until there are 3 samples, weekdays 5–11 AM are treated as likely work-commute time."
+        }
+        let sampleText = sampleText(count: belief.count)
+        let latest = latestSampleText(belief.latest)
+        if belief.count < 3 {
+            return "Learning from \(sampleText), often around \(hourLabel(peakHour))\(latest); weekdays 5–11 AM remain the fallback."
+        }
+        return "Weekdays around \(hourLabel(peakHour)) from \(sampleText)\(latest)."
+    }
+
+    private func workDepartureBeliefText(_ profile: MobilityProfile) -> String {
+        let belief = weekdayDepartureBelief(profile, source: .exitedWork, direction: .toHome)
+        guard let peakHour = belief.peakHour else {
+            return "No work departures observed yet. When at work, autopin still targets home."
+        }
+        return "Weekdays around \(hourLabel(peakHour)) from \(sampleText(count: belief.count))\(latestSampleText(belief.latest)); at work, autopin targets home."
+    }
+
+    private func weekdayDepartureBelief(
+        _ profile: MobilityProfile,
+        source: MobilityProfile.Observation.Source,
+        direction: CommuteDirection
+    ) -> DepartureTimeBelief {
+        let departures = profile.observations.filter {
+            $0.source == source
+                && $0.direction == direction
+                && (2...6).contains($0.weekday)
+        }
+        let byHour = Dictionary(grouping: departures, by: \.hour)
+        let peakHour = byHour.sorted {
+            if $0.value.count == $1.value.count {
+                return $0.key < $1.key
+            }
+            return $0.value.count > $1.value.count
+        }.first?.key
+        let latest = departures.map(\.recordedAt).max()
+        return DepartureTimeBelief(count: departures.count, peakHour: peakHour, latest: latest)
+    }
+
+    private func sampleText(count: Int) -> String {
+        "\(count) weekday \(count == 1 ? "sample" : "samples")"
+    }
+
+    private func latestSampleText(_ date: Date?) -> String {
+        guard let date else { return "" }
+        return "; latest \(dateTimeText(date))"
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        let hour12 = hour % 12 == 0 ? 12 : hour % 12
+        let suffix = hour < 12 ? "AM" : "PM"
+        return "\(hour12) \(suffix)"
+    }
+
+    private var manualOverrideText: String? {
+        guard let last = prefs.lastManualPinAt else { return nil }
+        let overrideSeconds: TimeInterval = 30 * 60
+        guard Date().timeIntervalSince(last) < overrideSeconds else { return nil }
+        guard Calendar.current.isDate(last, inSameDayAs: Date()) else { return nil }
+        return "Manual pins pause autopin until \(timeText(last.addingTimeInterval(overrideSeconds)))."
+    }
+
+    private func predictionDecisionText(_ result: CommuteAutopinner.Result) -> String {
+        switch result.reason {
+        case .disabled:
+            return "Auto-pin is off."
+        case .manualOverride:
+            return manualOverrideText ?? "Paused by a recent manual pin."
+        case .missingLocation:
+            return "Waiting for a current location."
+        case .missingAnchor:
+            return "Missing the \(missingAnchorLabel(for: result.direction)) anchor."
+        case .notInCommuteWindow:
+            return "At home outside the learned work-commute window."
+        case .noRoute:
+            return "\(directionText(result.direction)) was predicted, but no local route matched."
+        case .unchanged:
+            return "Keeps surfacing \(directionText(result.direction).lowercased())."
+        case .pinned:
+            return "Would surface \(directionText(result.direction).lowercased())."
+        case .cleared:
+            return "Would clear the current automatic pin."
+        }
+    }
+
+    private func missingAnchorLabel(for direction: CommuteDirection?) -> String {
+        switch direction {
+        case .toHome: "home"
+        case .toWork: "work"
+        case .anytime, nil: "home or work"
+        }
+    }
+
+    private func directionText(_ direction: CommuteDirection?) -> String {
+        direction?.label ?? "No commute direction"
+    }
+
+    private func surfacedTransitText(_ result: CommuteAutopinner.Result) -> String {
+        let previewPrefs = shouldUsePreviewPins(result.reason) ? result.preferences : prefs
+        let summary = pinnedTransitSummary(previewPrefs)
+        switch result.reason {
+        case .disabled:
+            return summary ?? "Auto-pin is off and no route is pinned."
+        case .missingLocation, .missingAnchor, .notInCommuteWindow, .noRoute, .cleared:
+            return summary ?? "No transit would be pinned right now."
+        case .manualOverride:
+            return summary.map { "Manual override: \($0)" } ?? "Manual override is active, with no route pinned."
+        case .pinned:
+            return summary.map { "Autopin preview: \($0)" } ?? "No transit would be pinned right now."
+        case .unchanged:
+            return summary.map { "\(previewPrefs.pinSource.label): \($0)" } ?? "No transit would be pinned right now."
+        }
+    }
+
+    private func shouldUsePreviewPins(_ reason: CommuteAutopinner.Result.Reason) -> Bool {
+        switch reason {
+        case .pinned, .unchanged, .cleared:
+            return true
+        case .disabled, .manualOverride, .missingLocation, .missingAnchor, .notInCommuteWindow, .noRoute:
+            return false
+        }
+    }
+
+    private func pinnedTransitSummary(_ preferences: UserRoutePreferences) -> String? {
+        var pieces: [String] = []
+        if let line = preferences.pinnedLine {
+            let station = preferences.pinnedStationId
+                .flatMap { id in LStationCatalog.all.first { $0.id == id }?.name }
+            if let station {
+                pieces.append("\(line.displayName) at \(station)")
+            } else {
+                pieces.append("\(line.displayName) at nearest station")
+            }
+        }
+        if let route = preferences.pinnedBusRoute {
+            if let direction = preferences.pinnedBusDirection {
+                pieces.append("Bus #\(route) \(direction)")
+            } else {
+                pieces.append("Bus #\(route)")
+            }
+        }
+        return pieces.isEmpty ? nil : pieces.joined(separator: " + ")
+    }
+
+    private func timeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func dateTimeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func beliefRow(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 2)
     }
 
     // MARK: - API key verification
@@ -303,6 +606,12 @@ enum APIKeyCheck: Equatable, Sendable {
     case ok
     case badKey(String)
     case unreachable
+}
+
+private struct DepartureTimeBelief {
+    let count: Int
+    let peakHour: Int?
+    let latest: Date?
 }
 
 /// Hits each CTA API directly with the keychain-stored key and inspects the
@@ -519,5 +828,46 @@ private enum GeocodeService {
                 return .failure(error.localizedDescription)
             }
         }.value
+    }
+}
+
+private enum ReverseGeocodeService {
+    static func lookup(_ location: LastKnownLocation?) async -> String? {
+        guard let location else { return nil }
+        return await lookup(latitude: location.latitude, longitude: location.longitude)
+    }
+
+    static func lookup(_ anchor: CommuteAnchors.Anchor?) async -> String? {
+        guard let anchor else { return nil }
+        return await lookup(latitude: anchor.latitude, longitude: anchor.longitude)
+    }
+
+    private static func lookup(latitude: Double, longitude: Double) async -> String? {
+        await Task.detached { () -> String? in
+            do {
+                let location = CLLocation(latitude: latitude, longitude: longitude)
+                let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
+                guard let placemark = placemarks.first else { return nil }
+                return placemarkSummary(placemark)
+            } catch {
+                return nil
+            }
+        }.value
+    }
+
+    private static func placemarkSummary(_ placemark: CLPlacemark) -> String {
+        let street = [placemark.subThoroughfare, placemark.thoroughfare]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        let locality = [placemark.locality, placemark.administrativeArea]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+        let firstLine = street.isEmpty ? placemark.name : street
+        return [firstLine, locality]
+            .compactMap { part in
+                guard let part, !part.isEmpty else { return nil }
+                return part
+            }
+            .joined(separator: ", ")
     }
 }
