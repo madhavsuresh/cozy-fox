@@ -25,21 +25,27 @@ struct CozyFoxApp: App {
         let anchors = prefs.loadCommuteAnchors()
         let location = LocationCoordinator(preferences: prefs, anchors: anchors)
         let walkingStore = WalkingDistanceStore()
+        let arrivalBiasStore = ArrivalBiasStore()
         let refreshCoordinator = RefreshCoordinator(
             store: store,
             preferences: prefs,
             location: location,
-            walkingStore: walkingStore
+            walkingStore: walkingStore,
+            arrivalBiasStore: arrivalBiasStore
         )
         let model = AppViewModel(
             store: store,
             preferences: prefs,
             location: location,
             refreshCoordinator: refreshCoordinator,
-            walkingStore: walkingStore
+            walkingStore: walkingStore,
+            arrivalBiasStore: arrivalBiasStore
         )
         _viewModel = State(initialValue: model)
         RefreshTaskScheduler.register(coordinator: refreshCoordinator)
+        PredictionMaintenanceTask.register(
+            arrivalBiasStore: arrivalBiasStore
+        )
     }
 
     var body: some Scene {

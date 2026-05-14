@@ -20,10 +20,7 @@ struct SettingsScreen: View {
     @State private var busSaveStatus: String = "—"
     @State private var metraSaveStatus: String = "—"
     @State private var learningDataVersion: Int = 0
-    @State private var currentApproximateAddress: String?
-    @State private var homeApproximateAddress: String?
-    @State private var workApproximateAddress: String?
-    @State private var addressLookupTask: Task<Void, Never>?
+    @State private var showResetLearningConfirmation: Bool = false
 
     var body: some View {
         Form {
@@ -108,7 +105,6 @@ struct SettingsScreen: View {
                         anchors.work = nil
                         model.preferences.saveCommuteAnchors(anchors)
                         model.location.updateAnchors(anchors)
-                        refreshApproximateAddresses()
                     }
                 }
             }
@@ -139,8 +135,6 @@ struct SettingsScreen: View {
             } header: {
                 Text("Behavior")
             }
-
-            localPredictionsSection
 
             Section("Tracked trains") {
                 if prefs.trains.isEmpty {
@@ -211,23 +205,35 @@ struct SettingsScreen: View {
                     model.walkingStore.clearAll()
                 }
             }
+
+            Section {
+                Button("Reset learning", role: .destructive) {
+                    showResetLearningConfirmation = true
+                }
+            } footer: {
+                Text("On-device data Cozy Fox keeps to learn your habits. Nothing leaves your phone.")
+                    .font(.footnote)
+            }
         }
         .navigationTitle("Settings")
-        .sheet(isPresented: $showWorkEntry, onDismiss: {
-            reloadPredictionState()
-        }) {
+        .sheet(isPresented: $showWorkEntry) {
             WorkAddressEntry()
         }
         .onAppear {
-            reloadPredictionState()
             reloadFromKeychain()
             Task { await model.location.refreshMotion() }
         }
-        .onDisappear {
-            addressLookupTask?.cancel()
-        }
-        .onChange(of: model.pinRevision) { _, _ in
-            reloadPredictionState()
+        .confirmationDialog(
+            "Reset on-device learning?",
+            isPresented: $showResetLearningConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset learning", role: .destructive) {
+                model.arrivalBiasStore.clearAll()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clears what Cozy Fox has learned about your trips. New samples will be collected as you use the app.")
         }
     }
 
@@ -527,460 +533,6 @@ struct SettingsScreen: View {
         }
         save()
         model.pinRevision += 1
-    }
-
-    // MARK: - Local predictions
-
-    @ViewBuilder
-    private var localPredictionsSection: some View {
-        let profile = model.preferences.loadMobilityProfile()
-        let autopinPreview = autopinPreview(profile: profile)
-        let prediction = localPrediction(profile: profile)
-
-        Section {
-            beliefRow("Current place", contextBeliefText)
-            beliefRow("Approximate current address", currentAddressText)
-            beliefRow("Activity", motionBeliefText)
-            beliefRow("Home estimate", anchorAddressText(
-                anchor: anchors.home,
-                resolved: homeApproximateAddress,
-                missing: "No home anchor set yet."
-            ))
-            beliefRow("Work estimate", anchorAddressText(
-                anchor: anchors.work,
-                resolved: workApproximateAddress,
-                missing: "No work address set yet."
-            ))
-
-            beliefRow("Predicted direction", predictedDirectionText(prediction))
-            beliefRow("Confidence", confidenceText(prediction))
-            beliefRow("Reason", prediction.reasonText)
-            beliefRow("Departure-window match", departureMatchText(prediction))
-            beliefRow("Likely route", likelyRouteText(prediction))
-
-            beliefRow("Typical home departure", homeDepartureBeliefText(profile))
-            beliefRow("Typical work departure", workDepartureBeliefText(profile))
-            beliefRow("Next autopin decision", predictionDecisionText(autopinPreview))
-            beliefRow("Transit it would surface", surfacedTransitText(autopinPreview))
-
-            beliefRow("Summary freshness", summaryFreshnessText(profile))
-            beliefRow("Raw retention window", retentionWindowText)
-            beliefRow("Sample counts", sampleCountsText(profile))
-
-            if let override = manualOverrideText {
-                beliefRow("Manual override", override)
-            }
-        } header: {
-            Text("Local predictions")
-        } footer: {
-            Text("On-device commute prediction inputs and outputs. Activity is read from the iPhone motion coprocessor (always-on, near-zero battery). Approximate addresses are reverse-geocoded for display only and are not saved by Cozy Fox. Raw observations are kept for \(Int(MobilityProfile.rawRetentionDays)) days; long-term patterns survive in a derived summary.")
-                .font(.footnote)
-        }
-    }
-
-    private func localPrediction(profile: MobilityProfile) -> LocalMobilityPrediction {
-        LocalPredictionEngine().predict(
-            preferences: prefs,
-            anchors: anchors,
-            profile: profile,
-            location: model.location.lastKnown,
-            context: model.location.context,
-            motion: model.location.motion
-        )
-    }
-
-    private func predictedDirectionText(_ prediction: LocalMobilityPrediction) -> String {
-        guard let direction = prediction.direction else {
-            switch prediction.reason {
-            case .disabled: return "Auto-pin is off."
-            case .manualOverride: return "Holding the manual pin."
-            case .missingLocation: return "Waiting for a current location."
-            case .suppressedByMotion: return "Suppressed — still at home."
-            case .notInCommuteWindow: return "No commute direction right now."
-            default: return "No commute direction right now."
-            }
-        }
-        return direction.label
-    }
-
-    private func confidenceText(_ prediction: LocalMobilityPrediction) -> String {
-        let percentage = Int((prediction.confidence * 100).rounded())
-        let coverage = Int((prediction.coverage * 100).rounded())
-        if prediction.confidence == 0 && prediction.coverage == 0 {
-            return "Not predicting right now."
-        }
-        return "\(percentage)% on this call · learning coverage \(coverage)%."
-    }
-
-    private func departureMatchText(_ prediction: LocalMobilityPrediction) -> String {
-        let baseline: String
-        switch prediction.departureMatch {
-        case .insideLearnedWindow:
-            baseline = "Inside the learned departure window"
-        case .nearLearnedWindow:
-            baseline = "Close to the learned departure window"
-        case .outsideLearnedWindow:
-            baseline = "Outside the usual departure window"
-        case .fallbackWindow:
-            baseline = "Inside the fallback commute hours"
-        case .noLearnedWindow:
-            baseline = "No learned departure window yet"
-        }
-        if let weekday = prediction.peakDepartureWeekday,
-           let hour = prediction.peakDepartureHour
-        {
-            return "\(baseline) (peak \(weekdayShortName(weekday)) ~ \(hourLabel(hour)), \(prediction.learnedDepartureSampleCount) samples)."
-        }
-        if let hour = prediction.peakDepartureHour {
-            return "\(baseline) (peak around \(hourLabel(hour)), \(prediction.learnedDepartureSampleCount) samples)."
-        }
-        return "\(baseline)."
-    }
-
-    private func likelyRouteText(_ prediction: LocalMobilityPrediction) -> String {
-        guard let candidate = prediction.topCandidate else {
-            return "No learned route yet."
-        }
-        var description = routeDescription(candidate)
-        let sourceText = candidate.source == .raw ? "from recent history" : "from the long-term summary"
-        let countText = candidate.totalCount == 1 ? "1 sample" : "\(candidate.totalCount) samples"
-        description += " · \(sourceText) · \(countText)"
-        if prediction.routeCandidates.count > 1 {
-            let alternatives = prediction.routeCandidates.dropFirst()
-                .prefix(2)
-                .map { routeDescription($0) }
-                .joined(separator: ", ")
-            description += "; also considering \(alternatives)"
-        }
-        return description
-    }
-
-    private func routeDescription(_ candidate: LocalMobilityPrediction.RouteCandidate) -> String {
-        switch candidate.mode {
-        case .train:
-            let line = LineColor(rawValue: candidate.routeId)?.displayName ?? candidate.routeId
-            if let label = candidate.directionLabel, !label.isEmpty {
-                return "\(line) toward \(label)"
-            }
-            return line
-        case .bus:
-            if let label = candidate.directionLabel, !label.isEmpty {
-                return "Bus #\(candidate.routeId) \(label)"
-            }
-            return "Bus #\(candidate.routeId)"
-        case .metra:
-            return "Metra \(candidate.routeId)"
-        }
-    }
-
-    private func summaryFreshnessText(_ profile: MobilityProfile) -> String {
-        guard let lastSummarized = profile.summary.lastSummarizedAt else {
-            return "Summary has not been built yet."
-        }
-        let consumed = profile.summary.consumedObservationCount + profile.summary.consumedRouteObservationCount
-        return "Last folded \(dateTimeText(lastSummarized)); \(consumed) observation\(consumed == 1 ? "" : "s") summarized."
-    }
-
-    private var retentionWindowText: String {
-        "Raw observations kept for \(Int(MobilityProfile.rawRetentionDays)) days; long-term patterns persist in the summary."
-    }
-
-    private func sampleCountsText(_ profile: MobilityProfile) -> String {
-        "\(profile.observations.count) context, \(profile.routeObservations.count) route observations in the last \(Int(MobilityProfile.rawRetentionDays)) days; \(profile.summary.routePatterns.count) route patterns in the summary."
-    }
-
-    private func weekdayShortName(_ weekday: Int) -> String {
-        let names = ["", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        guard (1...7).contains(weekday) else { return "?" }
-        return names[weekday]
-    }
-
-    private func reloadPredictionState() {
-        prefs = model.preferences.loadRoutePreferences()
-        anchors = model.preferences.loadCommuteAnchors()
-        refreshApproximateAddresses()
-    }
-
-    private func refreshApproximateAddresses() {
-        addressLookupTask?.cancel()
-        currentApproximateAddress = nil
-        homeApproximateAddress = nil
-        workApproximateAddress = nil
-
-        let current = model.location.lastKnown
-        let home = anchors.home
-        let work = anchors.work
-
-        addressLookupTask = Task { @MainActor in
-            async let currentAddress = ReverseGeocodeService.lookup(current)
-            async let homeAddress = ReverseGeocodeService.lookup(home)
-            async let workAddress = ReverseGeocodeService.lookup(work)
-            let resolved = await (currentAddress, homeAddress, workAddress)
-            guard !Task.isCancelled else { return }
-            currentApproximateAddress = resolved.0
-            homeApproximateAddress = resolved.1
-            workApproximateAddress = resolved.2
-        }
-    }
-
-    private func autopinPreview(profile: MobilityProfile) -> CommuteAutopinner.Result {
-        CommuteAutopinner().apply(
-            preferences: prefs,
-            anchors: anchors,
-            profile: profile,
-            location: model.location.lastKnown,
-            context: model.location.context,
-            motion: model.location.motion
-        )
-    }
-
-    private var contextBeliefText: String {
-        switch model.location.context {
-        case .atHome: "Home"
-        case .atWork: "Work"
-        case .elsewhere: "Neither home nor work"
-        case .unknown: "Unknown"
-        }
-    }
-
-    private var motionBeliefText: String {
-        switch model.location.motion {
-        case .stationary: "Still — motion coprocessor sees no movement."
-        case .walking: "Walking — likely on the move."
-        case .running: "Running."
-        case .cycling: "Cycling."
-        case .automotive: "In a vehicle."
-        case .unknown: "No recent motion sample yet. Allow Motion & Fitness access for sharper autopin timing."
-        }
-    }
-
-    private var currentAddressText: String {
-        guard let location = model.location.lastKnown else {
-            return "Waiting for a foreground location."
-        }
-        return addressText(
-            latitude: location.latitude,
-            longitude: location.longitude,
-            resolved: currentApproximateAddress
-        )
-    }
-
-    private func anchorAddressText(
-        anchor: CommuteAnchors.Anchor?,
-        resolved: String?,
-        missing: String
-    ) -> String {
-        guard let anchor else { return missing }
-        return addressText(
-            latitude: anchor.latitude,
-            longitude: anchor.longitude,
-            resolved: resolved
-        )
-    }
-
-    private func addressText(latitude: Double, longitude: Double, resolved: String?) -> String {
-        let coordinate = approximateCoordinateText(latitude: latitude, longitude: longitude)
-        guard let resolved, !resolved.isEmpty else { return coordinate }
-        return "\(resolved) (\(coordinate))"
-    }
-
-    private func approximateCoordinateText(latitude: Double, longitude: Double) -> String {
-        String(format: "%.3f, %.3f", latitude, longitude)
-    }
-
-    private func homeDepartureBeliefText(_ profile: MobilityProfile) -> String {
-        let belief = weekdayDepartureBelief(profile, source: .exitedHome, direction: .toWork)
-        guard let peakHour = belief.peakHour else {
-            return "No home departures observed yet. Until there are 3 samples, weekdays 5–11 AM are treated as likely work-commute time."
-        }
-        let sampleText = sampleText(count: belief.count)
-        let latest = latestSampleText(belief.latest)
-        if belief.count < 3 {
-            return "Learning from \(sampleText), often around \(hourLabel(peakHour))\(latest); weekdays 5–11 AM remain the fallback."
-        }
-        return "Weekdays around \(hourLabel(peakHour)) from \(sampleText)\(latest)."
-    }
-
-    private func workDepartureBeliefText(_ profile: MobilityProfile) -> String {
-        let belief = weekdayDepartureBelief(profile, source: .exitedWork, direction: .toHome)
-        guard let peakHour = belief.peakHour else {
-            return "No work departures observed yet. When at work, autopin still targets home."
-        }
-        return "Weekdays around \(hourLabel(peakHour)) from \(sampleText(count: belief.count))\(latestSampleText(belief.latest)); at work, autopin targets home."
-    }
-
-    private func weekdayDepartureBelief(
-        _ profile: MobilityProfile,
-        source: MobilityProfile.Observation.Source,
-        direction: CommuteDirection
-    ) -> DepartureTimeBelief {
-        let departures = profile.observations.filter {
-            $0.source == source
-                && $0.direction == direction
-                && (2...6).contains($0.weekday)
-        }
-        let byHour = Dictionary(grouping: departures, by: \.hour)
-        let peakHour = byHour.sorted {
-            if $0.value.count == $1.value.count {
-                return $0.key < $1.key
-            }
-            return $0.value.count > $1.value.count
-        }.first?.key
-        let latest = departures.map(\.recordedAt).max()
-        return DepartureTimeBelief(count: departures.count, peakHour: peakHour, latest: latest)
-    }
-
-    private func sampleText(count: Int) -> String {
-        "\(count) weekday \(count == 1 ? "sample" : "samples")"
-    }
-
-    private func latestSampleText(_ date: Date?) -> String {
-        guard let date else { return "" }
-        return "; latest \(dateTimeText(date))"
-    }
-
-    private func hourLabel(_ hour: Int) -> String {
-        let hour12 = hour % 12 == 0 ? 12 : hour % 12
-        let suffix = hour < 12 ? "AM" : "PM"
-        return "\(hour12) \(suffix)"
-    }
-
-    private var manualOverrideText: String? {
-        guard let last = prefs.lastManualPinAt else { return nil }
-        let overrideSeconds: TimeInterval = 30 * 60
-        guard Date().timeIntervalSince(last) < overrideSeconds else { return nil }
-        guard Calendar.current.isDate(last, inSameDayAs: Date()) else { return nil }
-        return "Manual pins pause autopin until \(timeText(last.addingTimeInterval(overrideSeconds)))."
-    }
-
-    private func predictionDecisionText(_ result: CommuteAutopinner.Result) -> String {
-        switch result.reason {
-        case .disabled:
-            return "Auto-pin is off."
-        case .manualOverride:
-            return manualOverrideText ?? "Paused by a recent manual pin."
-        case .missingLocation:
-            return "Waiting for a current location."
-        case .missingAnchor:
-            return "Missing the \(missingAnchorLabel(for: result.direction)) anchor."
-        case .notInCommuteWindow:
-            return "At home outside the learned work-commute window."
-        case .suppressedByMotion:
-            return "At home and still — holding the auto-pin until the motion coprocessor sees you moving."
-        case .heldDuringTransit:
-            return "Holding \(directionText(result.direction).lowercased()) — motion coprocessor reports you're mid-trip."
-        case .noRoute:
-            return "\(directionText(result.direction)) was predicted, but no local route matched."
-        case .unchanged:
-            return "Keeps surfacing \(directionText(result.direction).lowercased())."
-        case .pinned:
-            return "Would surface \(directionText(result.direction).lowercased())."
-        case .cleared:
-            return "Would clear the current automatic pin."
-        }
-    }
-
-    private func missingAnchorLabel(for direction: CommuteDirection?) -> String {
-        switch direction {
-        case .toHome: "home"
-        case .toWork: "work"
-        case .anytime, nil: "home or work"
-        }
-    }
-
-    private func directionText(_ direction: CommuteDirection?) -> String {
-        direction?.label ?? "No commute direction"
-    }
-
-    private func surfacedTransitText(_ result: CommuteAutopinner.Result) -> String {
-        let previewPrefs = shouldUsePreviewPins(result.reason) ? result.preferences : prefs
-        let summary = pinnedTransitSummary(previewPrefs)
-        switch result.reason {
-        case .disabled:
-            return summary ?? "Auto-pin is off and no route is pinned."
-        case .missingLocation, .missingAnchor, .notInCommuteWindow, .suppressedByMotion, .noRoute, .cleared:
-            return summary ?? "No transit would be pinned right now."
-        case .manualOverride:
-            return summary.map { "Manual override: \($0)" } ?? "Manual override is active, with no route pinned."
-        case .pinned:
-            return summary.map { "Autopin preview: \($0)" } ?? "No transit would be pinned right now."
-        case .unchanged, .heldDuringTransit:
-            return summary.map { "\(previewPrefs.pinSource.label): \($0)" } ?? "No transit would be pinned right now."
-        }
-    }
-
-    private func shouldUsePreviewPins(_ reason: CommuteAutopinner.Result.Reason) -> Bool {
-        switch reason {
-        case .pinned, .unchanged, .cleared, .heldDuringTransit:
-            return true
-        case .disabled, .manualOverride, .missingLocation, .missingAnchor, .notInCommuteWindow, .suppressedByMotion, .noRoute:
-            return false
-        }
-    }
-
-    private func pinnedTransitSummary(_ preferences: UserRoutePreferences) -> String? {
-        var pieces: [String] = []
-        if let line = preferences.pinnedLine {
-            let station = preferences.pinnedStationId
-                .flatMap { id in LStationCatalog.all.first { $0.id == id }?.name }
-            if let station {
-                pieces.append("\(line.displayName) at \(station)")
-            } else {
-                pieces.append("\(line.displayName) at nearest station")
-            }
-        }
-        if let route = preferences.pinnedBusRoute {
-            if let stopId = preferences.pinnedBusStopId,
-               let stop = BusStopCatalog.all.first(where: { $0.route == route && $0.id == stopId })
-            {
-                pieces.append("Bus #\(route) at \(stop.name)")
-            } else if let direction = preferences.pinnedBusDirection {
-                pieces.append("Bus #\(route) \(direction)")
-            } else {
-                pieces.append("Bus #\(route)")
-            }
-        }
-        if let route = preferences.pinnedMetraRoute {
-            if let stationId = preferences.pinnedMetraStationId,
-               let station = MetraStationCatalog.station(id: stationId)
-            {
-                pieces.append("Metra \(route) at \(station.name)")
-            } else if let directionId = preferences.pinnedMetraDirectionId {
-                let direction = directionId == 1 ? "to Chicago" : "from Chicago"
-                pieces.append("Metra \(route) \(direction)")
-            } else if let destination = preferences.pinnedMetraDestination {
-                pieces.append("Metra \(route) to \(destination)")
-            } else {
-                pieces.append("Metra \(route)")
-            }
-        }
-        return pieces.isEmpty ? nil : pieces.joined(separator: " + ")
-    }
-
-    private func timeText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
-    private func dateTimeText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
-    private func beliefRow(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline)
-                .textSelection(.enabled)
-        }
-        .padding(.vertical, 2)
     }
 
     // MARK: - API key verification

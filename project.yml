@@ -56,6 +56,7 @@ targets:
         NSSupportsLiveActivitiesFrequentUpdates: true
         BGTaskSchedulerPermittedIdentifiers:
           - net.thoughtbison.cozyfox.refresh
+          - net.thoughtbison.cozyfox.learning.maintenance
         NSAppTransportSecurity:
           NSExceptionDomains:
             lapi.transitchicago.com:
@@ -131,6 +132,26 @@ targets:
       - package: TransitCore
         product: TransitUI
 
+  CozyFoxTests:
+    type: bundle.unit-test
+    platform: iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.thoughtbison.cozyfox.tests
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+    sources:
+      - path: CozyFoxTests
+    dependencies:
+      - target: CozyFox
+      - package: TransitCore
+        product: TransitModels
+      - package: TransitCore
+        product: TransitCache
+
   CozyFoxLiveActivity:
     type: app-extension
     platform: iOS
@@ -168,9 +189,12 @@ schemes:
         CozyFox: all
         CozyFoxWidget: all
         CozyFoxLiveActivity: all
+        CozyFoxTests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - CozyFoxTests
     archive:
       config: Release

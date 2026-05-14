@@ -10,19 +10,26 @@ public struct TrainBlockView: View {
     public let now: Date
     public let vehiclePositions: [VehiclePosition]
     public let arrivalsFetchedAt: Date?
+    /// Phase 3 bias correction for the headline arrival. `nil` ⇒ render
+    /// no extra line (the dashboard either has confident signal worth
+    /// surfacing or it doesn't). Default `nil` keeps every existing call
+    /// site byte-identical to today.
+    public let biasCorrection: ArrivalBiasCorrection?
 
     public init(arrivals: [Arrival],
                 title: String,
                 directionLabel: String?,
                 now: Date = .now,
                 vehiclePositions: [VehiclePosition] = [],
-                arrivalsFetchedAt: Date? = nil) {
+                arrivalsFetchedAt: Date? = nil,
+                biasCorrection: ArrivalBiasCorrection? = nil) {
         self.arrivals = arrivals
         self.title = title
         self.directionLabel = directionLabel
         self.now = now
         self.vehiclePositions = vehiclePositions
         self.arrivalsFetchedAt = arrivalsFetchedAt
+        self.biasCorrection = biasCorrection
     }
 
     public var body: some View {
@@ -70,6 +77,13 @@ public struct TrainBlockView: View {
                 }
                 if let badge = GhostTrainBadge(firstAssessment) {
                     badge
+                }
+                if let biasCorrection {
+                    Text(biasCorrection.displayText)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .accessibilityLabel(biasCorrection.accessibilityLabel)
                 }
                 HeadwayDotStrip(
                     arrivals: arrivals.prefix(8).map(\.arrivalAt),

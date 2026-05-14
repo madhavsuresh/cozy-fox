@@ -8,15 +8,20 @@ public struct BusBlockView: View {
     public let routeLabel: String
     public let stopLabel: String
     public let now: Date
+    /// Phase 3 bias correction for the headline prediction. See
+    /// `TrainBlockView.biasCorrection` for the contract.
+    public let biasCorrection: ArrivalBiasCorrection?
 
     public init(predictions: [BusPrediction],
                 routeLabel: String,
                 stopLabel: String,
-                now: Date = .now) {
+                now: Date = .now,
+                biasCorrection: ArrivalBiasCorrection? = nil) {
         self.predictions = predictions
         self.routeLabel = routeLabel
         self.stopLabel = stopLabel
         self.now = now
+        self.biasCorrection = biasCorrection
     }
 
     public var body: some View {
@@ -46,6 +51,13 @@ public struct BusBlockView: View {
                             .foregroundStyle(ChicagoPalette.starRed)
                             .accessibilityHidden(true)
                     }
+                }
+                if let biasCorrection {
+                    Text(biasCorrection.displayText)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .accessibilityLabel(biasCorrection.accessibilityLabel)
                 }
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),

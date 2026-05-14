@@ -2412,6 +2412,7 @@ struct DashboardScreen: View {
                     let assessments = ghostAssessments(for: times)
                     let firstAssessment = assessments[first.id]
                     let isGhostLikely = firstAssessment?.isGhostLikely == true
+                    let biasCorrection = headlineBiasCorrection(for: times)
                     VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                         Text("→ \(dest)")
                             .font(ChicagoTypography.body(.medium, relativeTo: .caption))
@@ -2432,6 +2433,13 @@ struct DashboardScreen: View {
                         }
                         if let badge = GhostTrainBadge(firstAssessment) {
                             badge
+                        }
+                        if let biasCorrection {
+                            Text(biasCorrection.displayText)
+                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                .foregroundStyle(ChicagoPalette.Gray.medium)
+                                .lineLimit(1)
+                                .accessibilityLabel(biasCorrection.accessibilityLabel)
                         }
                         HeadwayDotStrip(
                             arrivals: times.prefix(8).map(\.arrivalAt),
@@ -3713,6 +3721,20 @@ struct DashboardScreen: View {
         assessments: [String: GhostTrainAssessment]
     ) -> [HeadwayDotStrip.Complication?] {
         arrivals.map { assessments[$0.id]?.headwayComplication }
+    }
+
+    /// Look up a confident bias correction for the first arrival in
+    /// `arrivals`, if `ArrivalBiasStore` has enough samples for that
+    /// `(line, stopId, direction, hourClass, weekdayClass, season)` cell.
+    /// Returns `nil` when the gates don't pass — callers render nothing.
+    private func headlineBiasCorrection(
+        for arrivals: [Arrival]
+    ) -> ArrivalBiasCorrection? {
+        let cells = model.arrivalBiasStore.cells
+        return ArrivalBiasReader().headlineCorrection(
+            arrivals: arrivals,
+            cellLookup: { cells[$0] }
+        )
     }
 
     private func predictions(for stop: BusStop, limit: Int = 3) -> [BusPrediction] {

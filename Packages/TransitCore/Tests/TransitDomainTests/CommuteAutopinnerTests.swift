@@ -251,6 +251,8 @@ struct CommuteAutopinnerTests {
         #expect(result.preferences.pinSource == .automatic)
     }
 
+    // MARK: - MobilityProfileSummary fallback
+
     @Test func summaryRouteSurfacesWhenRawHistoryAgedOut() {
         // Simulate a long-time user whose raw observations have aged out but
         // whose summary still encodes a strong Brown Line preference at home.
