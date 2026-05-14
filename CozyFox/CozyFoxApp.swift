@@ -31,7 +31,8 @@ struct CozyFoxApp: App {
             store: store,
             preferences: prefs,
             location: location,
-            walkingStore: walkingStore
+            walkingStore: walkingStore,
+            mobilitySummaryStore: mobilitySummaryStore
         )
         let model = AppViewModel(
             store: store,

@@ -251,6 +251,161 @@ struct CommuteAutopinnerTests {
         #expect(result.preferences.pinSource == .automatic)
     }
 
+    // MARK: - nextAnchorHint tiebreaker
+
+    @Test func hintBoostBreaksTieBetweenEquallyScoredObservations() {
+        // Two observations recorded at the same instant for two different
+        // train lines. Without a hint, both score identically and the
+        // dictionary iteration order picks the winner (i.e. nondeterministic
+        // in practice; the existing `max(by:)` tie-breaks on insertion order).
+        // With a hint that matches one of them, the boost makes that one win
+        // every time.
+        let now = date(year: 2026, month: 5, day: 13, hour: 17)
+        let calendar = FakeClock(now).calendar
+        let recorded = now.addingTimeInterval(-30 * 60)
+        var profile = MobilityProfile.empty
+        // Brown line observation, station 100.
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .atWork,
+            line: .brown,
+            stationId: 100,
+            busRoute: nil,
+            busDirection: nil,
+            at: recorded,
+            calendar: calendar
+        )
+        // Blue line observation, station 200.
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .atWork,
+            line: .blue,
+            stationId: 200,
+            busRoute: nil,
+            busDirection: nil,
+            at: recorded,
+            calendar: calendar
+        )
+        let prefs = UserRoutePreferences()
+
+        // Without a hint, the result picks one — we accept either.
+        let unhinted = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: profile,
+            location: workLocation,
+            context: .atWork
+        )
+        // Smoke check: pinning did happen.
+        #expect(unhinted.changed)
+        #expect(unhinted.preferences.pinnedLine == .blue || unhinted.preferences.pinnedLine == .brown)
+
+        // With a hint matching the blue station, blue wins.
+        let blueHinted = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: profile,
+            location: workLocation,
+            context: .atWork,
+            nextAnchorHint: .lStation(stationId: 200)
+        )
+        #expect(blueHinted.changed)
+        #expect(blueHinted.preferences.pinnedLine == .blue)
+
+        // With a hint matching the brown station, brown wins.
+        let brownHinted = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: profile,
+            location: workLocation,
+            context: .atWork,
+            nextAnchorHint: .lStation(stationId: 100)
+        )
+        #expect(brownHinted.changed)
+        #expect(brownHinted.preferences.pinnedLine == .brown)
+    }
+
+    @Test func hintCannotOverrideClearlyStrongerObservation() {
+        // One observation is *much* stronger than the other (recorded today,
+        // same hour, same weekday), the other is stale. A 25% hint boost
+        // applied to the weaker observation must NOT flip the choice.
+        let now = date(year: 2026, month: 5, day: 13, hour: 17)
+        let calendar = FakeClock(now).calendar
+        var profile = MobilityProfile.empty
+        // Strong: today, same hour, same weekday → big recency + weekday + hour boost.
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .atWork,
+            line: .red,
+            stationId: 300,
+            busRoute: nil,
+            busDirection: nil,
+            at: now.addingTimeInterval(-15 * 60),
+            calendar: calendar
+        )
+        // Weak: 8 weeks ago, off-hour. recency=0, weekdayBoost=0, hourBoost ~0.
+        let stale = now.addingTimeInterval(-56 * 24 * 60 * 60)
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .atWork,
+            line: .blue,
+            stationId: 400,
+            busRoute: nil,
+            busDirection: nil,
+            at: stale,
+            calendar: calendar
+        )
+        let prefs = UserRoutePreferences()
+
+        let result = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: profile,
+            location: workLocation,
+            context: .atWork,
+            // Hint targets the weak observation — must not win.
+            nextAnchorHint: .lStation(stationId: 400)
+        )
+
+        #expect(result.changed)
+        #expect(result.preferences.pinnedLine == .red)
+    }
+
+    @Test func nilHintIsByteIdenticalToNoHint() {
+        // Sanity: passing `nil` explicitly must match the result of omitting
+        // the parameter entirely.
+        let now = date(year: 2026, month: 5, day: 13, hour: 17)
+        let prefs = UserRoutePreferences(
+            trains: [
+                TrainPreference(
+                    mapId: 1,
+                    stopId: nil,
+                    stationName: "Work Station",
+                    line: .blue,
+                    directionLabel: "Home",
+                    direction: .toHome
+                )
+            ]
+        )
+
+        let omitted = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: .empty,
+            location: workLocation,
+            context: .atWork
+        )
+        let explicitlyNil = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: .empty,
+            location: workLocation,
+            context: .atWork,
+            nextAnchorHint: nil
+        )
+        #expect(omitted == explicitlyNil)
+    }
+
     @Test func unknownMotionFallsBackToExistingHeuristic() {
         // Smoke check: with motion == .unknown (older device or no auth),
         // the autopinner must behave identically to the pre-motion version.

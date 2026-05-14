@@ -147,13 +147,22 @@ final class MobilitySummaryStore {
                     AnchorID.bucketed(latitude: $0.latitude, longitude: $0.longitude)
                 } ?? anchor
                 let key = CorridorKey(origin: originAnchor, destination: destinationAnchor)
-                var entry = agg.corridors[key] ?? CorridorAccumulator(
+                bumpCorridor(
+                    in: &agg.corridors,
+                    key: key,
                     origin: originAnchor,
-                    destination: destinationAnchor
+                    destination: destinationAnchor,
+                    mode: modeFor(r)
                 )
-                entry.frequency += 1
-                entry.dominantMode = entry.dominantMode ?? modeFor(r)
-                agg.corridors[key] = entry
+                // Stratify the same corridor by hour-of-week so downstream
+                // predictors can pivot on time as well as origin.
+                bumpCorridor(
+                    in: &agg.hourlyCorridors[hourOfWeek, default: [:]],
+                    key: key,
+                    origin: originAnchor,
+                    destination: destinationAnchor,
+                    mode: modeFor(r)
+                )
             }
             if let motion = r.motion {
                 agg.motion[motion, default: 0] += 1
@@ -214,31 +223,23 @@ final class MobilitySummaryStore {
 
         // Re-rank corridors. Merge the aggregate into anything already
         // present, then sort descending by frequency and cap.
-        var corridorMap: [CorridorKey: CorridorSummary] = [:]
-        for c in summary.topCorridors {
-            corridorMap[CorridorKey(origin: c.origin, destination: c.destination)] = c
-        }
-        for (key, acc) in aggregate.corridors {
-            if let existing = corridorMap[key] {
-                corridorMap[key] = CorridorSummary(
-                    origin: existing.origin,
-                    destination: existing.destination,
-                    frequency: existing.frequency + acc.frequency,
-                    dominantMode: existing.dominantMode ?? acc.dominantMode
-                )
+        summary.topCorridors = mergeAndRank(
+            existing: summary.topCorridors,
+            accumulators: aggregate.corridors
+        )
+
+        // Same merge per hour-of-week. We rebuild the map for any hour that
+        // has fresh accumulator data; hours not touched by this fold pass
+        // through unchanged.
+        for (hour, accumulators) in aggregate.hourlyCorridors {
+            let existingForHour = summary.hourlyTopCorridors[hour] ?? []
+            let merged = mergeAndRank(existing: existingForHour, accumulators: accumulators)
+            if merged.isEmpty {
+                summary.hourlyTopCorridors.removeValue(forKey: hour)
             } else {
-                corridorMap[key] = CorridorSummary(
-                    origin: acc.origin,
-                    destination: acc.destination,
-                    frequency: acc.frequency,
-                    dominantMode: acc.dominantMode
-                )
+                summary.hourlyTopCorridors[hour] = merged
             }
         }
-        summary.topCorridors = corridorMap.values
-            .sorted { $0.frequency > $1.frequency }
-            .prefix(WeeklySummary.maxCorridors)
-            .map { $0 }
 
         if let idx = existingIndex {
             weeklySummaries[idx] = summary
@@ -246,6 +247,53 @@ final class MobilitySummaryStore {
             weeklySummaries.append(summary)
         }
         return summary
+    }
+
+    private func mergeAndRank(
+        existing: [CorridorSummary],
+        accumulators: [CorridorKey: CorridorAccumulator]
+    ) -> [CorridorSummary] {
+        var byKey: [CorridorKey: CorridorSummary] = [:]
+        for c in existing {
+            byKey[CorridorKey(origin: c.origin, destination: c.destination)] = c
+        }
+        for (key, acc) in accumulators {
+            if let existing = byKey[key] {
+                byKey[key] = CorridorSummary(
+                    origin: existing.origin,
+                    destination: existing.destination,
+                    frequency: existing.frequency + acc.frequency,
+                    dominantMode: existing.dominantMode ?? acc.dominantMode
+                )
+            } else {
+                byKey[key] = CorridorSummary(
+                    origin: acc.origin,
+                    destination: acc.destination,
+                    frequency: acc.frequency,
+                    dominantMode: acc.dominantMode
+                )
+            }
+        }
+        return byKey.values
+            .sorted { $0.frequency > $1.frequency }
+            .prefix(WeeklySummary.maxCorridors)
+            .map { $0 }
+    }
+
+    private func bumpCorridor(
+        in map: inout [CorridorKey: CorridorAccumulator],
+        key: CorridorKey,
+        origin: AnchorID,
+        destination: AnchorID,
+        mode: TransitMode?
+    ) {
+        var entry = map[key] ?? CorridorAccumulator(
+            origin: origin,
+            destination: destination
+        )
+        entry.frequency += 1
+        entry.dominantMode = entry.dominantMode ?? mode
+        map[key] = entry
     }
 
     private func primaryAnchor(for r: MobilityProfile.RouteObservation) -> AnchorID {
@@ -393,6 +441,9 @@ private struct WeekAggregate {
     var modeByHour: [Int: ModeWeights] = [:]
     var motion: [MotionContext: Double] = [:]
     var corridors: [CorridorKey: CorridorAccumulator] = [:]
+    /// Same shape as `corridors` but stratified by `hourOfWeek`. Bus & train
+    /// route observations bump both maps in the same pass.
+    var hourlyCorridors: [Int: [CorridorKey: CorridorAccumulator]] = [:]
 }
 
 private struct CorridorKey: Hashable {

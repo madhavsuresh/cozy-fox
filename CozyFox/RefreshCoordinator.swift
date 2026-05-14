@@ -15,6 +15,10 @@ final class RefreshCoordinator {
     let preferences: PreferencesStore
     weak var location: LocationCoordinator?
     let walkingStore: WalkingDistanceStore
+    /// Weak reference so the coordinator can read the EWMA-folded long-term
+    /// profile when computing autopin hints. Held weakly because both objects
+    /// are owned by `AppViewModel` and we don't want a retain cycle.
+    weak var mobilitySummaryStore: MobilitySummaryStore?
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -30,6 +34,7 @@ final class RefreshCoordinator {
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let corridorResolver = TransitCorridorResolver()
     private let autopinner = CommuteAutopinner()
+    private let predictor = NextAnchorPredictor()
 
     /// Day-stamp of the last walking-cache invalidation so a single 30 s
     /// foreground refresh doesn't repeatedly flush the cache. Re-invalidates
@@ -46,12 +51,14 @@ final class RefreshCoordinator {
         store: TransitStore,
         preferences: PreferencesStore,
         location: LocationCoordinator?,
-        walkingStore: WalkingDistanceStore
+        walkingStore: WalkingDistanceStore,
+        mobilitySummaryStore: MobilitySummaryStore? = nil
     ) {
         self.store = store
         self.preferences = preferences
         self.location = location
         self.walkingStore = walkingStore
+        self.mobilitySummaryStore = mobilitySummaryStore
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -165,18 +172,53 @@ final class RefreshCoordinator {
             return false
         }
         let motion = await location?.refreshMotion() ?? .unknown
+        let context = location?.context ?? .unknown
+        let nextAnchorHint = nextAnchorHint(context: context, motion: motion)
         let result = autopinner.apply(
             preferences: preferences.loadRoutePreferences(),
             anchors: preferences.loadCommuteAnchors(),
             profile: preferences.loadMobilityProfile(),
             location: preferences.loadLastKnownLocation(),
-            context: location?.context ?? .unknown,
-            motion: motion
+            context: context,
+            motion: motion,
+            nextAnchorHint: nextAnchorHint
         )
         if result.changed {
             preferences.saveRoutePreferences(result.preferences)
         }
         return result.changed
+    }
+
+    /// Compute a next-anchor hint from the long-term mobility profile, if
+    /// any. Returns `nil` (== no hint, byte-identical behavior) when:
+    ///   - the predictor isn't wired in (no `mobilitySummaryStore`)
+    ///   - the profile lacks enough signal to confidently predict
+    /// Otherwise hands back the top prediction for the autopinner to use as
+    /// a tiebreaker. Pure dictionary lookups — safe on the main actor.
+    private func nextAnchorHint(
+        context: CommuteContext,
+        motion: MotionContext
+    ) -> AnchorID? {
+        guard let store = mobilitySummaryStore else { return nil }
+        let currentAnchor: AnchorID?
+        switch context {
+        case .atHome: currentAnchor = .home
+        case .atWork: currentAnchor = .work
+        case .elsewhere, .unknown: currentAnchor = nil
+        }
+        let calendar = SystemClock().calendar
+        let now = Date.now
+        let weekday = calendar.component(.weekday, from: now)
+        let hour = calendar.component(.hour, from: now)
+        let hourOfWeek = HourOfWeek.index(weekday: weekday, hour: hour)
+        let snapshot = store.snapshot()
+        let predictions = predictor.predict(
+            profile: snapshot.longTermProfile,
+            currentAnchor: currentAnchor,
+            hourOfWeek: hourOfWeek,
+            motion: motion
+        )
+        return predictions.first?.anchor
     }
 
     private func clearExpiredPlannedTripPinIfNeeded() -> Bool {

@@ -138,6 +138,176 @@ struct WeeklySummaryTests {
         #expect(zero.total == 0)
     }
 
+    // MARK: - hourlyTopCorridors (Phase 1)
+
+    @Test func hourlyTopCorridorsRoundTripsThroughJSON() throws {
+        let weekStart = Date(timeIntervalSinceReferenceDate: 770_000_000)
+        let hour = HourOfWeek.index(weekday: 2, hour: 8)
+        let corridor = CorridorSummary(
+            origin: .home,
+            destination: .lStation(stationId: 40380),
+            frequency: 4.0,
+            dominantMode: .train
+        )
+        let summary = WeeklySummary(
+            weekStart: weekStart,
+            hourlyTopCorridors: [hour: [corridor]]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try encoder.encode(summary)
+        let decoded = try decoder.decode(WeeklySummary.self, from: data)
+
+        #expect(decoded.hourlyTopCorridors[hour]?.first?.destination == .lStation(stationId: 40380))
+        #expect(decoded.hourlyTopCorridors[hour]?.first?.frequency == 4.0)
+    }
+
+    @Test func phaseZeroJSONWithoutHourlyTopCorridorsDefaultsToEmpty() throws {
+        // Simulate a Phase 0 file: encode a WeeklySummary missing the new
+        // field, then decode and assert the field is `[:]` rather than
+        // crashing or surfacing as `nil`.
+        struct PhaseZeroWeeklySummary: Encodable {
+            let weekStart: Date
+            let hourlyAnchorHistogram: [Int: [AnchorID: Double]]
+            let hourlyModeProbabilities: [Int: ModeWeights]
+            let topCorridors: [CorridorSummary]
+            let motionDistribution: [MotionContext: Double]
+            let autoencoderReconstructionMean: Double?
+        }
+        let weekStart = Date(timeIntervalSinceReferenceDate: 770_000_000)
+        let phaseZero = PhaseZeroWeeklySummary(
+            weekStart: weekStart,
+            hourlyAnchorHistogram: [0: [.home: 1.0]],
+            hourlyModeProbabilities: [:],
+            topCorridors: [],
+            motionDistribution: [:],
+            autoencoderReconstructionMean: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(phaseZero)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(WeeklySummary.self, from: data)
+
+        #expect(decoded.weekStart == weekStart)
+        #expect(decoded.hourlyAnchorHistogram[0]?[.home] == 1.0)
+        #expect(decoded.hourlyTopCorridors.isEmpty)
+    }
+
+    @Test func longTermProfilePhaseZeroJSONDefaultsHourlyTopCorridors() throws {
+        // Same migration check on `LongTermProfile`.
+        struct PhaseZeroLongTermProfile: Encodable {
+            let weekStart: Date?
+            let hourlyAnchorHistogram: [Int: [AnchorID: Double]]
+            let hourlyModeProbabilities: [Int: ModeWeights]
+            let topCorridors: [CorridorSummary]
+            let motionDistribution: [MotionContext: Double]
+            let autoencoderReconstructionMean: Double?
+        }
+        let phaseZero = PhaseZeroLongTermProfile(
+            weekStart: nil,
+            hourlyAnchorHistogram: [:],
+            hourlyModeProbabilities: [:],
+            topCorridors: [],
+            motionDistribution: [:],
+            autoencoderReconstructionMean: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(phaseZero)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(LongTermProfile.self, from: data)
+
+        #expect(decoded.hourlyTopCorridors.isEmpty)
+        #expect(decoded == .empty)
+    }
+
+    @Test func ewmaFoldPreservesHourlyStratification() {
+        var profile = LongTermProfile.empty
+        let hourA = HourOfWeek.index(weekday: 2, hour: 8)
+        let hourB = HourOfWeek.index(weekday: 4, hour: 17)
+        let week = WeeklySummary(
+            weekStart: Date(timeIntervalSinceReferenceDate: 770_000_000),
+            hourlyTopCorridors: [
+                hourA: [CorridorSummary(
+                    origin: .home,
+                    destination: .work,
+                    frequency: 3.0,
+                    dominantMode: .train
+                )],
+                hourB: [CorridorSummary(
+                    origin: .work,
+                    destination: .home,
+                    frequency: 5.0,
+                    dominantMode: .train
+                )]
+            ]
+        )
+        profile.fold(week, alpha: 1.0) // skip smoothing for clarity
+
+        #expect(profile.hourlyTopCorridors[hourA]?.first?.destination == .work)
+        #expect(profile.hourlyTopCorridors[hourB]?.first?.destination == .home)
+        // Hours not touched by the fold stay absent.
+        #expect(profile.hourlyTopCorridors[HourOfWeek.index(weekday: 1, hour: 0)] == nil)
+    }
+
+    @Test func ewmaFoldSmoothesHourlyCorridorFrequenciesAcrossWeeks() {
+        var profile = LongTermProfile.empty
+        let hour = HourOfWeek.index(weekday: 2, hour: 8)
+        let alpha = 0.3
+        let w1 = WeeklySummary(
+            weekStart: Date(timeIntervalSinceReferenceDate: 770_000_000),
+            hourlyTopCorridors: [hour: [CorridorSummary(
+                origin: .home,
+                destination: .work,
+                frequency: 10.0,
+                dominantMode: .train
+            )]]
+        )
+        profile.fold(w1, alpha: alpha)
+        // After w1: 0 * 0.7 + 10 * 0.3 = 3.0
+        #expect(abs((profile.hourlyTopCorridors[hour]?.first?.frequency ?? 0) - 3.0) < 1e-9)
+
+        let w2 = WeeklySummary(
+            weekStart: Date(timeIntervalSinceReferenceDate: 770_604_800),
+            hourlyTopCorridors: [hour: [CorridorSummary(
+                origin: .home,
+                destination: .work,
+                frequency: 0.0,
+                dominantMode: .train
+            )]]
+        )
+        profile.fold(w2, alpha: alpha)
+        // After w2: 3 * 0.7 + 0 * 0.3 = 2.1
+        #expect(abs((profile.hourlyTopCorridors[hour]?.first?.frequency ?? 0) - 2.1) < 1e-9)
+    }
+
+    @Test func hourlyTopCorridorsCappedPerHour() {
+        var profile = LongTermProfile.empty
+        let hour = HourOfWeek.index(weekday: 2, hour: 8)
+        let corridors: [CorridorSummary] = (0..<12).map { i in
+            CorridorSummary(
+                origin: .home,
+                destination: .lStation(stationId: i),
+                frequency: Double(i + 1),
+                dominantMode: .train
+            )
+        }
+        let week = WeeklySummary(
+            weekStart: Date(timeIntervalSinceReferenceDate: 770_000_000),
+            hourlyTopCorridors: [hour: corridors]
+        )
+        profile.fold(week, alpha: 1.0)
+
+        #expect(profile.hourlyTopCorridors[hour]?.count == WeeklySummary.maxCorridors)
+        // Highest-frequency corridor must survive.
+        #expect(profile.hourlyTopCorridors[hour]?.first?.destination == .lStation(stationId: 11))
+    }
+
     @Test func reconstructionMeanFoldsOnlyWhenProvided() {
         var profile = LongTermProfile.empty
         var w = WeeklySummary(weekStart: Date())

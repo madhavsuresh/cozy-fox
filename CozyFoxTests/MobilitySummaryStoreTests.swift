@@ -89,6 +89,70 @@ struct MobilitySummaryStoreTests {
         #expect(anchorTotals == 1.0)
     }
 
+    @Test func foldPopulatesHourlyCorridorsFromRouteObservations() async throws {
+        let url = Self.temporaryFile(name: "MobilitySummary-hourlyCorridors")
+        let store = MobilitySummaryStore(fileURL: url)
+        await store.hydrateFromDiskIfNeeded()
+
+        let now = Date(timeIntervalSinceReferenceDate: 770_000_000)
+        // Two ages — both older than 14 days so they get folded.
+        let morning = now.addingTimeInterval(-21 * 24 * 60 * 60)
+        let evening = morning.addingTimeInterval(8 * 60 * 60)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        let originBucket = MobilityProfile.RouteLocation.bucketed(latitude: 41.95, longitude: -87.65)
+        let destinationBucket = MobilityProfile.RouteLocation.bucketed(latitude: 41.88, longitude: -87.63)
+
+        var profile = MobilityProfile.empty
+        profile.recordRouteObservation(
+            direction: .toWork,
+            context: .atHome,
+            line: .blue,
+            stationId: 40380,
+            busRoute: nil,
+            busDirection: nil,
+            origin: originBucket,
+            destination: destinationBucket,
+            at: morning,
+            calendar: calendar
+        )
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .atWork,
+            line: .blue,
+            stationId: 40380,
+            busRoute: nil,
+            busDirection: nil,
+            origin: destinationBucket,
+            destination: originBucket,
+            at: evening,
+            calendar: calendar
+        )
+
+        _ = store.fold(profile: profile, now: now)
+
+        // Two different hours-of-week should be populated.
+        let morningWeekday = calendar.component(.weekday, from: morning)
+        let morningHour = calendar.component(.hour, from: morning)
+        let eveningWeekday = calendar.component(.weekday, from: evening)
+        let eveningHour = calendar.component(.hour, from: evening)
+        let morningHourOfWeek = HourOfWeek.index(weekday: morningWeekday, hour: morningHour)
+        let eveningHourOfWeek = HourOfWeek.index(weekday: eveningWeekday, hour: eveningHour)
+
+        #expect(store.weeklySummaries.count == 1)
+        let summary = store.weeklySummaries[0]
+        // Each hour should have one corridor entry.
+        #expect(summary.hourlyTopCorridors[morningHourOfWeek]?.count == 1)
+        #expect(summary.hourlyTopCorridors[eveningHourOfWeek]?.count == 1)
+        // Origin and destination should be bucketed via AnchorID.
+        let morningCorridor = summary.hourlyTopCorridors[morningHourOfWeek]?.first
+        #expect(morningCorridor?.frequency == 1.0)
+        let eveningCorridor = summary.hourlyTopCorridors[eveningHourOfWeek]?.first
+        #expect(eveningCorridor?.frequency == 1.0)
+        // Long-term profile gets these too (alpha smoothed but non-empty).
+        #expect(!store.longTermProfile.hourlyTopCorridors.isEmpty)
+    }
+
     @Test func clearAllPersistsEmptyStateOnNextLoad() async throws {
         let url = Self.temporaryFile(name: "MobilitySummary-clear-persist")
         let week = WeeklySummary(
