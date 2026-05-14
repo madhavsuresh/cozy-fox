@@ -29,7 +29,6 @@ public struct SmallMultiplesRow<T: Identifiable>: View {
             HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
                 ForEach(items) { item in
                     tile(item)
-                        .frame(minWidth: 88, maxWidth: 120)
                 }
             }
         }
@@ -70,7 +69,7 @@ public struct ArrivalTile: View {
             }
         }
         .padding(ChicagoSpacing.sm)
-        .frame(minWidth: 88, maxWidth: 120, alignment: .leading)
+        .frame(width: 112, height: 116, alignment: .leading)
         .background(
             ChicagoPalette.Surface.card,
             in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
@@ -127,7 +126,7 @@ public struct DepartureTimeTile: View {
             }
         }
         .padding(ChicagoSpacing.sm)
-        .frame(minWidth: 88, maxWidth: 120, alignment: .leading)
+        .frame(width: 112, height: 116, alignment: .leading)
         .background(
             ChicagoPalette.Surface.card,
             in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
@@ -185,7 +184,7 @@ public struct DepartureTimesTile: View {
             }
         }
         .padding(ChicagoSpacing.sm)
-        .frame(minWidth: 104, maxWidth: 144, alignment: .leading)
+        .frame(width: 132, height: 116, alignment: .leading)
         .background(
             ChicagoPalette.Surface.card,
             in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)

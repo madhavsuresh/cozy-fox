@@ -116,8 +116,7 @@ public struct MediumDashboardView: View {
                 AlertBadge(alerts: alerts)
                 if isStale {
                     Text("Stale")
-                        .font(ChicagoTypography.displaySM(relativeTo: .caption2))
-                        .tracking(0.5)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
                         .foregroundStyle(ChicagoPalette.Gray.light)
                         .padding(.horizontal, ChicagoSpacing.xs)
                 }
@@ -138,8 +137,7 @@ public struct MediumDashboardView: View {
             Image(systemName: "questionmark.circle")
                 .foregroundStyle(ChicagoPalette.Gray.light)
             Text(message)
-                .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                .tracking(0.5)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         }
         .padding(ChicagoSpacing.sm)

@@ -54,8 +54,7 @@ public struct BusBlockView: View {
                 )
             } else {
                 Text("No buses")
-                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.Gray.light)
             }
         }

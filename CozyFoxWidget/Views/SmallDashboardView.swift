@@ -100,7 +100,8 @@ struct SmallDashboardView: View {
             }
             .padding(ChicagoSpacing.sm)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else if let pick = entry.snapshot.nearestBike {
+        } else if entry.preferences.isModeVisible(.bikes),
+                  let pick = entry.snapshot.nearestBike {
             BikeBlockView(pick: pick)
         } else {
             VStack(spacing: ChicagoSpacing.xs) {
@@ -122,7 +123,22 @@ struct SmallDashboardView: View {
                 .filter { tripTrain.stationId == nil || $0.stationId == tripTrain.stationId }
                 .filter { tripTrain.destinationName == nil || $0.destinationName == tripTrain.destinationName }
         }
-        guard let first = entry.snapshot.trainArrivals.first else { return [] }
+        if let pinned = entry.preferences.pinnedLine {
+            return entry.snapshot.trainArrivals
+                .filter { $0.line == pinned }
+                .filter {
+                    entry.preferences.pinnedStationId == nil
+                        || $0.stationId == entry.preferences.pinnedStationId
+                }
+                .filter {
+                    entry.preferences.pinnedTrainDestination == nil
+                        || $0.destinationName == entry.preferences.pinnedTrainDestination
+                }
+        }
+        guard entry.preferences.isModeVisible(.trains),
+              let first = entry.snapshot.trainArrivals.first(where: {
+                  entry.preferences.isTrainLineVisible($0.line)
+              }) else { return [] }
         return entry.snapshot.trainArrivals.filter { $0.line == first.line }
     }
 
@@ -137,7 +153,22 @@ struct SmallDashboardView: View {
                 .filter { tripMetra.stationId == nil || $0.stationId == tripMetra.stationId }
                 .filter { tripMetra.directionId == nil || $0.directionId == tripMetra.directionId }
         }
-        guard let first = entry.snapshot.metraPredictions.first else { return [] }
+        if let pinned = entry.preferences.pinnedMetraRoute {
+            return entry.snapshot.metraPredictions
+                .filter { $0.routeId == pinned }
+                .filter {
+                    entry.preferences.pinnedMetraStationId == nil
+                        || $0.stationId == entry.preferences.pinnedMetraStationId
+                }
+                .filter {
+                    entry.preferences.pinnedMetraDirectionId == nil
+                        || $0.directionId == entry.preferences.pinnedMetraDirectionId
+                }
+        }
+        guard entry.preferences.isModeVisible(.metra),
+              let first = entry.snapshot.metraPredictions.first(where: {
+                  entry.preferences.isMetraRouteVisible($0.routeId)
+              }) else { return [] }
         return entry.snapshot.metraPredictions.filter {
             $0.routeId == first.routeId && $0.stationId == first.stationId
         }

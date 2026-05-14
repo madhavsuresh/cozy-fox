@@ -17,7 +17,7 @@ struct MediumWidgetWrapper: View {
             train: train,
             bus: bus,
             metra: metra,
-            bike: entry.snapshot.nearestBike,
+            bike: entry.preferences.isModeVisible(.bikes) ? entry.snapshot.nearestBike : nil,
             alerts: alerts,
             vehiclePositions: entry.snapshot.vehiclePositions,
             trainsFetchedAt: entry.snapshot.trainsFetchedAt,
@@ -41,7 +41,29 @@ struct MediumWidgetWrapper: View {
             )
         }
 
-        guard let first = entry.snapshot.trainArrivals.first else { return nil }
+        if let pinned = entry.preferences.pinnedLine {
+            let arrivals = entry.snapshot.trainArrivals
+                .filter { $0.line == pinned }
+                .filter {
+                    entry.preferences.pinnedStationId == nil
+                        || $0.stationId == entry.preferences.pinnedStationId
+                }
+                .filter {
+                    entry.preferences.pinnedTrainDestination == nil
+                        || $0.destinationName == entry.preferences.pinnedTrainDestination
+                }
+            guard let first = arrivals.first else { return nil }
+            return MediumDashboardView.TrainPick(
+                title: first.line.shortName,
+                directionLabel: entry.preferences.pinnedTrainDestination ?? first.destinationName,
+                arrivals: arrivals
+            )
+        }
+
+        guard entry.preferences.isModeVisible(.trains),
+              let first = entry.snapshot.trainArrivals.first(where: {
+                  entry.preferences.isTrainLineVisible($0.line)
+              }) else { return nil }
         return MediumDashboardView.TrainPick(
             title: first.line.shortName,
             directionLabel: first.destinationName,
@@ -63,7 +85,29 @@ struct MediumWidgetWrapper: View {
             )
         }
 
-        guard let first = entry.snapshot.busPredictions.first else { return nil }
+        if let pinned = entry.preferences.pinnedBusRoute {
+            let predictions = entry.snapshot.busPredictions
+                .filter { $0.route == pinned }
+                .filter {
+                    entry.preferences.pinnedBusStopId == nil
+                        || $0.stopId == entry.preferences.pinnedBusStopId
+                }
+                .filter {
+                    entry.preferences.pinnedBusDirection == nil
+                        || $0.directionName == entry.preferences.pinnedBusDirection
+                }
+            guard let first = predictions.first else { return nil }
+            return MediumDashboardView.BusPick(
+                route: first.route,
+                stopLabel: first.stopName,
+                predictions: predictions
+            )
+        }
+
+        guard entry.preferences.isModeVisible(.buses),
+              let first = entry.snapshot.busPredictions.first(where: {
+                  entry.preferences.isBusRouteVisible($0.route)
+              }) else { return nil }
         return MediumDashboardView.BusPick(
             route: first.route,
             stopLabel: first.stopName,
@@ -75,12 +119,18 @@ struct MediumWidgetWrapper: View {
 
     private var alertLine: LineColor? {
         entry.preferences.plannedTripPin?.train?.line
-            ?? entry.snapshot.trainArrivals.first?.line
+            ?? entry.preferences.pinnedLine
+            ?? entry.snapshot.trainArrivals.first(where: {
+                entry.preferences.isTrainLineVisible($0.line)
+            })?.line
     }
 
     private var alertBusRoute: String? {
         entry.preferences.plannedTripPin?.bus?.route
-            ?? entry.snapshot.busPredictions.first?.route
+            ?? entry.preferences.pinnedBusRoute
+            ?? entry.snapshot.busPredictions.first(where: {
+                entry.preferences.isBusRouteVisible($0.route)
+            })?.route
     }
 
     private var displayedMetra: MediumDashboardView.MetraPick? {
@@ -97,7 +147,29 @@ struct MediumWidgetWrapper: View {
             )
         }
 
-        guard let first = entry.snapshot.metraPredictions.first else { return nil }
+        if let pinned = entry.preferences.pinnedMetraRoute {
+            let predictions = entry.snapshot.metraPredictions
+                .filter { $0.routeId == pinned }
+                .filter {
+                    entry.preferences.pinnedMetraStationId == nil
+                        || $0.stationId == entry.preferences.pinnedMetraStationId
+                }
+                .filter {
+                    entry.preferences.pinnedMetraDirectionId == nil
+                        || $0.directionId == entry.preferences.pinnedMetraDirectionId
+                }
+            guard let first = predictions.first else { return nil }
+            return MediumDashboardView.MetraPick(
+                route: first.routeId,
+                stationLabel: first.stationName,
+                predictions: predictions
+            )
+        }
+
+        guard entry.preferences.isModeVisible(.metra),
+              let first = entry.snapshot.metraPredictions.first(where: {
+                  entry.preferences.isMetraRouteVisible($0.routeId)
+              }) else { return nil }
         return MediumDashboardView.MetraPick(
             route: first.routeId,
             stationLabel: first.stationName,
@@ -109,6 +181,9 @@ struct MediumWidgetWrapper: View {
 
     private var alertMetraRoute: String? {
         entry.preferences.plannedTripPin?.metra?.routeId
-            ?? entry.snapshot.metraPredictions.first?.routeId
+            ?? entry.preferences.pinnedMetraRoute
+            ?? entry.snapshot.metraPredictions.first(where: {
+                entry.preferences.isMetraRouteVisible($0.routeId)
+            })?.routeId
     }
 }

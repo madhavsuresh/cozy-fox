@@ -52,8 +52,7 @@ public struct MetraBlockView: View {
                 )
             } else {
                 Text("No Metra")
-                    .font(ChicagoTypography.displaySM(relativeTo: .footnote))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.Gray.light)
             }
         }

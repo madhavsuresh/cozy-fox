@@ -127,8 +127,7 @@ public struct MareyProgressStrip: View {
                     .foregroundStyle(ChicagoPalette.Gray.medium)
                 Spacer()
                 Text(stopLabel)
-                    .font(ChicagoTypography.displaySM(relativeTo: .caption))
-                    .tracking(0.5)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.starRed)
                     .lineLimit(1)
             }
