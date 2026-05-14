@@ -56,87 +56,95 @@ struct DashboardScreen: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    alertsOverflowCard
-                    if shouldShowAutopinBanner {
-                        contextBanner
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                        if shouldShowAutopinBanner {
+                            contextBanner
+                        }
+                        liveUpdatesBar
+                        if shouldShowIntercampusSurface {
+                            intercampusCard
+                                .id(DashboardRailDestination.intercampus)
+                        }
+                        if shouldShowTrainSurfaces {
+                            linePickerCard
+                                .id(DashboardRailDestination.trainPicker)
+                        }
+                        if let line = pinnedLine {
+                            pinnedLineCard(line: line)
+                                .id(DashboardRailDestination.pinnedTrain)
+                        }
+                        if shouldShowBusSurfaces {
+                            busRoutePickerCard
+                                .id(DashboardRailDestination.busPicker)
+                        }
+                        if let route = pinnedBusRoute {
+                            pinnedBusCard(route: route)
+                                .id(DashboardRailDestination.pinnedBus)
+                        }
+                        if shouldShowMetraSurfaces {
+                            metraRoutePickerCard
+                                .id(DashboardRailDestination.metraPicker)
+                        }
+                        if let route = pinnedMetraRoute {
+                            pinnedMetraCard(route: route)
+                                .id(DashboardRailDestination.pinnedMetra)
+                        }
+                        if routePreferences.isModeVisible(.bikes) {
+                            bikeCard
+                        }
+                        homePinControl
+                        if let plannedTripPin {
+                            activeHomeTripCard(plannedTripPin)
+                        } else if !homeTripOptions.isEmpty {
+                            homeTripOptionsCard
+                        }
+                        if shouldShowDiscovery {
+                            nearYouSection
+                        }
                     }
-                    liveUpdatesBar
-                    if shouldShowIntercampusSurface {
-                        intercampusCard
+                    .padding(ChicagoSpacing.md)
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    topPinnedRoutesRail(scrollProxy: scrollProxy)
+                }
+                .background(ChicagoPalette.Surface.background)
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle("")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        HStack(spacing: ChicagoSpacing.xs) {
+                            ChicagoStar()
+                                .fill(ChicagoPalette.starRed)
+                                .frame(width: 14, height: 14)
+                            Text("Cozy Fox")
+                                .font(ChicagoTypography.body(.bold, relativeTo: .headline))
+                                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                        }
+                        .accessibilityLabel("Cozy Fox")
                     }
-                    if shouldShowTrainSurfaces {
-                        linePickerCard
-                    }
-                    if let line = pinnedLine {
-                        pinnedLineCard(line: line)
-                    }
-                    if shouldShowBusSurfaces {
-                        busRoutePickerCard
-                    }
-                    if let route = pinnedBusRoute {
-                        pinnedBusCard(route: route)
-                    }
-                    if shouldShowMetraSurfaces {
-                        metraRoutePickerCard
-                    }
-                    if let route = pinnedMetraRoute {
-                        pinnedMetraCard(route: route)
-                    }
-                    if routePreferences.isModeVisible(.bikes) {
-                        bikeCard
-                    }
-                    homePinControl
-                    if let plannedTripPin {
-                        activeHomeTripCard(plannedTripPin)
-                    } else if !homeTripOptions.isEmpty {
-                        homeTripOptionsCard
-                    }
-                    if shouldShowDiscovery {
-                        nearYouSection
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink {
+                            SettingsScreen()
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
                     }
                 }
-                .padding(ChicagoSpacing.md)
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                topAlertsRail
-            }
-            .background(ChicagoPalette.Surface.background)
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: ChicagoSpacing.xs) {
-                        ChicagoStar()
-                            .fill(ChicagoPalette.starRed)
-                            .frame(width: 14, height: 14)
-                        Text("Cozy Fox")
-                            .font(ChicagoTypography.body(.bold, relativeTo: .headline))
-                            .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    }
-                    .accessibilityLabel("Cozy Fox")
+                .tint(ChicagoPalette.flagBlue)
+                .refreshable { await model.refreshIfNeeded(force: true) }
+                .onAppear { reloadPinnedFromPreferences() }
+                .task { await observeDestinationSuggestions() }
+                .onDisappear {
+                    destinationDebounceTask?.cancel()
+                    destinationResolveTask?.cancel()
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsScreen()
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
+                .onChange(of: model.pinRevision) { _, _ in reloadPinnedFromPreferences() }
+                .sheet(item: $anchorEntryKind, onDismiss: reloadPinnedFromPreferences) { kind in
+                    AnchorAddressEntry(kind: kind)
+                        .environment(model)
                 }
-            }
-            .tint(ChicagoPalette.flagBlue)
-            .refreshable { await model.refreshIfNeeded(force: true) }
-            .onAppear { reloadPinnedFromPreferences() }
-            .task { await observeDestinationSuggestions() }
-            .onDisappear {
-                destinationDebounceTask?.cancel()
-                destinationResolveTask?.cancel()
-            }
-            .onChange(of: model.pinRevision) { _, _ in reloadPinnedFromPreferences() }
-            .sheet(item: $anchorEntryKind, onDismiss: reloadPinnedFromPreferences) { kind in
-                AnchorAddressEntry(kind: kind)
-                    .environment(model)
             }
         }
         .dismissKeyboardOnTapAway()
@@ -3718,109 +3726,183 @@ struct DashboardScreen: View {
             .map { $0 }
     }
 
+    // MARK: - Top rail
+
+    private func topPinnedRoutesRail(scrollProxy: ScrollViewProxy) -> some View {
+        HStack(spacing: ChicagoSpacing.xs) {
+            ForEach(DashboardRailMode.allCases) { mode in
+                Button {
+                    scrollToRailMode(mode, using: scrollProxy)
+                } label: {
+                    railSlot(for: mode)
+                }
+                .buttonStyle(.plain)
+                .disabled(!isRailModeReachable(mode))
+                .accessibilityLabel(routeRailAccessibilityLabel(for: mode))
+            }
+        }
+        .padding(.horizontal, ChicagoSpacing.md)
+        .padding(.vertical, ChicagoSpacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ChicagoPalette.Surface.background)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ChicagoPalette.cornflower.opacity(0.3))
+                .frame(height: ChicagoSpacing.Stroke.hairline)
+        }
+    }
+
+    private func scrollToRailMode(
+        _ mode: DashboardRailMode,
+        using scrollProxy: ScrollViewProxy
+    ) {
+        guard isRailModeReachable(mode) else { return }
+        withAnimation(.easeInOut(duration: 0.24)) {
+            scrollProxy.scrollTo(railDestination(for: mode), anchor: .top)
+        }
+    }
+
+    private func railDestination(for mode: DashboardRailMode) -> DashboardRailDestination {
+        switch mode {
+        case .train:
+            return pinnedLine == nil ? .trainPicker : .pinnedTrain
+        case .bus:
+            return pinnedBusRoute == nil ? .busPicker : .pinnedBus
+        case .metra:
+            return pinnedMetraRoute == nil ? .metraPicker : .pinnedMetra
+        case .intercampus:
+            return .intercampus
+        }
+    }
+
+    private func isRailModeReachable(_ mode: DashboardRailMode) -> Bool {
+        switch mode {
+        case .train:
+            return shouldShowTrainSurfaces || pinnedLine != nil
+        case .bus:
+            return shouldShowBusSurfaces || pinnedBusRoute != nil
+        case .metra:
+            return shouldShowMetraSurfaces || pinnedMetraRoute != nil
+        case .intercampus:
+            return shouldShowIntercampusSurface
+        }
+    }
+
+    private func isRailModePinned(_ mode: DashboardRailMode) -> Bool {
+        switch mode {
+        case .train:
+            return pinnedLine != nil
+        case .bus:
+            return pinnedBusRoute != nil
+        case .metra:
+            return pinnedMetraRoute != nil
+        case .intercampus:
+            return pinnedIntercampusDirection != nil || pinnedIntercampusStopId != nil
+        }
+    }
+
+    private func routeRailAccessibilityLabel(for mode: DashboardRailMode) -> String {
+        switch mode {
+        case .train:
+            if let pinnedLine {
+                return "\(pinnedLine.displayName) train pinned. Jump to pinned train."
+            }
+            return "Train routes. Jump to train picker."
+        case .bus:
+            if let pinnedBusRoute {
+                return "Route \(pinnedBusRoute) bus pinned. Jump to pinned bus."
+            }
+            return "Bus routes. Jump to bus picker."
+        case .metra:
+            if let pinnedMetraRoute {
+                let name = MetraStationCatalog.route(id: pinnedMetraRoute)?.displayName ?? pinnedMetraRoute
+                return "\(name) pinned. Jump to pinned Metra."
+            }
+            return "Metra lines. Jump to Metra picker."
+        case .intercampus:
+            if let pinnedIntercampusDirection {
+                return "\(pinnedIntercampusDirection.label) Intercampus pinned. Jump to Intercampus."
+            }
+            if pinnedIntercampusStopId != nil {
+                return "Intercampus stop pinned. Jump to Intercampus."
+            }
+            return "Intercampus shuttle. Jump to Intercampus."
+        }
+    }
+
+    private func railSlot(for mode: DashboardRailMode) -> some View {
+        let isPinned = isRailModePinned(mode)
+        let isReachable = isRailModeReachable(mode)
+        return ZStack {
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .fill(isPinned ? ChicagoPalette.Surface.card : ChicagoPalette.Surface.elevated)
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(
+                    railBorderColor(for: mode).opacity(isPinned ? 0.55 : 0.25),
+                    lineWidth: ChicagoSpacing.Stroke.hairline
+                )
+            railSlotContent(for: mode)
+                .frame(minWidth: 44, minHeight: 24)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 40)
+        .opacity(isReachable ? 1 : 0.38)
+        .contentShape(RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
+    }
+
+    @ViewBuilder
+    private func railSlotContent(for mode: DashboardRailMode) -> some View {
+        switch mode {
+        case .train:
+            if let line = pinnedLine {
+                RouteBadge(line: line, size: .sm)
+            } else {
+                railModeIcon(mode)
+            }
+        case .bus:
+            if let route = pinnedBusRoute {
+                RouteBadge(bus: route, size: .sm)
+            } else {
+                railModeIcon(mode)
+            }
+        case .metra:
+            if let route = pinnedMetraRoute {
+                RouteBadge(metra: route, size: .sm)
+            } else {
+                railModeIcon(mode)
+            }
+        case .intercampus:
+            if pinnedIntercampusDirection != nil || pinnedIntercampusStopId != nil {
+                IntercampusRailBadge(direction: pinnedIntercampusDirection)
+            } else {
+                railModeIcon(mode)
+            }
+        }
+    }
+
+    private func railModeIcon(_ mode: DashboardRailMode) -> some View {
+        Image(systemName: mode.systemImage)
+            .font(ChicagoTypography.body(.bold, relativeTo: .caption))
+            .foregroundStyle(ChicagoPalette.Gray.medium)
+            .frame(width: 26, height: 26)
+            .accessibilityHidden(true)
+    }
+
+    private func railBorderColor(for mode: DashboardRailMode) -> Color {
+        switch mode {
+        case .train:
+            return pinnedLine?.swiftUIColor ?? ChicagoPalette.cornflower
+        case .bus:
+            return pinnedBusRoute == nil ? ChicagoPalette.cornflower : ChicagoPalette.flagBlue
+        case .metra:
+            return pinnedMetraRoute
+                .flatMap { MetraStationCatalog.route(id: $0)?.swiftUIColor } ?? ChicagoPalette.cornflower
+        case .intercampus:
+            return ChicagoPalette.bahama
+        }
+    }
+
     // MARK: - Alerts
-
-    private var topAlertTargetLimit: Int { 3 }
-
-    private var pinnedAlertTargets: [DashboardAlertTarget] {
-        var targets: [DashboardAlertTarget] = []
-        var trainLines: Set<LineColor> = []
-        var busRoutes: Set<String> = []
-        var metraRoutes: Set<String> = []
-
-        func appendTrain(_ line: LineColor) {
-            guard trainLines.insert(line).inserted else { return }
-            let alerts = alerts(forLine: line)
-            guard !alerts.isEmpty else { return }
-            targets.append(
-                DashboardAlertTarget(
-                    kind: .train(line),
-                    title: line.displayName,
-                    subtitle: "Train",
-                    alerts: alerts
-                )
-            )
-        }
-
-        func appendBus(_ route: String) {
-            guard busRoutes.insert(route).inserted else { return }
-            let alerts = alerts(forBusRoute: route)
-            guard !alerts.isEmpty else { return }
-            targets.append(
-                DashboardAlertTarget(
-                    kind: .bus(route),
-                    title: "Route \(route)",
-                    subtitle: "Bus",
-                    alerts: alerts
-                )
-            )
-        }
-
-        func appendMetra(_ route: String) {
-            guard metraRoutes.insert(route).inserted else { return }
-            let alerts = alerts(forMetraRoute: route)
-            guard !alerts.isEmpty else { return }
-            targets.append(
-                DashboardAlertTarget(
-                    kind: .metra(route),
-                    title: MetraStationCatalog.route(id: route)?.displayName ?? route,
-                    subtitle: "Metra",
-                    alerts: alerts
-                )
-            )
-        }
-
-        if let pinnedLine { appendTrain(pinnedLine) }
-        if let pinnedBusRoute { appendBus(pinnedBusRoute) }
-        if let pinnedMetraRoute { appendMetra(pinnedMetraRoute) }
-
-        if let plannedTripPin {
-            plannedTripPin.trainLegs.forEach { appendTrain($0.line) }
-            plannedTripPin.busLegs.forEach { appendBus($0.route) }
-            plannedTripPin.metraLegs.forEach { appendMetra($0.routeId) }
-        }
-
-        return targets
-    }
-
-    @ViewBuilder
-    private var topAlertsRail: some View {
-        let targets = Array(pinnedAlertTargets.prefix(topAlertTargetLimit))
-        if !targets.isEmpty {
-            HStack(spacing: ChicagoSpacing.xs) {
-                ForEach(targets) { target in
-                    PinnedAlertTopPill(target: target)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, ChicagoSpacing.md)
-            .padding(.vertical, ChicagoSpacing.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ChicagoPalette.Surface.background)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(ChicagoPalette.cornflower.opacity(0.3))
-                    .frame(height: ChicagoSpacing.Stroke.hairline)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var alertsOverflowCard: some View {
-        let targets = Array(pinnedAlertTargets.dropFirst(topAlertTargetLimit))
-        if !targets.isEmpty {
-            ChicagoCard(title: "More service alerts",
-                        eyebrow: "Pinned routes",
-                        ornament: .star) {
-                VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-                    ForEach(targets) { target in
-                        PinnedAlertOverflowRow(target: target)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
 
     private func alerts(forLine line: LineColor) -> [ServiceAlert] {
         orderedAlerts(
@@ -4313,157 +4395,64 @@ private enum HomeGeocodeService {
     }
 }
 
-private struct DashboardAlertTarget: Identifiable {
-    enum Kind: Hashable {
-        case train(LineColor)
-        case bus(String)
-        case metra(String)
+private enum DashboardRailMode: String, CaseIterable, Identifiable {
+    case train
+    case bus
+    case metra
+    case intercampus
 
-        var id: String {
-            switch self {
-            case .train(let line): return "train-\(line.rawValue)"
-            case .bus(let route): return "bus-\(route)"
-            case .metra(let route): return "metra-\(route)"
-            }
-        }
-    }
+    var id: String { rawValue }
 
-    let kind: Kind
-    let title: String
-    let subtitle: String
-    let alerts: [ServiceAlert]
-
-    var id: String { kind.id }
-
-    var primaryHeadline: String {
-        alerts.first?.headline ?? "Service alert"
-    }
-
-    var countLabel: String {
-        alerts.count == 1 ? "1 alert" : "\(alerts.count) alerts"
-    }
-
-    var compactCountLabel: String {
-        "\(alerts.count)"
-    }
-
-    var detailURL: URL {
-        alerts.first?.detailURL ?? ServiceAlert.detailsURL
-    }
-
-    var severityColor: Color {
-        let severity = alerts
-            .map(\.severity)
-            .max { severityRank($0) < severityRank($1) } ?? .low
-        switch severity {
-        case .high:   return ChicagoPalette.starRed
-        case .medium: return ChicagoPalette.gold
-        case .low:    return ChicagoPalette.bahama
-        }
-    }
-
-    var accessibilitySummary: String {
-        "\(subtitle) \(title), \(countLabel): \(primaryHeadline)"
-    }
-
-    private func severityRank(_ severity: AlertSeverity) -> Int {
-        switch severity {
-        case .low: 0
-        case .medium: 1
-        case .high: 2
+    var systemImage: String {
+        switch self {
+        case .train: "tram.fill"
+        case .bus: "bus.fill"
+        case .metra: "train.side.front.car"
+        case .intercampus: "graduationcap.fill"
         }
     }
 }
 
-private struct PinnedAlertTopPill: View {
-    let target: DashboardAlertTarget
+private enum DashboardRailDestination: Hashable {
+    case intercampus
+    case trainPicker
+    case pinnedTrain
+    case busPicker
+    case pinnedBus
+    case metraPicker
+    case pinnedMetra
+}
+
+private struct IntercampusRailBadge: View {
+    let direction: IntercampusDirection?
 
     var body: some View {
-        Link(destination: target.detailURL) {
-            HStack(spacing: ChicagoSpacing.xs) {
-                routeBadge
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
-                    .accessibilityHidden(true)
-                Text(target.compactCountLabel)
-                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, ChicagoSpacing.sm)
-            .padding(.vertical, ChicagoSpacing.xs)
+        Text(label)
+            .font(ChicagoTypography.body(.bold, size: 11, relativeTo: .caption))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .background(
-                target.severityColor.opacity(0.12),
-                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                ChicagoPalette.bahama,
+                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
-                    .strokeBorder(
-                        target.severityColor.opacity(0.3),
-                        lineWidth: ChicagoSpacing.Stroke.hairline
-                    )
-            )
-            .foregroundStyle(target.severityColor)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(target.accessibilitySummary)
+            .accessibilityLabel(accessibilityLabel)
     }
 
-    @ViewBuilder
-    private var routeBadge: some View {
-        switch target.kind {
-        case .train(let line):
-            RouteBadge(line: line, size: .sm)
-        case .bus(let route):
-            RouteBadge(bus: route, size: .sm)
-        case .metra(let route):
-            RouteBadge(metra: route, size: .sm)
+    private var label: String {
+        switch direction {
+        case .some(.northbound): "NB"
+        case .some(.southbound): "SB"
+        case .none: "IC"
         }
     }
-}
 
-private struct PinnedAlertOverflowRow: View {
-    let target: DashboardAlertTarget
-
-    var body: some View {
-        Link(destination: target.detailURL) {
-            HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
-                routeBadge
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: ChicagoSpacing.xs) {
-                        Text(target.title)
-                            .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
-                            .foregroundStyle(ChicagoPalette.Gray.darkest)
-                            .lineLimit(1)
-                        Text(target.countLabel)
-                            .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                            .foregroundStyle(target.severityColor)
-                            .lineLimit(1)
-                    }
-                    Text(target.primaryHeadline)
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: ChicagoSpacing.xs)
-                Image(systemName: "arrow.up.right")
-                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
-                    .foregroundStyle(ChicagoPalette.bahama)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(target.accessibilitySummary)
-    }
-
-    @ViewBuilder
-    private var routeBadge: some View {
-        switch target.kind {
-        case .train(let line):
-            RouteBadge(line: line, size: .sm)
-        case .bus(let route):
-            RouteBadge(bus: route, size: .sm)
-        case .metra(let route):
-            RouteBadge(metra: route, size: .sm)
+    private var accessibilityLabel: String {
+        switch direction {
+        case .some(.northbound): "Northbound Intercampus"
+        case .some(.southbound): "Southbound Intercampus"
+        case .none: "Intercampus"
         }
     }
 }
