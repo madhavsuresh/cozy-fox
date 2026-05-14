@@ -97,6 +97,7 @@ struct DashboardScreen: View {
                         homePinControl
                         if let plannedTripPin {
                             activeHomeTripCard(plannedTripPin)
+                                .id(DashboardRailDestination.plannedTrip)
                         } else if !homeTripOptions.isEmpty {
                             homeTripOptionsCard
                         }
@@ -3729,16 +3730,22 @@ struct DashboardScreen: View {
     // MARK: - Top rail
 
     private func topPinnedRoutesRail(scrollProxy: ScrollViewProxy) -> some View {
-        HStack(spacing: ChicagoSpacing.xs) {
-            ForEach(DashboardRailMode.allCases) { mode in
-                Button {
-                    scrollToRailMode(mode, using: scrollProxy)
-                } label: {
-                    railSlot(for: mode)
+        VStack(spacing: ChicagoSpacing.xs) {
+            HStack(spacing: ChicagoSpacing.xs) {
+                ForEach(DashboardRailMode.allCases) { mode in
+                    Button {
+                        scrollToRailMode(mode, using: scrollProxy)
+                    } label: {
+                        railSlot(for: mode)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isRailModeReachable(mode))
+                    .accessibilityLabel(routeRailAccessibilityLabel(for: mode))
                 }
-                .buttonStyle(.plain)
-                .disabled(!isRailModeReachable(mode))
-                .accessibilityLabel(routeRailAccessibilityLabel(for: mode))
+            }
+
+            if let plannedTripPin {
+                plannedTripRailRow(plannedTripPin, scrollProxy: scrollProxy)
             }
         }
         .padding(.horizontal, ChicagoSpacing.md)
@@ -3752,6 +3759,46 @@ struct DashboardScreen: View {
         }
     }
 
+    private func plannedTripRailRow(
+        _ pin: PlannedTripPin,
+        scrollProxy: ScrollViewProxy
+    ) -> some View {
+        let tokens = plannedTripRouteTokens(for: pin)
+        return Button {
+            scrollToPlannedTrip(using: scrollProxy)
+        } label: {
+            HStack(spacing: ChicagoSpacing.xs) {
+                Image(systemName: "map.fill")
+                    .font(ChicagoTypography.body(.bold, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.flagBlue)
+                    .frame(width: 24, height: 24)
+                    .accessibilityHidden(true)
+                Text(plannedTripRailTitle(for: pin))
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !tokens.isEmpty {
+                    plannedTripRouteTokenStack(tokens, limit: 3)
+                }
+            }
+            .padding(.horizontal, ChicagoSpacing.sm)
+            .frame(height: 36)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ChicagoPalette.Surface.elevated,
+                        in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
+            .overlay {
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .strokeBorder(ChicagoPalette.flagBlue.opacity(0.22),
+                                  lineWidth: ChicagoSpacing.Stroke.hairline)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(plannedTripRailAccessibilityLabel(for: pin))
+    }
+
     private func scrollToRailMode(
         _ mode: DashboardRailMode,
         using scrollProxy: ScrollViewProxy
@@ -3759,6 +3806,12 @@ struct DashboardScreen: View {
         guard isRailModeReachable(mode) else { return }
         withAnimation(.easeInOut(duration: 0.24)) {
             scrollProxy.scrollTo(railDestination(for: mode), anchor: .top)
+        }
+    }
+
+    private func scrollToPlannedTrip(using scrollProxy: ScrollViewProxy) {
+        withAnimation(.easeInOut(duration: 0.24)) {
+            scrollProxy.scrollTo(DashboardRailDestination.plannedTrip, anchor: .top)
         }
     }
 
@@ -3899,6 +3952,92 @@ struct DashboardScreen: View {
                 .flatMap { MetraStationCatalog.route(id: $0)?.swiftUIColor } ?? ChicagoPalette.cornflower
         case .intercampus:
             return ChicagoPalette.bahama
+        }
+    }
+
+    private func plannedTripRailTitle(for pin: PlannedTripPin) -> String {
+        let label = pin.destination.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return label.isEmpty ? "Planned trip" : label
+    }
+
+    private func plannedTripRailAccessibilityLabel(for pin: PlannedTripPin) -> String {
+        let routeSummary = pin.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let via = routeSummary.isEmpty ? "" : " via \(routeSummary)"
+        return "Pinned trip to \(plannedTripRailTitle(for: pin))\(via). Jump to trip card."
+    }
+
+    private func plannedTripRouteTokens(for pin: PlannedTripPin) -> [DashboardTripRouteToken] {
+        let trainTokens = pin.trainLegs.map {
+            DashboardTripRouteToken(
+                kind: .train($0.line),
+                summaryLabel: $0.line.displayName
+            )
+        }
+        let busTokens = pin.busLegs.map {
+            DashboardTripRouteToken(
+                kind: .bus($0.route),
+                summaryLabel: "Route \($0.route)"
+            )
+        }
+        let metraTokens = pin.metraLegs.map {
+            DashboardTripRouteToken(
+                kind: .metra($0.routeId),
+                summaryLabel: "Metra \(MetraStationCatalog.route(id: $0.routeId)?.shortName ?? $0.routeId)"
+            )
+        }
+        let tokens = trainTokens + busTokens + metraTokens
+        let summaryPieces = pin.summary
+            .split(separator: "+")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var seen: Set<String> = []
+        var ordered: [DashboardTripRouteToken] = []
+        for piece in summaryPieces {
+            guard let token = tokens.first(where: {
+                $0.summaryLabel == piece && !seen.contains($0.id)
+            }) else { continue }
+            ordered.append(token)
+            seen.insert(token.id)
+        }
+        for token in tokens where !seen.contains(token.id) {
+            ordered.append(token)
+            seen.insert(token.id)
+        }
+        return ordered
+    }
+
+    private func plannedTripRouteTokenStack(
+        _ tokens: [DashboardTripRouteToken],
+        limit: Int
+    ) -> some View {
+        let visibleTokens = Array(tokens.prefix(limit))
+        let overflowCount = max(0, tokens.count - visibleTokens.count)
+        return HStack(spacing: ChicagoSpacing.xs) {
+            ForEach(visibleTokens) { token in
+                plannedTripRouteTokenView(token)
+            }
+            if overflowCount > 0 {
+                Text("+\(overflowCount)")
+                    .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .padding(.horizontal, ChicagoSpacing.xs)
+                    .padding(.vertical, 2)
+                    .background(ChicagoPalette.Surface.card,
+                                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func plannedTripRouteTokenView(_ token: DashboardTripRouteToken) -> some View {
+        switch token.kind {
+        case .train(let line):
+            RouteBadge(line: line, size: .sm)
+        case .bus(let route):
+            RouteBadge(bus: route, size: .sm)
+        case .metra(let routeId):
+            RouteBadge(metra: routeId, size: .sm)
         }
     }
 
@@ -4421,6 +4560,29 @@ private enum DashboardRailDestination: Hashable {
     case pinnedBus
     case metraPicker
     case pinnedMetra
+    case plannedTrip
+}
+
+private struct DashboardTripRouteToken: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case train(LineColor)
+        case bus(String)
+        case metra(String)
+    }
+
+    let kind: Kind
+    let summaryLabel: String
+
+    var id: String {
+        switch kind {
+        case .train(let line):
+            return "train-\(line.rawValue)"
+        case .bus(let route):
+            return "bus-\(route)"
+        case .metra(let routeId):
+            return "metra-\(routeId)"
+        }
+    }
 }
 
 private struct IntercampusRailBadge: View {
