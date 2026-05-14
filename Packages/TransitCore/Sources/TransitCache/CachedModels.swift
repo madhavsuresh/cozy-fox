@@ -169,6 +169,60 @@ public final class CachedMetraPrediction {
     }
 }
 
+@Model
+public final class CachedIntercampusArrival {
+    @Attribute(.unique) public var id: String
+    public var routeId: String
+    public var directionRaw: String
+    public var tripId: String
+    public var vehicleId: String?
+    public var vehicleLabel: String?
+    public var stopId: String
+    public var stopName: String
+    public var destinationName: String
+    public var generatedAt: Date
+    public var arrivalAt: Date
+    public var delaySeconds: Int?
+    public var isDelayed: Bool
+    public var fetchedAt: Date
+
+    public init(arrival: IntercampusArrival, fetchedAt: Date) {
+        self.id = arrival.id
+        self.routeId = arrival.routeId
+        self.directionRaw = arrival.direction.rawValue
+        self.tripId = arrival.tripId
+        self.vehicleId = arrival.vehicleId
+        self.vehicleLabel = arrival.vehicleLabel
+        self.stopId = arrival.stopId
+        self.stopName = arrival.stopName
+        self.destinationName = arrival.destinationName
+        self.generatedAt = arrival.generatedAt
+        self.arrivalAt = arrival.arrivalAt
+        self.delaySeconds = arrival.delaySeconds
+        self.isDelayed = arrival.isDelayed
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: IntercampusArrival? {
+        guard let direction = IntercampusDirection(rawValue: directionRaw) else { return nil }
+        return IntercampusArrival(
+            id: id,
+            routeId: routeId,
+            direction: direction,
+            tripId: tripId,
+            vehicleId: vehicleId,
+            vehicleLabel: vehicleLabel,
+            stopId: stopId,
+            stopName: stopName,
+            destinationName: destinationName,
+            generatedAt: generatedAt,
+            arrivalAt: arrivalAt,
+            delaySeconds: delaySeconds,
+            isDelayed: isDelayed
+        )
+    }
+}
+
 /// One row per (stationId, snappedAt). Retained 14 days so the future
 /// `EBikeChurnEstimator` can read historical depletion rates.
 @Model

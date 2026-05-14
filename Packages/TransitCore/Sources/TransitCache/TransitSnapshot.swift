@@ -7,6 +7,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var trainArrivals: [Arrival]
     public var busPredictions: [BusPrediction]
     public var metraPredictions: [MetraPrediction]
+    public var intercampusArrivals: [IntercampusArrival]
     public var nearestBike: NearestBikePick?
     public var nearbyBikePicks: [NearestBikePick]
     public var nearbyFreeBikePicks: [NearestFreeBikePick]
@@ -14,6 +15,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
+    public var intercampusFetchedAt: Date?
     public var bikesFetchedAt: Date?
     public var alertsFetchedAt: Date?
 
@@ -21,6 +23,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         trainArrivals: [Arrival] = [],
         busPredictions: [BusPrediction] = [],
         metraPredictions: [MetraPrediction] = [],
+        intercampusArrivals: [IntercampusArrival] = [],
         nearestBike: NearestBikePick? = nil,
         nearbyBikePicks: [NearestBikePick] = [],
         nearbyFreeBikePicks: [NearestFreeBikePick] = [],
@@ -28,12 +31,14 @@ public struct TransitSnapshot: Sendable, Hashable {
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
+        intercampusFetchedAt: Date? = nil,
         bikesFetchedAt: Date? = nil,
         alertsFetchedAt: Date? = nil
     ) {
         self.trainArrivals = trainArrivals
         self.busPredictions = busPredictions
         self.metraPredictions = metraPredictions
+        self.intercampusArrivals = intercampusArrivals
         self.nearestBike = nearestBike
         self.nearbyBikePicks = nearbyBikePicks
         self.nearbyFreeBikePicks = nearbyFreeBikePicks
@@ -41,6 +46,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt
+        self.intercampusFetchedAt = intercampusFetchedAt
         self.bikesFetchedAt = bikesFetchedAt
         self.alertsFetchedAt = alertsFetchedAt
     }
@@ -60,7 +66,14 @@ public struct TransitSnapshot: Sendable, Hashable {
 
     /// Soft "stale" indicator the widget uses.
     public func isAnythingStale(now: Date = .now, ttl: TimeInterval = 300) -> Bool {
-        let dates: [Date?] = [trainsFetchedAt, busesFetchedAt, metraFetchedAt, bikesFetchedAt, alertsFetchedAt]
+        let dates: [Date?] = [
+            trainsFetchedAt,
+            busesFetchedAt,
+            metraFetchedAt,
+            intercampusFetchedAt,
+            bikesFetchedAt,
+            alertsFetchedAt,
+        ]
         return dates.compactMap { $0 }.contains { now.timeIntervalSince($0) > ttl }
     }
 }

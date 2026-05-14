@@ -334,6 +334,13 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var pinnedMetraDirectionId: Int?
     /// Destination/headsign label for the pinned Metra direction.
     public var pinnedMetraDestination: String?
+    /// Whether the dashboard should surface Northwestern Intercampus
+    /// arrivals near the user's current location.
+    public var includeIntercampus: Bool
+    /// Direction currently selected in the dashboard Intercampus card.
+    public var pinnedIntercampusDirection: IntercampusDirection?
+    /// Specific TripShot stop id selected in the Intercampus card.
+    public var pinnedIntercampusStopId: String?
     /// User-controlled override for the 30 s foreground refresh ticker. When
     /// off, the app falls back to pull-to-refresh + background tasks (which
     /// run every 15–45 min depending on commute window). iOS Low Power Mode
@@ -373,6 +380,9 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         pinnedMetraStationId: String? = nil,
         pinnedMetraDirectionId: Int? = nil,
         pinnedMetraDestination: String? = nil,
+        includeIntercampus: Bool = false,
+        pinnedIntercampusDirection: IntercampusDirection? = nil,
+        pinnedIntercampusStopId: String? = nil,
         liveUpdatesEnabled: Bool = true,
         autopinEnabled: Bool = true,
         pinSource: RoutePinSource = .manual,
@@ -397,6 +407,9 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedMetraStationId = pinnedMetraStationId
         self.pinnedMetraDirectionId = pinnedMetraDirectionId
         self.pinnedMetraDestination = pinnedMetraDestination
+        self.includeIntercampus = includeIntercampus
+        self.pinnedIntercampusDirection = pinnedIntercampusDirection
+        self.pinnedIntercampusStopId = pinnedIntercampusStopId
         self.liveUpdatesEnabled = liveUpdatesEnabled
         self.autopinEnabled = autopinEnabled
         self.pinSource = pinSource
@@ -426,6 +439,9 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedMetraStationId = try? c.decode(String.self, forKey: .pinnedMetraStationId)
         self.pinnedMetraDirectionId = try? c.decode(Int.self, forKey: .pinnedMetraDirectionId)
         self.pinnedMetraDestination = try? c.decode(String.self, forKey: .pinnedMetraDestination)
+        self.includeIntercampus = (try? c.decode(Bool.self, forKey: .includeIntercampus)) ?? false
+        self.pinnedIntercampusDirection = try? c.decode(IntercampusDirection.self, forKey: .pinnedIntercampusDirection)
+        self.pinnedIntercampusStopId = try? c.decode(String.self, forKey: .pinnedIntercampusStopId)
         self.liveUpdatesEnabled = (try? c.decode(Bool.self, forKey: .liveUpdatesEnabled)) ?? true
         self.autopinEnabled = (try? c.decode(Bool.self, forKey: .autopinEnabled)) ?? true
         self.pinSource = (try? c.decode(RoutePinSource.self, forKey: .pinSource)) ?? .manual
