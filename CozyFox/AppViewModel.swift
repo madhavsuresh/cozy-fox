@@ -247,6 +247,7 @@ final class AppViewModel {
         func record(
             line: LineColor? = nil,
             stationId: Int? = nil,
+            trainDestination: String? = nil,
             busRoute: String? = nil,
             busDirection: String? = nil,
             metraRoute: String? = nil,
@@ -258,6 +259,7 @@ final class AppViewModel {
                 context: location.context,
                 line: line,
                 stationId: stationId,
+                trainDestination: trainDestination,
                 busRoute: busRoute,
                 busDirection: busDirection,
                 metraRoute: metraRoute,
@@ -273,7 +275,11 @@ final class AppViewModel {
 
         if let trip = prefs.plannedTripPin {
             for train in trip.trainLegs {
-                record(line: train.line, stationId: train.stationId)
+                record(
+                    line: train.line,
+                    stationId: train.stationId,
+                    trainDestination: train.destinationName
+                )
             }
             for bus in trip.busLegs {
                 record(busRoute: bus.route, busDirection: bus.directionLabel)
@@ -289,6 +295,7 @@ final class AppViewModel {
             record(
                 line: prefs.pinnedLine,
                 stationId: prefs.pinnedStationId,
+                trainDestination: prefs.pinnedTrainDestination,
                 busRoute: prefs.pinnedBusRoute,
                 busDirection: prefs.pinnedBusDirection,
                 metraRoute: prefs.pinnedMetraRoute,

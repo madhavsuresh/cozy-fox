@@ -2066,9 +2066,22 @@ struct DashboardScreen: View {
                     }
                     if hasWalkingData || allowHaversineFallback {
                         if let chosen = stations.first(where: { $0.station.id == chosenId }) {
-                            arrivalsHeadline(at: chosen.station, line: line)
-                            directionPickerForTrain(at: chosen.station, line: line)
-                            trainProgressStrip(toStation: chosen.station, line: line)
+                            let destinationChoices = trainDestinationChoices(at: chosen.station, line: line)
+                            Group {
+                                arrivalsHeadline(at: chosen.station, line: line)
+                                directionPickerForTrain(at: chosen.station, line: line)
+                                trainProgressStrip(toStation: chosen.station, line: line)
+                            }
+                            .task(id: trainDirectionDefaultTaskKey(
+                                line: line,
+                                stationId: chosen.station.id,
+                                destinations: destinationChoices
+                            )) {
+                                applyDefaultPinnedTrainDestinationIfNeeded(
+                                    line: line,
+                                    availableDestinations: destinationChoices
+                                )
+                            }
                         }
                         sectionLabel("Stop")
                         StationChipStrip {
@@ -2240,11 +2253,7 @@ struct DashboardScreen: View {
 
     @ViewBuilder
     private func directionPickerForTrain(at station: LStation, line: LineColor) -> some View {
-        let destinations = Array(Set(
-            model.snapshot.trainArrivals
-                .filter { $0.line == line && $0.stationId == station.id }
-                .map(\.destinationName)
-        )).sorted()
+        let destinations = trainDestinationChoices(at: station, line: line)
         if destinations.count > 1 {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Pick a direction")
@@ -2263,6 +2272,85 @@ struct DashboardScreen: View {
             }
         }
     }
+
+    private func trainDestinationChoices(at station: LStation, line: LineColor) -> [String] {
+        Dictionary(
+            grouping: model.snapshot.trainArrivals
+                .filter { $0.line == line && $0.stationId == station.id },
+            by: \.destinationName
+        )
+        .sorted {
+            ($0.value.map(\.arrivalAt).min() ?? .distantFuture)
+                < ($1.value.map(\.arrivalAt).min() ?? .distantFuture)
+        }
+        .map(\.key)
+    }
+
+    private func trainDirectionDefaultTaskKey(
+        line: LineColor,
+        stationId: Int,
+        destinations: [String]
+    ) -> String {
+        [
+            line.rawValue,
+            String(stationId),
+            pinnedTrainDestination ?? "none",
+            destinations.joined(separator: "|")
+        ].joined(separator: ":")
+    }
+
+    @MainActor
+    private func applyDefaultPinnedTrainDestinationIfNeeded(
+        line: LineColor,
+        availableDestinations: [String]
+    ) {
+        guard pinSource == .manual,
+              pinnedLine == line,
+              pinnedTrainDestination == nil,
+              availableDestinations.count > 1,
+              let destination = defaultTrainDestination(
+                  line: line,
+                  availableDestinations: availableDestinations
+              )
+        else { return }
+
+        pinnedTrainDestination = destination
+        model.saveManualRoutePreferences {
+            $0.pinnedTrainDestination = destination
+        }
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
+    private func defaultTrainDestination(
+        line: LineColor,
+        availableDestinations: [String]
+    ) -> String? {
+        PinnedLineDefaultResolver().preferredTrainDestination(
+            line: line,
+            availableDestinations: availableDestinations,
+            preferences: routePreferences,
+            profile: model.preferences.loadMobilityProfile(),
+            context: model.location.context,
+            location: model.location.lastKnown
+        )
+    }
+
+    private func trainDestinationLabelsForPinnedLine(_ line: LineColor) -> [String] {
+        guard let origin,
+              let station = NearestStationResolver(maxDistanceMeters: 10_000)
+                .closestStations(
+                    onLine: line,
+                    to: origin,
+                    limit: 1,
+                    catalog: LStationCatalog.all,
+                    excludingStationIds: closedStationIds
+                )
+                .first?
+                .station
+        else { return [] }
+        return trainDestinationChoices(at: station, line: line)
+    }
+
 
     /// **The dashboard's headline visualisation.** A massive `BigNumber`
     /// for the next arrival, then a `HeadwayDotStrip` showing the next
@@ -2345,13 +2433,19 @@ struct DashboardScreen: View {
 
     private func togglePinnedLine(_ line: LineColor) {
         let newValue: LineColor? = (pinnedLine == line) ? nil : line
+        let defaultDestination = newValue.map {
+            defaultTrainDestination(
+                line: $0,
+                availableDestinations: trainDestinationLabelsForPinnedLine($0)
+            )
+        } ?? nil
         pinnedLine = newValue
         pinnedStationId = nil
-        pinnedTrainDestination = nil
+        pinnedTrainDestination = defaultDestination
         model.saveManualRoutePreferences {
             $0.pinnedLine = newValue
             $0.pinnedStationId = nil
-            $0.pinnedTrainDestination = nil
+            $0.pinnedTrainDestination = defaultDestination
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
@@ -2618,6 +2712,15 @@ struct DashboardScreen: View {
                         directionPickerForBus(choices: directionChoices)
                     }
                 }
+                .task(id: busDirectionDefaultTaskKey(
+                    route: route,
+                    choices: directionChoices
+                )) {
+                    applyDefaultPinnedBusDirectionIfNeeded(
+                        route: route,
+                        choices: directionChoices
+                    )
+                }
                 .task(id: accessTaskKey(prefix: "bus-\(route)", origin: origin)) {
                     model.walkingResolver.ensureFresh(
                         origin: origin,
@@ -2640,6 +2743,41 @@ struct DashboardScreen: View {
                 .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         }
+    }
+
+    private func busDirectionDefaultTaskKey(
+        route: String,
+        choices: [BusDirectionStopChoice]
+    ) -> String {
+        [
+            route,
+            pinnedBusDirection ?? "none",
+            choices.map(\.directionLabel).joined(separator: "|")
+        ].joined(separator: ":")
+    }
+
+    @MainActor
+    private func applyDefaultPinnedBusDirectionIfNeeded(
+        route: String,
+        choices: [BusDirectionStopChoice]
+    ) {
+        guard pinSource == .manual,
+              pinnedBusRoute == route,
+              pinnedBusDirection == nil,
+              choices.count > 1,
+              let direction = defaultBusDirection(
+                  route: route,
+                  availableDirections: choices.map(\.directionLabel)
+              )
+        else { return }
+
+        pinnedBusDirection = direction
+        pinnedBusStopId = nil
+        model.saveManualRoutePreferences {
+            $0.pinnedBusDirection = direction
+            $0.pinnedBusStopId = nil
+        }
+        Task { await model.refreshIfNeeded(force: true) }
     }
 
     @ViewBuilder
@@ -2788,15 +2926,37 @@ struct DashboardScreen: View {
     }
 
     private func setPinnedBus(_ route: String?) {
+        let defaultDirection = route.map {
+            defaultBusDirection(route: $0, availableDirections: busDirectionLabels(for: $0))
+        } ?? nil
         pinnedBusRoute = route
-        pinnedBusDirection = nil
+        pinnedBusDirection = defaultDirection
         pinnedBusStopId = nil
         model.saveManualRoutePreferences {
             $0.pinnedBusRoute = route
-            $0.pinnedBusDirection = nil
+            $0.pinnedBusDirection = defaultDirection
             $0.pinnedBusStopId = nil
         }
         Task { await model.refreshIfNeeded(force: true) }
+    }
+
+    private func busDirectionLabels(for route: String) -> [String] {
+        guard let origin else { return [] }
+        return busStopChoices(route: route, origin: origin).map(\.directionLabel)
+    }
+
+    private func defaultBusDirection(
+        route: String,
+        availableDirections: [String]
+    ) -> String? {
+        PinnedLineDefaultResolver().preferredBusDirection(
+            route: route,
+            availableDirections: availableDirections,
+            preferences: routePreferences,
+            profile: model.preferences.loadMobilityProfile(),
+            context: model.location.context,
+            location: model.location.lastKnown
+        )
     }
 
     private func togglePinnedBusDirection(_ direction: String) {
