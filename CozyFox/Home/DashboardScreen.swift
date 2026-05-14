@@ -1002,23 +1002,43 @@ private struct AlertRow: View {
     let pinnedBusRoute: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.subheadline)
-                .fontWeight(.bold)
-                .foregroundStyle(severityColor)
-                .accessibilityHidden(true)
-            badge
-            Text(alert.headline)
-                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                .foregroundStyle(ChicagoPalette.Gray.darkest)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundStyle(severityColor)
+                    .accessibilityHidden(true)
+                badge
+                Text(alert.headline)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(Text(accessibilitySummary))
+
+            if let url = alert.detailURL {
+                Link(destination: url) {
+                    HStack(spacing: 2) {
+                        Text("Details on transitchicago.com")
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption2)
+                    }
+                    .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.bahama)
+                }
+                .padding(.leading, badgeLeadingInset)
+                .accessibilityLabel("Open this alert on transitchicago.com")
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(accessibilitySummary))
     }
+
+    /// Indent the detail link so it visually aligns with the headline column
+    /// rather than the warning glyph.
+    private var badgeLeadingInset: CGFloat { 24 }
 
     private var severityColor: Color {
         switch alert.severity {
