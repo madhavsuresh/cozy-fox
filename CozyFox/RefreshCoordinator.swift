@@ -55,7 +55,7 @@ final class RefreshCoordinator {
     /// closed before recommending nearby trains; the rest run in parallel.
     @discardableResult
     func refreshAll() async -> Bool {
-        let autopinChanged = applyAutopinIfNeeded()
+        let autopinChanged = await applyAutopinIfNeeded()
         let prefs = preferences.loadRoutePreferences()
         let lastLocation = preferences.loadLastKnownLocation()
 
@@ -129,13 +129,15 @@ final class RefreshCoordinator {
         )
     }
 
-    private func applyAutopinIfNeeded() -> Bool {
+    private func applyAutopinIfNeeded() async -> Bool {
+        let motion = await location?.refreshMotion() ?? .unknown
         let result = autopinner.apply(
             preferences: preferences.loadRoutePreferences(),
             anchors: preferences.loadCommuteAnchors(),
             profile: preferences.loadMobilityProfile(),
             location: preferences.loadLastKnownLocation(),
-            context: location?.context ?? .unknown
+            context: location?.context ?? .unknown,
+            motion: motion
         )
         if result.changed {
             preferences.saveRoutePreferences(result.preferences)

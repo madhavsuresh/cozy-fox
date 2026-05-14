@@ -12,6 +12,20 @@ public protocol LocationProvider: Sendable {
     func stopMonitoring()
     /// Stream of region crossing events.
     var events: AsyncStream<RegionEvent> { get }
+    /// Reads the dominant motion classification from the last ~5 minutes of
+    /// the motion coprocessor's ring buffer. Near-zero battery cost — the
+    /// M-series motion chip is always running and we just query it.
+    /// Returns `.unknown` when motion data is unavailable (older device,
+    /// denied permission, or no recent samples).
+    func currentMotion() async -> MotionContext
+    /// Triggers the Core Motion permission prompt by issuing a no-op activity
+    /// query. Safe to call repeatedly.
+    func primeMotionAuthorization()
+}
+
+public extension LocationProvider {
+    func currentMotion() async -> MotionContext { .unknown }
+    func primeMotionAuthorization() {}
 }
 
 public enum LocationAuthorization: String, Sendable {

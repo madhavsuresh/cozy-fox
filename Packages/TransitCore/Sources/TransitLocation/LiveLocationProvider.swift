@@ -1,12 +1,20 @@
 import Foundation
 import CoreLocation
 import TransitModels
+#if os(iOS)
+import CoreMotion
+#endif
 
-/// Live `LocationProvider` backed by `CLLocationManager`. Strictly opt-in:
-/// region monitoring only fires on Home / Work crossings, and a one-shot
-/// foreground read is used only when the app is in the foreground.
+/// Live `LocationProvider` backed by `CLLocationManager` and (on iOS)
+/// `CMMotionActivityManager`. Strictly opt-in: region monitoring only fires
+/// on Home / Work crossings, foreground reads are one-shot, and motion is
+/// read passively from the M-series motion coprocessor's ring buffer.
 public final class LiveLocationProvider: NSObject, LocationProvider, @unchecked Sendable {
     private let manager: CLLocationManager
+    #if os(iOS)
+    private let motionManager: CMMotionActivityManager
+    private let motionQueue: OperationQueue
+    #endif
     private let continuation: AsyncStream<RegionEvent>.Continuation
     public let events: AsyncStream<RegionEvent>
 
@@ -18,10 +26,17 @@ public final class LiveLocationProvider: NSObject, LocationProvider, @unchecked 
         self.continuation = localContinuation
         self.events = stream
         self.manager = CLLocationManager()
+        #if os(iOS)
+        self.motionManager = CMMotionActivityManager()
+        self.motionQueue = OperationQueue()
+        self.motionQueue.qualityOfService = .utility
+        #endif
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        #if os(iOS)
         manager.activityType = .otherNavigation
+        #endif
         manager.pausesLocationUpdatesAutomatically = true
     }
 
@@ -83,6 +98,48 @@ public final class LiveLocationProvider: NSObject, LocationProvider, @unchecked 
             manager.stopMonitoring(for: region)
         }
     }
+
+    #if os(iOS)
+    public func currentMotion() async -> MotionContext {
+        guard CMMotionActivityManager.isActivityAvailable() else { return .unknown }
+        let end = Date()
+        let start = end.addingTimeInterval(-5 * 60)
+        return await withCheckedContinuation { (cont: CheckedContinuation<MotionContext, Never>) in
+            motionManager.queryActivityStarting(from: start, to: end, to: motionQueue) { activities, _ in
+                let context = Self.dominantMotion(from: activities)
+                cont.resume(returning: context)
+            }
+        }
+    }
+
+    public func primeMotionAuthorization() {
+        guard CMMotionActivityManager.isActivityAvailable() else { return }
+        let end = Date()
+        let start = end.addingTimeInterval(-60)
+        motionManager.queryActivityStarting(from: start, to: end, to: motionQueue) { _, _ in }
+    }
+
+    /// Picks the most-recent confident activity from a CMMotionActivity slice.
+    /// Prefers `medium`/`high` confidence; falls back to the most recent
+    /// non-unknown activity if everything is low-confidence.
+    static func dominantMotion(from activities: [CMMotionActivity]?) -> MotionContext {
+        guard let activities, !activities.isEmpty else { return .unknown }
+        let sorted = activities.sorted { $0.startDate > $1.startDate }
+        let confident = sorted.first { $0.confidence != .low && motionContext(for: $0) != .unknown }
+        if let confident { return motionContext(for: confident) }
+        let anyKnown = sorted.first { motionContext(for: $0) != .unknown }
+        return anyKnown.map { motionContext(for: $0) } ?? .unknown
+    }
+
+    private static func motionContext(for activity: CMMotionActivity) -> MotionContext {
+        if activity.stationary { return .stationary }
+        if activity.walking { return .walking }
+        if activity.running { return .running }
+        if activity.cycling { return .cycling }
+        if activity.automotive { return .automotive }
+        return .unknown
+    }
+    #endif
 }
 
 extension LiveLocationProvider: CLLocationManagerDelegate {

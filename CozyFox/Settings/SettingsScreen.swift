@@ -190,6 +190,7 @@ struct SettingsScreen: View {
         .onAppear {
             reloadPredictionState()
             reloadFromKeychain()
+            Task { await model.location.refreshMotion() }
         }
         .onDisappear {
             addressLookupTask?.cancel()
@@ -262,6 +263,7 @@ struct SettingsScreen: View {
         Section {
             beliefRow("Current place", contextBeliefText)
             beliefRow("Approximate current address", currentAddressText)
+            beliefRow("Activity", motionBeliefText)
             beliefRow("Home estimate", anchorAddressText(
                 anchor: anchors.home,
                 resolved: homeApproximateAddress,
@@ -283,7 +285,7 @@ struct SettingsScreen: View {
         } header: {
             Text("Autopin belief")
         } footer: {
-            Text("These are the local prediction inputs and output. Approximate addresses are reverse-geocoded for display only and are not saved by Cozy Fox.")
+            Text("These are the local prediction inputs and output. Activity is read from the iPhone motion coprocessor (always-on, near-zero battery). Approximate addresses are reverse-geocoded for display only and are not saved by Cozy Fox.")
                 .font(.footnote)
         }
     }
@@ -322,7 +324,8 @@ struct SettingsScreen: View {
             anchors: anchors,
             profile: profile,
             location: model.location.lastKnown,
-            context: model.location.context
+            context: model.location.context,
+            motion: model.location.motion
         )
     }
 
@@ -332,6 +335,17 @@ struct SettingsScreen: View {
         case .atWork: "Work"
         case .elsewhere: "Neither home nor work"
         case .unknown: "Unknown"
+        }
+    }
+
+    private var motionBeliefText: String {
+        switch model.location.motion {
+        case .stationary: "Still — motion coprocessor sees no movement."
+        case .walking: "Walking — likely on the move."
+        case .running: "Running."
+        case .cycling: "Cycling."
+        case .automotive: "In a vehicle."
+        case .unknown: "No recent motion sample yet. Allow Motion & Fitness access for sharper autopin timing."
         }
     }
 
@@ -446,6 +460,10 @@ struct SettingsScreen: View {
             return "Missing the \(missingAnchorLabel(for: result.direction)) anchor."
         case .notInCommuteWindow:
             return "At home outside the learned work-commute window."
+        case .suppressedByMotion:
+            return "At home and still — holding the auto-pin until the motion coprocessor sees you moving."
+        case .heldDuringTransit:
+            return "Holding \(directionText(result.direction).lowercased()) — motion coprocessor reports you're mid-trip."
         case .noRoute:
             return "\(directionText(result.direction)) was predicted, but no local route matched."
         case .unchanged:
@@ -475,22 +493,22 @@ struct SettingsScreen: View {
         switch result.reason {
         case .disabled:
             return summary ?? "Auto-pin is off and no route is pinned."
-        case .missingLocation, .missingAnchor, .notInCommuteWindow, .noRoute, .cleared:
+        case .missingLocation, .missingAnchor, .notInCommuteWindow, .suppressedByMotion, .noRoute, .cleared:
             return summary ?? "No transit would be pinned right now."
         case .manualOverride:
             return summary.map { "Manual override: \($0)" } ?? "Manual override is active, with no route pinned."
         case .pinned:
             return summary.map { "Autopin preview: \($0)" } ?? "No transit would be pinned right now."
-        case .unchanged:
+        case .unchanged, .heldDuringTransit:
             return summary.map { "\(previewPrefs.pinSource.label): \($0)" } ?? "No transit would be pinned right now."
         }
     }
 
     private func shouldUsePreviewPins(_ reason: CommuteAutopinner.Result.Reason) -> Bool {
         switch reason {
-        case .pinned, .unchanged, .cleared:
+        case .pinned, .unchanged, .cleared, .heldDuringTransit:
             return true
-        case .disabled, .manualOverride, .missingLocation, .missingAnchor, .notInCommuteWindow, .noRoute:
+        case .disabled, .manualOverride, .missingLocation, .missingAnchor, .notInCommuteWindow, .suppressedByMotion, .noRoute:
             return false
         }
     }

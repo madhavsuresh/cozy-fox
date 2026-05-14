@@ -162,6 +162,138 @@ struct CommuteAutopinnerTests {
         #expect(result.preferences.pinnedBusRoute == "66")
     }
 
+    @Test func stationaryAtHomeInMorningSuppressesWorkPin() {
+        let now = date(year: 2026, month: 5, day: 13, hour: 8)
+        let prefs = UserRoutePreferences(
+            trains: [
+                TrainPreference(
+                    mapId: 2,
+                    stopId: nil,
+                    stationName: "Home Station",
+                    line: .brown,
+                    directionLabel: "Loop",
+                    direction: .toWork
+                )
+            ]
+        )
+
+        let result = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: .empty,
+            location: homeLocation,
+            context: .atHome,
+            motion: .stationary
+        )
+
+        #expect(!result.changed)
+        #expect(result.reason == .suppressedByMotion)
+        #expect(result.preferences.pinnedLine == nil)
+    }
+
+    @Test func walkingAtHomeWithoutHistorySurfacesWorkPin() {
+        // 10pm on a weekday — far outside the 5–11 AM heuristic window. Without
+        // motion, the autopinner would refuse to surface .toWork; with motion
+        // == .walking, walking is treated as positive intent and overrides
+        // the hour-bucket fallback.
+        let now = date(year: 2026, month: 5, day: 13, hour: 22)
+        let prefs = UserRoutePreferences(
+            trains: [
+                TrainPreference(
+                    mapId: 2,
+                    stopId: nil,
+                    stationName: "Home Station",
+                    line: .brown,
+                    directionLabel: "Loop",
+                    direction: .toWork
+                )
+            ]
+        )
+
+        let result = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: .empty,
+            location: homeLocation,
+            context: .atHome,
+            motion: .walking
+        )
+
+        #expect(result.changed)
+        #expect(result.direction == .toWork)
+        #expect(result.preferences.pinnedLine == .brown)
+    }
+
+    @Test func automotiveMidCommuteHoldsExistingAutopin() {
+        // The user is on a bus driving past the home region after exiting.
+        // Region-edge events shouldn't be allowed to churn the pin while the
+        // motion coprocessor reports the user is actively riding.
+        let now = date(year: 2026, month: 5, day: 13, hour: 8, minute: 30)
+        var prefs = UserRoutePreferences(
+            pinnedLine: .brown,
+            pinnedStationId: 7,
+            pinSource: .automatic
+        )
+        prefs.markAutomaticPin(direction: .toWork, at: now.addingTimeInterval(-15 * 60))
+
+        let result = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: .empty,
+            location: homeLocation,
+            context: .atHome,
+            motion: .automotive
+        )
+
+        #expect(!result.changed)
+        #expect(result.reason == .heldDuringTransit)
+        #expect(result.preferences.pinnedLine == .brown)
+        #expect(result.preferences.pinSource == .automatic)
+    }
+
+    @Test func unknownMotionFallsBackToExistingHeuristic() {
+        // Smoke check: with motion == .unknown (older device or no auth),
+        // the autopinner must behave identically to the pre-motion version.
+        let now = date(year: 2026, month: 5, day: 13, hour: 8)
+        let prefs = UserRoutePreferences(
+            trains: [
+                TrainPreference(
+                    mapId: 2,
+                    stopId: nil,
+                    stationName: "Home Station",
+                    line: .brown,
+                    directionLabel: "Loop",
+                    direction: .toWork
+                )
+            ]
+        )
+
+        let result = CommuteAutopinner(clock: FakeClock(now)).apply(
+            preferences: prefs,
+            anchors: anchors,
+            profile: .empty,
+            location: homeLocation,
+            context: .atHome,
+            motion: .unknown
+        )
+
+        #expect(result.changed)
+        #expect(result.direction == .toWork)
+        #expect(result.preferences.pinnedLine == .brown)
+    }
+
+    private func date(year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        return calendar.date(from: DateComponents(
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute
+        ))!
+    }
+
     private var anchors: CommuteAnchors {
         CommuteAnchors(
             home: .init(latitude: 41.950, longitude: -87.650, label: "Home"),

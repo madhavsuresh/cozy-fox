@@ -59,6 +59,7 @@ struct HomeLocationStep: View {
             if !didRequestPermission {
                 didRequestPermission = true
                 model.location.requestPermission()
+                model.location.primeMotionAuthorization()
             }
         }
     }

@@ -12,6 +12,9 @@ public final class LocationCoordinator {
     public private(set) var authorization: LocationAuthorization = .notDetermined
     public private(set) var context: CommuteContext = .unknown
     public private(set) var lastKnown: LastKnownLocation?
+    /// Last-read motion classification from the M-series motion coprocessor.
+    /// Updated on region events, foreground reads, and `refreshMotion()`.
+    public private(set) var motion: MotionContext = .unknown
     public var anchors: CommuteAnchors
 
     public var onContextChanged: ((@MainActor (CommuteContext) -> Void))?
@@ -32,7 +35,7 @@ public final class LocationCoordinator {
         self.authorization = provider.currentAuthorization()
         self.lastKnown = preferences.loadLastKnownLocation()
         self.context = inferContext(from: self.lastKnown)
-        recordObservation(context: self.context, source: .foreground)
+        recordObservation(context: self.context, source: .foreground, motion: nil)
     }
 
     public func bootstrap() {
@@ -50,16 +53,34 @@ public final class LocationCoordinator {
         guard let loc = await provider.requestOneShotLocation() else { return }
         lastKnown = loc
         preferences.saveLastKnownLocation(loc)
+        let motion = await provider.currentMotion()
+        self.motion = motion
         let newContext = inferContext(from: loc)
-        recordObservation(context: newContext, source: .foreground, at: loc.recordedAt)
+        recordObservation(context: newContext, source: .foreground, motion: motion, at: loc.recordedAt)
         if newContext != context {
             context = newContext
             onContextChanged?(newContext)
         }
     }
 
+    /// Reads the current motion classification from the provider and caches
+    /// it for observable consumers. Returns the same value it caches.
+    @discardableResult
+    public func refreshMotion() async -> MotionContext {
+        let motion = await provider.currentMotion()
+        self.motion = motion
+        return motion
+    }
+
     public func requestPermission() {
         provider.requestWhenInUseAuthorization()
+    }
+
+    /// Triggers the iOS Core Motion permission prompt the first time it is
+    /// called. Subsequent calls are no-ops. Safe to call before the user has
+    /// granted location permission.
+    public func primeMotionAuthorization() {
+        provider.primeMotionAuthorization()
     }
 
     private func listenForEvents() {
@@ -73,24 +94,26 @@ public final class LocationCoordinator {
         }
     }
 
-    private func handle(_ event: RegionEvent) {
+    private func handle(_ event: RegionEvent) async {
+        let motion = await provider.currentMotion()
+        self.motion = motion
         switch event {
         case .enteredHome:
             context = .atHome
-            recordObservation(context: .atHome, source: .enteredHome)
+            recordObservation(context: .atHome, source: .enteredHome, motion: motion)
             onContextChanged?(.atHome)
         case .exitedHome:
             context = .elsewhere
-            recordObservation(context: .elsewhere, source: .exitedHome, direction: .toWork)
+            recordObservation(context: .elsewhere, source: .exitedHome, direction: .toWork, motion: motion)
             onContextChanged?(.elsewhere)
             onRegionExit?(.toWork)
         case .enteredWork:
             context = .atWork
-            recordObservation(context: .atWork, source: .enteredWork)
+            recordObservation(context: .atWork, source: .enteredWork, motion: motion)
             onContextChanged?(.atWork)
         case .exitedWork:
             context = .elsewhere
-            recordObservation(context: .elsewhere, source: .exitedWork, direction: .toHome)
+            recordObservation(context: .elsewhere, source: .exitedWork, direction: .toHome, motion: motion)
             onContextChanged?(.elsewhere)
             onRegionExit?(.toHome)
         }
@@ -100,6 +123,7 @@ public final class LocationCoordinator {
         context: CommuteContext,
         source: MobilityProfile.Observation.Source,
         direction: CommuteDirection? = nil,
+        motion: MotionContext? = nil,
         at date: Date = .now
     ) {
         guard context != .unknown else { return }
@@ -108,6 +132,7 @@ public final class LocationCoordinator {
             context: context,
             source: source,
             direction: direction,
+            motion: motion,
             at: date,
             calendar: SystemCalendar.chicago
         )
