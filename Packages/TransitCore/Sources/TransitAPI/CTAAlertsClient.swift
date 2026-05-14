@@ -58,7 +58,6 @@ extension ServiceAlert {
         }()
         let routes = (raw.ImpactedService?.services ?? []).compactMap { $0.ServiceId }
         let colors = routes.compactMap { LineColor(ctaRouteCode: $0) }
-        let detailURL = raw.AlertURL?.url ?? Self.fallbackDetailURL(forAlertId: raw.AlertId)
         self.init(
             id: raw.AlertId,
             headline: raw.Headline,
@@ -69,17 +68,8 @@ extension ServiceAlert {
             beginsAt: begin,
             endsAt: end,
             isMajor: (raw.MajorAlert ?? "0") == "1",
-            detailURL: detailURL
+            detailURL: raw.AlertURL?.url
         )
-    }
-
-    /// CTA's alerts feed sometimes omits `AlertURL`. Their service-updates page
-    /// accepts `?AlertId=` and links straight to the detail card, so we synthesize
-    /// that URL as a fallback so every alert has a "more details" target.
-    private static func fallbackDetailURL(forAlertId id: String) -> URL? {
-        var comps = URLComponents(string: "https://www.transitchicago.com/travel-information/service-updates/alert/")
-        comps?.queryItems = [URLQueryItem(name: "AlertId", value: id)]
-        return comps?.url
     }
 }
 
@@ -142,31 +132,47 @@ struct AlertsEnvelope: Decodable {
             let ImpactedService: Impacted?
             let AlertURL: AlertURLValue?
 
-            /// CTA's `AlertURL` decodes inconsistently: in some responses it's a
-            /// bare string, in others it's an object wrapping a `URL` key (the
-            /// XML-to-JSON shim leaks the wrapper through). Accept both shapes
-            /// so neither variant silently drops the link.
+            /// CTA's `AlertURL` arrives in three shapes depending on the response:
+            ///   - A bare string: `"http://…"`
+            ///   - A CDATA wrapper from the XML→JSON shim: `{"#cdata-section": "http://…"}` (the common case)
+            ///   - A keyed wrapper: `{"URL": "http://…"}`
+            /// The previous decoder only accepted the first two-ish shapes and
+            /// silently dropped the CDATA case — which is what every real alert
+            /// returned, so every link fell through to a synthesized fallback URL.
+            /// The fallback URL pattern itself was also wrong (made-up path that
+            /// 404'd), so users saw a missing page either way. The fix is to
+            /// extract the URL from any of the three shapes and upgrade `http://`
+            /// to `https://` since CTA serves the same content on both schemes
+            /// and iOS Safari prefers the secure variant.
             struct AlertURLValue: Decodable {
                 let url: URL?
 
                 init(from decoder: Decoder) throws {
-                    let container = try decoder.singleValueContainer()
-                    if let raw = try? container.decode(String.self) {
+                    let single = try decoder.singleValueContainer()
+                    if let raw = try? single.decode(String.self) {
                         self.url = AlertURLValue.parse(raw)
                         return
                     }
                     let keyed = try decoder.container(keyedBy: CodingKeys.self)
-                    let raw = try? keyed.decode(String.self, forKey: .URL)
+                    let raw =
+                        (try? keyed.decode(String.self, forKey: .cdataSection))
+                        ?? (try? keyed.decode(String.self, forKey: .URL))
                     self.url = raw.flatMap(AlertURLValue.parse)
                 }
 
                 private static func parse(_ raw: String) -> URL? {
-                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return nil }
+                    if trimmed.hasPrefix("http://") {
+                        trimmed = "https://" + trimmed.dropFirst("http://".count)
+                    }
                     return URL(string: trimmed)
                 }
 
-                private enum CodingKeys: String, CodingKey { case URL }
+                private enum CodingKeys: String, CodingKey {
+                    case URL
+                    case cdataSection = "#cdata-section"
+                }
             }
 
             struct Impacted: Decodable {

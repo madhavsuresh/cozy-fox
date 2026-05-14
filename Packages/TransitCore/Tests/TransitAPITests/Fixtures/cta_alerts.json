@@ -12,7 +12,9 @@
         "MajorAlert": "0",
         "EventStart": "20260512 06:00:00",
         "EventEnd": "20260520 23:59:00",
-        "AlertURL": "https://www.transitchicago.com/travel-information/service-updates/alert/?AlertId=12345",
+        "AlertURL": {
+          "#cdata-section": "http://www.transitchicago.com/travel_information/alert_detail.aspx?AlertId=12345"
+        },
         "ImpactedService": {
           "Service": [
             {
