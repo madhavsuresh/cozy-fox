@@ -978,6 +978,16 @@ struct DashboardScreen: View {
                                  pinnedLine: pinnedLine,
                                  pinnedBusRoute: pinnedBusRoute)
                     }
+                    Link(destination: ServiceAlert.detailsURL) {
+                        HStack(spacing: 2) {
+                            Text("Details on transitchicago.com")
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption2)
+                        }
+                        .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                        .foregroundStyle(ChicagoPalette.bahama)
+                    }
+                    .accessibilityLabel("Open service alerts on transitchicago.com")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1002,41 +1012,23 @@ private struct AlertRow: View {
     let pinnedBusRoute: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .foregroundStyle(severityColor)
-                    .accessibilityHidden(true)
-                badge
-                Text(alert.headline)
-                    .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                    .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(Text(accessibilitySummary))
-
-            Link(destination: ServiceAlert.detailsURL) {
-                HStack(spacing: 2) {
-                    Text("Details on transitchicago.com")
-                    Image(systemName: "arrow.up.right")
-                        .font(.caption2)
-                }
-                .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
-                .foregroundStyle(ChicagoPalette.bahama)
-            }
-            .padding(.leading, badgeLeadingInset)
-            .accessibilityLabel("Open service alerts on transitchicago.com")
+        HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundStyle(severityColor)
+                .accessibilityHidden(true)
+            badge
+            Text(alert.headline)
+                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(accessibilitySummary))
     }
-
-    /// Indent the detail link so it visually aligns with the headline column
-    /// rather than the warning glyph.
-    private var badgeLeadingInset: CGFloat { 24 }
 
     private var severityColor: Color {
         switch alert.severity {
