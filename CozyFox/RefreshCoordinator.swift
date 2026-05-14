@@ -204,7 +204,8 @@ final class RefreshCoordinator {
             // Honor tracked stations even if the alerts feed says they're
             // closed — the user picked them on purpose, surface the staleness.
             targets.append(contentsOf: visibleTrainPrefs.map { ($0.mapId, $0.stopId) })
-        } else if prefs.isModeVisible(.trains), let lastLocation {
+        }
+        if prefs.isModeVisible(.trains), let lastLocation {
             let nearest = corridorResolver.nearbyTrainCandidates(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 radiusMeters: 2_000,
@@ -214,7 +215,12 @@ final class RefreshCoordinator {
                 },
                 excludingStationIds: closedStations
             )
-            targets.append(contentsOf: nearest.map { ($0.station.id, nil) })
+            for candidate in nearest {
+                guard !targets.contains(where: {
+                    $0.mapId == candidate.station.id && $0.stopId == nil
+                }) else { continue }
+                targets.append((candidate.station.id, nil))
+            }
         }
 
         for tripTrain in prefs.plannedTripPin?.trainLegs ?? [] {
@@ -290,16 +296,22 @@ final class RefreshCoordinator {
         }
         if !visibleBusPrefs.isEmpty {
             targets.append(contentsOf: visibleBusPrefs.map { ($0.route, $0.stopId) })
-        } else if prefs.isModeVisible(.buses), let lastLocation {
-            // No tracked buses — surface predictions for nearby directional
-            // coverage (N/S, E/W, diagonal), not just the closest few routes.
+        }
+        if prefs.isModeVisible(.buses), let lastLocation {
+            // Surface predictions for nearby directional coverage (N/S, E/W,
+            // diagonal), not just the closest few routes.
             let nearest = corridorResolver.nearbyBusCandidates(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 radiusMeters: 1_500,
                 limitPerCorridor: 2,
                 catalog: BusStopCatalog.all.filter { prefs.isBusRouteVisible($0.route) }
             )
-            targets.append(contentsOf: nearest.map { ($0.stop.route, $0.stop.id) })
+            for candidate in nearest {
+                guard !targets.contains(where: {
+                    $0.route == candidate.stop.route && $0.stopId == candidate.stop.id
+                }) else { continue }
+                targets.append((candidate.stop.route, candidate.stop.id))
+            }
         }
 
         // Pinned bus route: fetch the nearest stops in EACH direction so the

@@ -3487,7 +3487,6 @@ struct DashboardScreen: View {
             limitPerCorridor: 5,
             catalog: LStationCatalog.all,
             excludingStationIds: closedStationIds,
-            excludingLines: pinnedLine.map { Set([$0]) } ?? [],
             isLineVisible: isTrainLineDiscoverable
         )
 
@@ -3530,7 +3529,6 @@ struct DashboardScreen: View {
             radiusMeters: 1_500,
             limitPerCorridor: 8,
             catalog: BusStopCatalog.all,
-            excludingRoute: pinnedBusRoute,
             isRouteVisible: isBusRouteDiscoverable
         )
 
