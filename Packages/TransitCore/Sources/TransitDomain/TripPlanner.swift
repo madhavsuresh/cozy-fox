@@ -100,6 +100,10 @@ public enum TripPlanFlavor: String, Sendable, Hashable {
     case busShortestWalk
     /// Bus access to an L station, followed by a train ride.
     case busToTrain
+    /// CTA bus ride followed by a second CTA bus route to the destination.
+    case busToBus
+    /// L train ride followed by a CTA bus to the destination.
+    case trainToBus
     /// The fastest Metra option we found.
     case metra
 }
@@ -283,11 +287,13 @@ public struct TripPlanner: Sendable {
     private static func localPriority(_ flavor: TripPlanFlavor) -> Int {
         switch flavor {
         case .busToTrain: return 0
-        case .train: return 1
-        case .metra: return 2
-        case .busShortestRide: return 3
-        case .busShortestWalk: return 4
-        case .standard: return 5
+        case .busToBus: return 1
+        case .trainToBus: return 2
+        case .train: return 3
+        case .metra: return 4
+        case .busShortestRide: return 5
+        case .busShortestWalk: return 6
+        case .standard: return 7
         }
     }
 

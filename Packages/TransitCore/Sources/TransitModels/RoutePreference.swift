@@ -251,9 +251,13 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
     public let expectedArrivalAt: Date?
     public let expectedTravelTime: TimeInterval
     public let allowMultimodal: Bool
-    public let train: TrainLeg?
-    public let bus: BusLeg?
-    public let metra: MetraLeg?
+    public let trainLegs: [TrainLeg]
+    public let busLegs: [BusLeg]
+    public let metraLegs: [MetraLeg]
+
+    public var train: TrainLeg? { trainLegs.first }
+    public var bus: BusLeg? { busLegs.first }
+    public var metra: MetraLeg? { metraLegs.first }
 
     public init(
         id: UUID = UUID(),
@@ -266,7 +270,10 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         allowMultimodal: Bool,
         train: TrainLeg?,
         bus: BusLeg?,
-        metra: MetraLeg? = nil
+        metra: MetraLeg? = nil,
+        trainLegs: [TrainLeg]? = nil,
+        busLegs: [BusLeg]? = nil,
+        metraLegs: [MetraLeg]? = nil
     ) {
         self.id = id
         self.destination = destination
@@ -276,9 +283,63 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.expectedArrivalAt = expectedArrivalAt
         self.expectedTravelTime = expectedTravelTime
         self.allowMultimodal = allowMultimodal
-        self.train = train
-        self.bus = bus
-        self.metra = metra
+        self.trainLegs = trainLegs ?? train.map { [$0] } ?? []
+        self.busLegs = busLegs ?? bus.map { [$0] } ?? []
+        self.metraLegs = metraLegs ?? metra.map { [$0] } ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case destination
+        case title
+        case summary
+        case createdAt
+        case expectedArrivalAt
+        case expectedTravelTime
+        case allowMultimodal
+        case train
+        case bus
+        case metra
+        case trainLegs
+        case busLegs
+        case metraLegs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+        self.destination = try c.decode(Destination.self, forKey: .destination)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.summary = (try? c.decode(String.self, forKey: .summary)) ?? ""
+        self.createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? .now
+        self.expectedArrivalAt = try? c.decode(Date.self, forKey: .expectedArrivalAt)
+        self.expectedTravelTime = (try? c.decode(TimeInterval.self, forKey: .expectedTravelTime)) ?? 0
+        self.allowMultimodal = (try? c.decode(Bool.self, forKey: .allowMultimodal)) ?? true
+
+        let legacyTrain = try? c.decode(TrainLeg.self, forKey: .train)
+        let legacyBus = try? c.decode(BusLeg.self, forKey: .bus)
+        let legacyMetra = try? c.decode(MetraLeg.self, forKey: .metra)
+        self.trainLegs = (try? c.decode([TrainLeg].self, forKey: .trainLegs)) ?? legacyTrain.map { [$0] } ?? []
+        self.busLegs = (try? c.decode([BusLeg].self, forKey: .busLegs)) ?? legacyBus.map { [$0] } ?? []
+        self.metraLegs = (try? c.decode([MetraLeg].self, forKey: .metraLegs)) ?? legacyMetra.map { [$0] } ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(destination, forKey: .destination)
+        try c.encode(title, forKey: .title)
+        try c.encode(summary, forKey: .summary)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(expectedArrivalAt, forKey: .expectedArrivalAt)
+        try c.encode(expectedTravelTime, forKey: .expectedTravelTime)
+        try c.encode(allowMultimodal, forKey: .allowMultimodal)
+        try c.encodeIfPresent(train, forKey: .train)
+        try c.encodeIfPresent(bus, forKey: .bus)
+        try c.encodeIfPresent(metra, forKey: .metra)
+        try c.encode(trainLegs, forKey: .trainLegs)
+        try c.encode(busLegs, forKey: .busLegs)
+        try c.encode(metraLegs, forKey: .metraLegs)
     }
 
     public func isExpired(now: Date = .now) -> Bool {

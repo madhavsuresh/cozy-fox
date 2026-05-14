@@ -10,9 +10,10 @@ import TransitModels
 /// Heuristic, not a real router:
 /// - Score every L line, Metra route, and bus route by
 ///   `originWalk + transit + destWalk` minutes, using ballpark speeds.
-/// - Also score bus-to-L access routes, so options like "65 to Grand, then
-///   Blue Line" can appear when walking or biking to the train is not the
-///   only reasonable way to start the trip.
+/// - Also score transfer routes, so options like "65 to Grand, then Blue
+///   Line" or "bus north to Belmont, then 77 west" can appear when a direct
+///   walk/bike to the second leg is not the only reasonable way to start the
+///   trip.
 /// - Require the transit option to beat a direct walk by at least 15 %.
 /// - Use straight-line distances; real route polylines are unavailable here.
 public struct LocalTransitPlanner: Sendable {
@@ -213,6 +214,9 @@ public struct LocalTransitPlanner: Sendable {
         let originStopByRoute: [String: (entry: BusStop, distance: Double)] = uniqueStopsByRoute.compactMapValues {
             closest(in: $0, to: originPair, maxMeters: maxStopWalkMeters)
         }
+        let destinationStopByRoute: [String: (entry: BusStop, distance: Double)] = uniqueStopsByRoute.compactMapValues {
+            closest(in: $0, to: destinationPair, maxMeters: maxStopWalkMeters)
+        }
 
         let busToTrainCandidates = busToTrainCandidates(
             origin: originPair,
@@ -221,6 +225,20 @@ public struct LocalTransitPlanner: Sendable {
             stations: stations,
             uniqueStopsByRoute: uniqueStopsByRoute,
             originStopByRoute: originStopByRoute
+        )
+        let trainToBusCandidates = trainToBusCandidates(
+            origin: originPair,
+            destination: destinationPair,
+            directWalkMinutes: directWalkMinutes,
+            stations: stations,
+            uniqueStopsByRoute: uniqueStopsByRoute,
+            destinationStopByRoute: destinationStopByRoute
+        )
+        let busToBusCandidates = busToBusCandidates(
+            directWalkMinutes: directWalkMinutes,
+            uniqueStopsByRoute: uniqueStopsByRoute,
+            originStopByRoute: originStopByRoute,
+            destinationStopByRoute: destinationStopByRoute
         )
 
         var busCandidates: [Candidate] = []
@@ -298,6 +316,12 @@ public struct LocalTransitPlanner: Sendable {
             plans.append(makePlan(from: candidate, flavor: .train))
         }
         for candidate in busToTrainCandidates.prefix(max(0, maxBusToTrainPlans)) {
+            plans.append(makePlan(from: candidate))
+        }
+        for candidate in busToBusCandidates.prefix(max(0, maxBusToTrainPlans)) {
+            plans.append(makePlan(from: candidate))
+        }
+        for candidate in trainToBusCandidates.prefix(max(0, maxBusToTrainPlans)) {
             plans.append(makePlan(from: candidate))
         }
         for candidate in metraCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }).prefix(max(0, maxMetraPlans)) {
@@ -403,6 +427,198 @@ public struct LocalTransitPlanner: Sendable {
         return candidates.sorted { $0.totalMinutes < $1.totalMinutes }
     }
 
+    private func trainToBusCandidates(
+        origin: (lat: Double, lon: Double),
+        destination: (lat: Double, lon: Double),
+        directWalkMinutes: Double,
+        stations: [LStation],
+        uniqueStopsByRoute: [String: [BusStop]],
+        destinationStopByRoute: [String: (entry: BusStop, distance: Double)]
+    ) -> [TrainToBusCandidate] {
+        var candidates: [TrainToBusCandidate] = []
+        var seen: Set<String> = []
+
+        for line in LineColor.allCases {
+            let onLine = stations.filter { $0.servedLines.contains(line) }
+            let candidateLimit = max(2, maxTrainPlans)
+            let originStations = nearest(
+                in: onLine,
+                to: origin,
+                maxMeters: maxStationWalkMeters,
+                limit: candidateLimit
+            )
+
+            for originStation in originStations {
+                for transferStation in onLine where transferStation.id != originStation.entry.id {
+                    let trainMeters = Distance.meters(
+                        from: (originStation.entry.latitude, originStation.entry.longitude),
+                        to: (transferStation.latitude, transferStation.longitude)
+                    )
+                    guard trainMeters >= minTrainTransitMeters else { continue }
+
+                    for (route, stops) in uniqueStopsByRoute {
+                        guard let destinationStop = destinationStopByRoute[route] else { continue }
+                        guard let transferStop = closest(
+                            in: stops,
+                            to: (transferStation.latitude, transferStation.longitude),
+                            maxMeters: maxTransferWalkMeters
+                        ) else { continue }
+                        guard transferStop.entry.id != destinationStop.entry.id else { continue }
+
+                        let busMeters = Distance.meters(
+                            from: (transferStop.entry.latitude, transferStop.entry.longitude),
+                            to: (destinationStop.entry.latitude, destinationStop.entry.longitude)
+                        )
+                        guard busMeters >= minBusTransitMeters else { continue }
+
+                        let walkMinutes = originStation.distance / walkingMetersPerMinute
+                            + transferStop.distance / walkingMetersPerMinute
+                            + destinationStop.distance / walkingMetersPerMinute
+                        let rideMinutes = trainMeters / lTrainMetersPerMinute
+                            + busMeters / busMetersPerMinute
+                        let totalMinutes = walkMinutes
+                            + rideMinutes
+                            + lTrainBoardingWaitMinutes
+                            + busBoardingWaitMinutes
+
+                        guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+                        let candidate = TrainToBusCandidate(
+                            trainLine: line,
+                            busRoute: route,
+                            originTrainStationName: originStation.entry.name,
+                            transferTrainStationName: transferStation.name,
+                            transferBusStopName: transferStop.entry.name,
+                            destinationBusStopName: destinationStop.entry.name,
+                            originTrainStationCoordinate: PlannerCoordinate(
+                                latitude: originStation.entry.latitude,
+                                longitude: originStation.entry.longitude
+                            ),
+                            transferTrainStationCoordinate: PlannerCoordinate(
+                                latitude: transferStation.latitude,
+                                longitude: transferStation.longitude
+                            ),
+                            transferBusStopCoordinate: PlannerCoordinate(
+                                latitude: transferStop.entry.latitude,
+                                longitude: transferStop.entry.longitude
+                            ),
+                            destinationBusStopCoordinate: PlannerCoordinate(
+                                latitude: destinationStop.entry.latitude,
+                                longitude: destinationStop.entry.longitude
+                            ),
+                            originWalkMeters: originStation.distance,
+                            trainMeters: trainMeters,
+                            transferWalkMeters: transferStop.distance,
+                            busMeters: busMeters,
+                            destinationWalkMeters: destinationStop.distance,
+                            totalMinutes: totalMinutes
+                        )
+
+                        let key = trainToBusKey(candidate)
+                        guard seen.insert(key).inserted else { continue }
+                        candidates.append(candidate)
+                    }
+                }
+            }
+        }
+
+        return candidates.sorted { $0.totalMinutes < $1.totalMinutes }
+    }
+
+    private func busToBusCandidates(
+        directWalkMinutes: Double,
+        uniqueStopsByRoute: [String: [BusStop]],
+        originStopByRoute: [String: (entry: BusStop, distance: Double)],
+        destinationStopByRoute: [String: (entry: BusStop, distance: Double)]
+    ) -> [BusToBusCandidate] {
+        var candidates: [BusToBusCandidate] = []
+        var seen: Set<String> = []
+
+        for (firstRoute, originStop) in originStopByRoute {
+            guard let firstRouteStops = uniqueStopsByRoute[firstRoute] else { continue }
+
+            for (secondRoute, destinationStop) in destinationStopByRoute where secondRoute != firstRoute {
+                guard let secondRouteStops = uniqueStopsByRoute[secondRoute] else { continue }
+                var bestForRoutePair: BusToBusCandidate?
+
+                for firstTransferStop in firstRouteStops where firstTransferStop.id != originStop.entry.id {
+                    let firstBusMeters = Distance.meters(
+                        from: (originStop.entry.latitude, originStop.entry.longitude),
+                        to: (firstTransferStop.latitude, firstTransferStop.longitude)
+                    )
+                    guard firstBusMeters >= minBusTransitMeters else { continue }
+
+                    for secondTransferStop in secondRouteStops where secondTransferStop.id != destinationStop.entry.id {
+                        let transferWalkMeters = Distance.meters(
+                            from: (firstTransferStop.latitude, firstTransferStop.longitude),
+                            to: (secondTransferStop.latitude, secondTransferStop.longitude)
+                        )
+                        guard transferWalkMeters <= maxTransferWalkMeters else { continue }
+
+                        let secondBusMeters = Distance.meters(
+                            from: (secondTransferStop.latitude, secondTransferStop.longitude),
+                            to: (destinationStop.entry.latitude, destinationStop.entry.longitude)
+                        )
+                        guard secondBusMeters >= minBusTransitMeters else { continue }
+
+                        let walkMinutes = originStop.distance / walkingMetersPerMinute
+                            + transferWalkMeters / walkingMetersPerMinute
+                            + destinationStop.distance / walkingMetersPerMinute
+                        let rideMinutes = firstBusMeters / busMetersPerMinute
+                            + secondBusMeters / busMetersPerMinute
+                        let totalMinutes = walkMinutes
+                            + rideMinutes
+                            + busBoardingWaitMinutes * 2
+
+                        guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+                        let candidate = BusToBusCandidate(
+                            firstBusRoute: firstRoute,
+                            secondBusRoute: secondRoute,
+                            originBusStopName: originStop.entry.name,
+                            firstTransferBusStopName: firstTransferStop.name,
+                            secondTransferBusStopName: secondTransferStop.name,
+                            destinationBusStopName: destinationStop.entry.name,
+                            originBusStopCoordinate: PlannerCoordinate(
+                                latitude: originStop.entry.latitude,
+                                longitude: originStop.entry.longitude
+                            ),
+                            firstTransferBusStopCoordinate: PlannerCoordinate(
+                                latitude: firstTransferStop.latitude,
+                                longitude: firstTransferStop.longitude
+                            ),
+                            secondTransferBusStopCoordinate: PlannerCoordinate(
+                                latitude: secondTransferStop.latitude,
+                                longitude: secondTransferStop.longitude
+                            ),
+                            destinationBusStopCoordinate: PlannerCoordinate(
+                                latitude: destinationStop.entry.latitude,
+                                longitude: destinationStop.entry.longitude
+                            ),
+                            originWalkMeters: originStop.distance,
+                            firstBusMeters: firstBusMeters,
+                            transferWalkMeters: transferWalkMeters,
+                            secondBusMeters: secondBusMeters,
+                            destinationWalkMeters: destinationStop.distance,
+                            totalMinutes: totalMinutes
+                        )
+
+                        if bestForRoutePair.map({ candidate.totalMinutes < $0.totalMinutes }) ?? true {
+                            bestForRoutePair = candidate
+                        }
+                    }
+                }
+
+                guard let candidate = bestForRoutePair else { continue }
+                let key = busToBusKey(candidate)
+                guard seen.insert(key).inserted else { continue }
+                candidates.append(candidate)
+            }
+        }
+
+        return candidates.sorted { $0.totalMinutes < $1.totalMinutes }
+    }
+
     private func makePlan(from candidate: Candidate, flavor: TripPlanFlavor) -> TripPlan {
         let originWalkLeg = TripLeg(
             mode: .walking,
@@ -488,6 +704,112 @@ public struct LocalTransitPlanner: Sendable {
         )
     }
 
+    private func makePlan(from candidate: BusToBusCandidate) -> TripPlan {
+        let originWalkLeg = TripLeg(
+            mode: .walking,
+            distanceMeters: candidate.originWalkMeters,
+            instructions: "Walk to \(candidate.originBusStopName)",
+            transit: nil
+        )
+        let firstBusLeg = TripLeg(
+            mode: .transit,
+            distanceMeters: candidate.firstBusMeters,
+            instructions: "Take Route \(candidate.firstBusRoute) to \(candidate.firstTransferBusStopName)",
+            transit: TransitLegInfo(rawName: "Route \(candidate.firstBusRoute)", resolution: .bus(candidate.firstBusRoute)),
+            startCoordinate: candidate.originBusStopCoordinate,
+            endCoordinate: candidate.firstTransferBusStopCoordinate
+        )
+        let transferWalkLeg = TripLeg(
+            mode: .walking,
+            distanceMeters: candidate.transferWalkMeters,
+            instructions: "Walk to \(candidate.secondTransferBusStopName)",
+            transit: nil,
+            startCoordinate: candidate.firstTransferBusStopCoordinate,
+            endCoordinate: candidate.secondTransferBusStopCoordinate
+        )
+        let secondBusLeg = TripLeg(
+            mode: .transit,
+            distanceMeters: candidate.secondBusMeters,
+            instructions: "Take Route \(candidate.secondBusRoute) to \(candidate.destinationBusStopName)",
+            transit: TransitLegInfo(rawName: "Route \(candidate.secondBusRoute)", resolution: .bus(candidate.secondBusRoute)),
+            startCoordinate: candidate.secondTransferBusStopCoordinate,
+            endCoordinate: candidate.destinationBusStopCoordinate
+        )
+        let destWalkLeg = TripLeg(
+            mode: .walking,
+            distanceMeters: candidate.destinationWalkMeters,
+            instructions: "Walk to your destination",
+            transit: nil,
+            startCoordinate: candidate.destinationBusStopCoordinate
+        )
+        let totalDistance = candidate.originWalkMeters
+            + candidate.firstBusMeters
+            + candidate.transferWalkMeters
+            + candidate.secondBusMeters
+            + candidate.destinationWalkMeters
+        let totalSeconds = candidate.totalMinutes * 60
+        return TripPlan(
+            flavor: .busToBus,
+            summary: "Route \(candidate.firstBusRoute) + Route \(candidate.secondBusRoute) · estimated",
+            expectedTravelTime: totalSeconds,
+            totalDistanceMeters: totalDistance,
+            legs: [originWalkLeg, firstBusLeg, transferWalkLeg, secondBusLeg, destWalkLeg]
+        )
+    }
+
+    private func makePlan(from candidate: TrainToBusCandidate) -> TripPlan {
+        let originWalkLeg = TripLeg(
+            mode: .walking,
+            distanceMeters: candidate.originWalkMeters,
+            instructions: "Walk to \(candidate.originTrainStationName)",
+            transit: nil
+        )
+        let trainLeg = TripLeg(
+            mode: .transit,
+            distanceMeters: candidate.trainMeters,
+            instructions: "Take \(candidate.trainLine.displayName) from \(candidate.originTrainStationName) to \(candidate.transferTrainStationName)",
+            transit: TransitLegInfo(rawName: candidate.trainLine.displayName, resolution: .line(candidate.trainLine)),
+            startCoordinate: candidate.originTrainStationCoordinate,
+            endCoordinate: candidate.transferTrainStationCoordinate
+        )
+        let transferWalkLeg = TripLeg(
+            mode: .walking,
+            distanceMeters: candidate.transferWalkMeters,
+            instructions: "Walk to \(candidate.transferBusStopName)",
+            transit: nil,
+            startCoordinate: candidate.transferTrainStationCoordinate,
+            endCoordinate: candidate.transferBusStopCoordinate
+        )
+        let busLeg = TripLeg(
+            mode: .transit,
+            distanceMeters: candidate.busMeters,
+            instructions: "Take Route \(candidate.busRoute) to \(candidate.destinationBusStopName)",
+            transit: TransitLegInfo(rawName: "Route \(candidate.busRoute)", resolution: .bus(candidate.busRoute)),
+            startCoordinate: candidate.transferBusStopCoordinate,
+            endCoordinate: candidate.destinationBusStopCoordinate
+        )
+        let destWalkLeg = TripLeg(
+            mode: .walking,
+            distanceMeters: candidate.destinationWalkMeters,
+            instructions: "Walk to your destination",
+            transit: nil,
+            startCoordinate: candidate.destinationBusStopCoordinate
+        )
+        let totalDistance = candidate.originWalkMeters
+            + candidate.trainMeters
+            + candidate.transferWalkMeters
+            + candidate.busMeters
+            + candidate.destinationWalkMeters
+        let totalSeconds = candidate.totalMinutes * 60
+        return TripPlan(
+            flavor: .trainToBus,
+            summary: "\(candidate.trainLine.displayName) + Route \(candidate.busRoute) · estimated",
+            expectedTravelTime: totalSeconds,
+            totalDistanceMeters: totalDistance,
+            legs: [originWalkLeg, trainLeg, transferWalkLeg, busLeg, destWalkLeg]
+        )
+    }
+
     private struct Candidate {
         let resolution: TransitResolution
         let displayName: String
@@ -520,6 +842,44 @@ public struct LocalTransitPlanner: Sendable {
         let totalMinutes: Double
     }
 
+    private struct BusToBusCandidate {
+        let firstBusRoute: String
+        let secondBusRoute: String
+        let originBusStopName: String
+        let firstTransferBusStopName: String
+        let secondTransferBusStopName: String
+        let destinationBusStopName: String
+        let originBusStopCoordinate: PlannerCoordinate
+        let firstTransferBusStopCoordinate: PlannerCoordinate
+        let secondTransferBusStopCoordinate: PlannerCoordinate
+        let destinationBusStopCoordinate: PlannerCoordinate
+        let originWalkMeters: Double
+        let firstBusMeters: Double
+        let transferWalkMeters: Double
+        let secondBusMeters: Double
+        let destinationWalkMeters: Double
+        let totalMinutes: Double
+    }
+
+    private struct TrainToBusCandidate {
+        let trainLine: LineColor
+        let busRoute: String
+        let originTrainStationName: String
+        let transferTrainStationName: String
+        let transferBusStopName: String
+        let destinationBusStopName: String
+        let originTrainStationCoordinate: PlannerCoordinate
+        let transferTrainStationCoordinate: PlannerCoordinate
+        let transferBusStopCoordinate: PlannerCoordinate
+        let destinationBusStopCoordinate: PlannerCoordinate
+        let originWalkMeters: Double
+        let trainMeters: Double
+        let transferWalkMeters: Double
+        let busMeters: Double
+        let destinationWalkMeters: Double
+        let totalMinutes: Double
+    }
+
     private func appendUniqueCandidate(
         _ candidate: Candidate,
         to candidates: inout [Candidate],
@@ -541,6 +901,28 @@ public struct LocalTransitPlanner: Sendable {
             coordinateKey(candidate.transferBusStopCoordinate),
             coordinateKey(candidate.originTrainStationCoordinate),
             coordinateKey(candidate.destinationTrainStationCoordinate),
+        ].joined(separator: ":")
+    }
+
+    private func busToBusKey(_ candidate: BusToBusCandidate) -> String {
+        [
+            "bus:\(candidate.firstBusRoute)",
+            "bus:\(candidate.secondBusRoute)",
+            coordinateKey(candidate.originBusStopCoordinate),
+            coordinateKey(candidate.firstTransferBusStopCoordinate),
+            coordinateKey(candidate.secondTransferBusStopCoordinate),
+            coordinateKey(candidate.destinationBusStopCoordinate),
+        ].joined(separator: ":")
+    }
+
+    private func trainToBusKey(_ candidate: TrainToBusCandidate) -> String {
+        [
+            "line:\(candidate.trainLine.rawValue)",
+            "bus:\(candidate.busRoute)",
+            coordinateKey(candidate.originTrainStationCoordinate),
+            coordinateKey(candidate.transferTrainStationCoordinate),
+            coordinateKey(candidate.transferBusStopCoordinate),
+            coordinateKey(candidate.destinationBusStopCoordinate),
         ].joined(separator: ":")
     }
 

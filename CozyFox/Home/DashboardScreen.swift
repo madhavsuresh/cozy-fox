@@ -37,9 +37,9 @@ struct DashboardScreen: View {
     @State private var homePinStatusText: String?
     @State private var homePinStatusIsError: Bool = false
     @State private var homeTripOptions: [HomeTripOption] = []
-    @State private var selectedTrainChoiceId: String?
-    @State private var selectedBusChoiceId: String?
-    @State private var selectedMetraChoiceId: String?
+    @State private var selectedTrainChoiceIds: Set<String> = []
+    @State private var selectedBusChoiceIds: Set<String> = []
+    @State private var selectedMetraChoiceIds: Set<String> = []
     /// Flipped to `true` 300ms after the pinned-line card mounts (or
     /// re-mounts at a new origin/line) if MapKit hasn't produced any
     /// walking data yet. While false, the chip strip shows shimmer
@@ -412,9 +412,9 @@ struct DashboardScreen: View {
         }
         isPinningHome = true
         homeTripOptions = []
-        selectedTrainChoiceId = nil
-        selectedBusChoiceId = nil
-        selectedMetraChoiceId = nil
+        selectedTrainChoiceIds = []
+        selectedBusChoiceIds = []
+        selectedMetraChoiceIds = []
 
         let origin = PlannerCoordinate(latitude: current.latitude, longitude: current.longitude)
         let destination = PlannerCoordinate(latitude: latitude, longitude: longitude)
@@ -429,9 +429,7 @@ struct DashboardScreen: View {
                     allowMultimodal: allowMultimodalHomePin
                 )
                 homeTripOptions = options
-                selectedTrainChoiceId = homeTripTrainChoices(in: options).first?.id
-                selectedBusChoiceId = homeTripBusChoices(in: options).first?.id
-                selectedMetraChoiceId = homeTripMetraChoices(in: options).first?.id
+                seedSelectedHomeTripChoices(from: options)
                 ensureHomeTripAccessRoutes(
                     options,
                     origin: (lat: origin.latitude, lon: origin.longitude)
@@ -476,6 +474,9 @@ struct DashboardScreen: View {
         let trainLines = homeTripTrainLines(in: homeTripOptions)
         let busRoutes = homeTripBusRoutes(in: homeTripOptions)
         let metraRoutes = homeTripMetraRoutes(in: homeTripOptions)
+        let selectedTrainLines = Set(selectedTrainChoices().map(\.line))
+        let selectedBusRoutes = Set(selectedBusChoices().map(\.route))
+        let selectedMetraRoutes = Set(selectedMetraChoices().map(\.routeId))
 
         VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
             if !trainLines.isEmpty {
@@ -485,7 +486,7 @@ struct DashboardScreen: View {
                         ForEach(trainLines, id: \.self) { line in
                             DirectionChip(
                                 label: line.displayName,
-                                isSelected: selectedTrainChoice()?.line == line,
+                                isSelected: selectedTrainLines.contains(line),
                                 accent: line.swiftUIColor,
                                 action: { toggleSelectedTrainLine(line) }
                             )
@@ -493,17 +494,17 @@ struct DashboardScreen: View {
                     }
                 }
 
-                if let selectedLine = selectedTrainChoice()?.line {
+                ForEach(trainLines.filter { selectedTrainLines.contains($0) }, id: \.self) { selectedLine in
                     let stationChoices = homeTripTrainChoices(in: homeTripOptions)
                         .filter { $0.line == selectedLine }
                     if !stationChoices.isEmpty {
                         VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                            sectionLabel("Train station")
+                            sectionLabel("\(selectedLine.displayName) station")
                             StationChipStrip {
                                 ForEach(stationChoices) { choice in
                                     DirectionChip(
                                         label: trainStationPinLabel(choice),
-                                        isSelected: selectedTrainChoiceId == choice.id,
+                                        isSelected: selectedTrainChoiceIds.contains(choice.id),
                                         accent: selectedLine.swiftUIColor,
                                         action: { toggleSelectedTrainChoice(choice) }
                                     )
@@ -521,7 +522,7 @@ struct DashboardScreen: View {
                         ForEach(busRoutes, id: \.self) { route in
                             DirectionChip(
                                 label: "#\(route)",
-                                isSelected: selectedBusChoice()?.route == route,
+                                isSelected: selectedBusRoutes.contains(route),
                                 accent: ChicagoPalette.flagBlue,
                                 action: { toggleSelectedBusRoute(route) }
                             )
@@ -529,17 +530,17 @@ struct DashboardScreen: View {
                     }
                 }
 
-                if let selectedRoute = selectedBusChoice()?.route {
+                ForEach(busRoutes.filter { selectedBusRoutes.contains($0) }, id: \.self) { selectedRoute in
                     let stopChoices = homeTripBusChoices(in: homeTripOptions)
                         .filter { $0.route == selectedRoute }
                     if !stopChoices.isEmpty {
                         VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                            sectionLabel("Bus stop")
+                            sectionLabel("Route \(selectedRoute) stop")
                             StationChipStrip {
                                 ForEach(stopChoices) { choice in
                                     DirectionChip(
                                         label: busStopPinLabel(choice),
-                                        isSelected: selectedBusChoiceId == choice.id,
+                                        isSelected: selectedBusChoiceIds.contains(choice.id),
                                         accent: ChicagoPalette.flagBlue,
                                         action: { toggleSelectedBusChoice(choice) }
                                     )
@@ -557,7 +558,7 @@ struct DashboardScreen: View {
                         ForEach(metraRoutes, id: \.self) { routeId in
                             DirectionChip(
                                 label: MetraStationCatalog.route(id: routeId)?.shortName ?? routeId,
-                                isSelected: selectedMetraChoice()?.routeId == routeId,
+                                isSelected: selectedMetraRoutes.contains(routeId),
                                 accent: MetraStationCatalog.route(id: routeId)?.swiftUIColor ?? ChicagoPalette.bahama,
                                 action: { toggleSelectedMetraRoute(routeId) }
                             )
@@ -565,17 +566,17 @@ struct DashboardScreen: View {
                     }
                 }
 
-                if let selectedRoute = selectedMetraChoice()?.routeId {
+                ForEach(metraRoutes.filter { selectedMetraRoutes.contains($0) }, id: \.self) { selectedRoute in
                     let stationChoices = homeTripMetraChoices(in: homeTripOptions)
                         .filter { $0.routeId == selectedRoute }
                     if !stationChoices.isEmpty {
                         VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                            sectionLabel("Metra station")
+                            sectionLabel("\(MetraStationCatalog.route(id: selectedRoute)?.shortName ?? selectedRoute) station")
                             StationChipStrip {
                                 ForEach(stationChoices) { choice in
                                     DirectionChip(
                                         label: choice.stationName,
-                                        isSelected: selectedMetraChoiceId == choice.id,
+                                        isSelected: selectedMetraChoiceIds.contains(choice.id),
                                         accent: MetraStationCatalog.route(id: selectedRoute)?.swiftUIColor ?? ChicagoPalette.bahama,
                                         action: { toggleSelectedMetraChoice(choice) }
                                     )
@@ -614,13 +615,13 @@ struct DashboardScreen: View {
                     .controlSize(.small)
                 }
 
-                if let train = pin.train {
+                ForEach(pin.trainLegs, id: \.self) { train in
                     tripTrainRow(train)
                 }
-                if let bus = pin.bus {
+                ForEach(pin.busLegs, id: \.self) { bus in
                     tripBusRow(bus)
                 }
-                if let metra = pin.metra {
+                ForEach(pin.metraLegs, id: \.self) { metra in
                     tripMetraRow(metra)
                 }
             }
@@ -766,51 +767,100 @@ struct DashboardScreen: View {
     }
 
     private var hasSelectedHomeTripPinPiece: Bool {
-        selectedTrainChoice() != nil
-            || selectedBusChoice() != nil
-            || selectedMetraChoice() != nil
+        !selectedTrainChoices().isEmpty
+            || !selectedBusChoices().isEmpty
+            || !selectedMetraChoices().isEmpty
+    }
+
+    private func seedSelectedHomeTripChoices(from options: [HomeTripOption]) {
+        guard let option = options.first else {
+            selectedTrainChoiceIds = []
+            selectedBusChoiceIds = []
+            selectedMetraChoiceIds = []
+            return
+        }
+
+        let trainChoices = homeTripTrainChoices(in: options)
+        let busChoices = homeTripBusChoices(in: options)
+        let metraChoices = homeTripMetraChoices(in: options)
+        selectedTrainChoiceIds = Set(option.trainChoices.compactMap { selected in
+            trainChoices.first { trainPinKey($0) == trainPinKey(selected) }?.id
+        })
+        selectedBusChoiceIds = Set(option.busChoices.compactMap { selected in
+            busChoices.first { busPinKey($0) == busPinKey(selected) }?.id
+        })
+        selectedMetraChoiceIds = Set(option.metraChoices.compactMap { selected in
+            metraChoices.first { metraPinKey($0) == metraPinKey(selected) }?.id
+        })
     }
 
     private func toggleSelectedTrainLine(_ line: LineColor) {
-        if selectedTrainChoice()?.line == line {
-            selectedTrainChoiceId = nil
+        let choices = homeTripTrainChoices(in: homeTripOptions)
+        if selectedTrainChoices().contains(where: { $0.line == line }) {
+            selectedTrainChoiceIds.subtract(choices.filter { $0.line == line }.map(\.id))
         } else {
-            selectedTrainChoiceId = homeTripTrainChoices(in: homeTripOptions)
-                .first { $0.line == line }?
-                .id
+            if let choice = choices.first(where: { $0.line == line }) {
+                selectedTrainChoiceIds.insert(choice.id)
+            }
         }
     }
 
     private func toggleSelectedBusRoute(_ route: String) {
-        if selectedBusChoice()?.route == route {
-            selectedBusChoiceId = nil
+        let choices = homeTripBusChoices(in: homeTripOptions)
+        if selectedBusChoices().contains(where: { $0.route == route }) {
+            selectedBusChoiceIds.subtract(choices.filter { $0.route == route }.map(\.id))
         } else {
-            selectedBusChoiceId = homeTripBusChoices(in: homeTripOptions)
-                .first { $0.route == route }?
-                .id
+            if let choice = choices.first(where: { $0.route == route }) {
+                selectedBusChoiceIds.insert(choice.id)
+            }
         }
     }
 
     private func toggleSelectedMetraRoute(_ routeId: String) {
-        if selectedMetraChoice()?.routeId == routeId {
-            selectedMetraChoiceId = nil
+        let choices = homeTripMetraChoices(in: homeTripOptions)
+        if selectedMetraChoices().contains(where: { $0.routeId == routeId }) {
+            selectedMetraChoiceIds.subtract(choices.filter { $0.routeId == routeId }.map(\.id))
         } else {
-            selectedMetraChoiceId = homeTripMetraChoices(in: homeTripOptions)
-                .first { $0.routeId == routeId }?
-                .id
+            if let choice = choices.first(where: { $0.routeId == routeId }) {
+                selectedMetraChoiceIds.insert(choice.id)
+            }
         }
     }
 
     private func toggleSelectedTrainChoice(_ choice: HomeTripTrainChoice) {
-        selectedTrainChoiceId = selectedTrainChoiceId == choice.id ? nil : choice.id
+        if selectedTrainChoiceIds.contains(choice.id) {
+            selectedTrainChoiceIds.remove(choice.id)
+        } else {
+            let sameLineIds = homeTripTrainChoices(in: homeTripOptions)
+                .filter { $0.line == choice.line }
+                .map(\.id)
+            selectedTrainChoiceIds.subtract(sameLineIds)
+            selectedTrainChoiceIds.insert(choice.id)
+        }
     }
 
     private func toggleSelectedBusChoice(_ choice: HomeTripBusChoice) {
-        selectedBusChoiceId = selectedBusChoiceId == choice.id ? nil : choice.id
+        if selectedBusChoiceIds.contains(choice.id) {
+            selectedBusChoiceIds.remove(choice.id)
+        } else {
+            let sameRouteIds = homeTripBusChoices(in: homeTripOptions)
+                .filter { $0.route == choice.route }
+                .map(\.id)
+            selectedBusChoiceIds.subtract(sameRouteIds)
+            selectedBusChoiceIds.insert(choice.id)
+        }
     }
 
     private func toggleSelectedMetraChoice(_ choice: HomeTripMetraChoice) {
-        selectedMetraChoiceId = selectedMetraChoiceId == choice.id ? nil : choice.id
+        if selectedMetraChoiceIds.contains(choice.id) {
+            selectedMetraChoiceIds.remove(choice.id)
+        } else {
+            let sameRouteIds = homeTripMetraChoices(in: homeTripOptions)
+                .filter { $0.routeId == choice.routeId }
+                .map(\.id)
+            selectedMetraChoiceIds.subtract(sameRouteIds)
+            selectedMetraChoiceIds.insert(choice.id)
+        }
     }
 
     private func pinSelectedHomeTrip() {
@@ -819,15 +869,15 @@ struct DashboardScreen: View {
             homePinStatusIsError = true
             return
         }
-        let trainChoice = selectedTrainChoice()
-        let busChoice = selectedBusChoice()
-        let metraChoice = selectedMetraChoice()
+        let trainChoices = selectedTrainChoices()
+        let busChoices = selectedBusChoices()
+        let metraChoices = selectedMetraChoices()
         let option = bestHomeTripOption(
-            train: trainChoice,
-            bus: busChoice,
-            metra: metraChoice
+            trains: trainChoices,
+            buses: busChoices,
+            metras: metraChoices
         ) ?? homeTripOptions.first
-        let train = trainChoice.map {
+        let trains = trainChoices.map {
             PlannedTripPin.TrainLeg(
                 line: $0.line,
                 stationId: $0.stationId,
@@ -835,7 +885,7 @@ struct DashboardScreen: View {
                 destinationName: $0.destinationName
             )
         }
-        let bus = busChoice.map {
+        let buses = busChoices.map {
             PlannedTripPin.BusLeg(
                 route: $0.route,
                 stopId: $0.stopId,
@@ -843,7 +893,7 @@ struct DashboardScreen: View {
                 directionLabel: $0.directionLabel
             )
         }
-        let metra = metraChoice.map {
+        let metras = metraChoices.map {
             PlannedTripPin.MetraLeg(
                 routeId: $0.routeId,
                 stationId: $0.stationId,
@@ -852,15 +902,15 @@ struct DashboardScreen: View {
                 destinationName: nil
             )
         }
-        guard train != nil || bus != nil || metra != nil else {
+        guard !trains.isEmpty || !buses.isEmpty || !metras.isEmpty else {
             homePinStatusText = "Pick at least one train, bus, or Metra leg."
             homePinStatusIsError = true
             return
         }
         let summary = homeTripTransitSummary(
-            train: trainChoice,
-            bus: busChoice,
-            metra: metraChoice
+            trains: trainChoices,
+            buses: busChoices,
+            metras: metraChoices
         )
         let pin = PlannedTripPin(
             destination: destinationInfo,
@@ -869,9 +919,12 @@ struct DashboardScreen: View {
             expectedArrivalAt: option.map { Date().addingTimeInterval($0.expectedTravelTime) },
             expectedTravelTime: option?.expectedTravelTime ?? 0,
             allowMultimodal: allowMultimodalHomePin,
-            train: train,
-            bus: bus,
-            metra: metra
+            train: trains.first,
+            bus: buses.first,
+            metra: metras.first,
+            trainLegs: trains,
+            busLegs: buses,
+            metraLegs: metras
         )
         plannedTripPin = pin
         homeTripOptions = []
@@ -880,49 +933,31 @@ struct DashboardScreen: View {
         model.savePlannedTripPin(pin)
     }
 
-    private func selectedTrainChoice() -> HomeTripTrainChoice? {
-        let choices = homeTripTrainChoices(in: homeTripOptions)
-        guard !choices.isEmpty else { return nil }
-        if let selectedTrainChoiceId,
-           let choice = choices.first(where: { $0.id == selectedTrainChoiceId })
-        {
-            return choice
-        }
-        return nil
+    private func selectedTrainChoices() -> [HomeTripTrainChoice] {
+        homeTripTrainChoices(in: homeTripOptions)
+            .filter { selectedTrainChoiceIds.contains($0.id) }
     }
 
-    private func selectedBusChoice() -> HomeTripBusChoice? {
-        let choices = homeTripBusChoices(in: homeTripOptions)
-        guard !choices.isEmpty else { return nil }
-        if let selectedBusChoiceId,
-           let choice = choices.first(where: { $0.id == selectedBusChoiceId })
-        {
-            return choice
-        }
-        return nil
+    private func selectedBusChoices() -> [HomeTripBusChoice] {
+        homeTripBusChoices(in: homeTripOptions)
+            .filter { selectedBusChoiceIds.contains($0.id) }
     }
 
-    private func selectedMetraChoice() -> HomeTripMetraChoice? {
-        let choices = homeTripMetraChoices(in: homeTripOptions)
-        guard !choices.isEmpty else { return nil }
-        if let selectedMetraChoiceId,
-           let choice = choices.first(where: { $0.id == selectedMetraChoiceId })
-        {
-            return choice
-        }
-        return nil
+    private func selectedMetraChoices() -> [HomeTripMetraChoice] {
+        homeTripMetraChoices(in: homeTripOptions)
+            .filter { selectedMetraChoiceIds.contains($0.id) }
     }
 
     private func bestHomeTripOption(
-        train: HomeTripTrainChoice?,
-        bus: HomeTripBusChoice?,
-        metra: HomeTripMetraChoice?
+        trains: [HomeTripTrainChoice],
+        buses: [HomeTripBusChoice],
+        metras: [HomeTripMetraChoice]
     ) -> HomeTripOption? {
         homeTripOptions
             .map { option in
                 (
                     option: option,
-                    score: homeTripOptionMatchScore(option, train: train, bus: bus, metra: metra)
+                    score: homeTripOptionMatchScore(option, trains: trains, buses: buses, metras: metras)
                 )
             }
             .filter { $0.score > 0 }
@@ -936,21 +971,18 @@ struct DashboardScreen: View {
 
     private func homeTripOptionMatchScore(
         _ option: HomeTripOption,
-        train: HomeTripTrainChoice?,
-        bus: HomeTripBusChoice?,
-        metra: HomeTripMetraChoice?
+        trains: [HomeTripTrainChoice],
+        buses: [HomeTripBusChoice],
+        metras: [HomeTripMetraChoice]
     ) -> Int {
         var score = 0
-        if let train,
-           option.trainChoices.contains(where: { trainPinKey($0) == trainPinKey(train) }) {
+        for train in trains where option.trainChoices.contains(where: { trainPinKey($0) == trainPinKey(train) }) {
             score += 1
         }
-        if let bus,
-           option.busChoices.contains(where: { busPinKey($0) == busPinKey(bus) }) {
+        for bus in buses where option.busChoices.contains(where: { busPinKey($0) == busPinKey(bus) }) {
             score += 1
         }
-        if let metra,
-           option.metraChoices.contains(where: { metraPinKey($0) == metraPinKey(metra) }) {
+        for metra in metras where option.metraChoices.contains(where: { metraPinKey($0) == metraPinKey(metra) }) {
             score += 1
         }
         return score
@@ -1425,7 +1457,7 @@ struct DashboardScreen: View {
             switch plan.flavor {
             case .standard:
                 return summary
-            case .train, .busShortestRide, .busShortestWalk, .busToTrain, .metra:
+            case .train, .busShortestRide, .busShortestWalk, .busToTrain, .busToBus, .trainToBus, .metra:
                 return summary
             }
         }
@@ -1434,6 +1466,8 @@ struct DashboardScreen: View {
         case .train: return "Train route"
         case .metra: return "Metra route"
         case .busToTrain: return "Bus + train route"
+        case .busToBus: return "Bus + bus route"
+        case .trainToBus: return "Train + bus route"
         case .busShortestRide: return "Bus route"
         case .busShortestWalk: return "Low-walk bus route"
         case .standard: return "Transit route"
@@ -1452,29 +1486,19 @@ struct DashboardScreen: View {
         buses: [HomeTripBusChoice],
         metras: [HomeTripMetraChoice]
     ) -> String {
-        let trainPieces = trains.map { $0.line.displayName }
-        let busPieces = buses.map { "Route \($0.route)" }
-        let metraPieces = metras.map { MetraStationCatalog.route(id: $0.routeId)?.shortName ?? $0.routeId }
-        let pieces = Array((trainPieces + busPieces + metraPieces.map { "Metra \($0)" }).prefix(3))
-        return pieces.isEmpty ? "Transit" : pieces.joined(separator: " + ")
-    }
-
-    private func homeTripTransitSummary(
-        train: HomeTripTrainChoice?,
-        bus: HomeTripBusChoice?,
-        metra: HomeTripMetraChoice?
-    ) -> String {
-        var pieces: [String] = []
-        if let bus {
-            pieces.append("Route \(bus.route)")
+        let trainPieces = trains.map { (legIndex: $0.legIndex, label: $0.line.displayName) }
+        let busPieces = buses.map { (legIndex: $0.legIndex, label: "Route \($0.route)") }
+        let metraPieces = metras.map {
+            (
+                legIndex: $0.legIndex,
+                label: "Metra \(MetraStationCatalog.route(id: $0.routeId)?.shortName ?? $0.routeId)"
+            )
         }
-        if let train {
-            pieces.append(train.line.displayName)
-        }
-        if let metra {
-            let route = MetraStationCatalog.route(id: metra.routeId)?.shortName ?? metra.routeId
-            pieces.append("Metra \(route)")
-        }
+        var seen: Set<String> = []
+        let pieces = (trainPieces + busPieces + metraPieces)
+            .sorted { $0.legIndex < $1.legIndex }
+            .map(\.label)
+            .filter { seen.insert($0).inserted }
         return pieces.isEmpty ? "Transit" : pieces.joined(separator: " + ")
     }
 
@@ -3262,15 +3286,15 @@ struct DashboardScreen: View {
 
     private var relevantAlerts: [ServiceAlert] {
         var lines: Set<LineColor> = []
-        if let line = plannedTripPin?.train?.line { lines.insert(line) }
+        lines.formUnion(plannedTripPin?.trainLegs.map(\.line) ?? [])
         if let line = pinnedLine { lines.insert(line) }
 
         var busRoutes: Set<String> = []
-        if let route = plannedTripPin?.bus?.route { busRoutes.insert(route) }
+        busRoutes.formUnion(plannedTripPin?.busLegs.map(\.route) ?? [])
         if let route = pinnedBusRoute { busRoutes.insert(route) }
 
         var metraRoutes: Set<String> = []
-        if let route = plannedTripPin?.metra?.routeId { metraRoutes.insert(route) }
+        metraRoutes.formUnion(plannedTripPin?.metraLegs.map(\.routeId) ?? [])
         if let route = pinnedMetraRoute { metraRoutes.insert(route) }
 
         return model.snapshot.activeAlerts.filtered(
