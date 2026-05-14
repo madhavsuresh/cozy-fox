@@ -194,6 +194,38 @@ struct LocalTransitPlannerTests {
         #expect(plan.legs.count == 5)
     }
 
+    @Test func producesMultiTransferPlanWithMoreThanTwoTransitLegs() throws {
+        let stations: [LStation] = [
+            LStation(id: 1, name: "North Transfer Station", latitude: 41.9002, longitude: -87.700,
+                     servedLines: [.red]),
+            LStation(id: 2, name: "West Transfer Station", latitude: 41.920, longitude: -87.680,
+                     servedLines: [.red]),
+        ]
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "151", name: "Origin Northbound Stop",
+                    latitude: 41.880, longitude: -87.700, directionLabel: "Northbound"),
+            BusStop(id: 101, route: "151", name: "North Bus Transfer",
+                    latitude: 41.900, longitude: -87.700, directionLabel: "Northbound"),
+            BusStop(id: 200, route: "77", name: "West Bus Transfer",
+                    latitude: 41.9202, longitude: -87.680, directionLabel: "Westbound"),
+            BusStop(id: 201, route: "77", name: "Destination Bus Stop",
+                    latitude: 41.9202, longitude: -87.640, directionLabel: "Westbound"),
+        ]
+        let planner = LocalTransitPlanner()
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.879, longitude: -87.700),
+            to: PlannerCoordinate(latitude: 41.9202, longitude: -87.639),
+            stations: stations,
+            busStops: stops,
+            metraStations: []
+        )
+        let plan = try #require(plans.first)
+        #expect(plan.flavor == .multiTransfer)
+        let transitResolutions = plan.legs.compactMap(\.transit?.resolution)
+        #expect(transitResolutions == [.bus("151"), .line(.red), .bus("77")])
+        #expect(plan.legs.count == 7)
+    }
+
     @Test func producesMultipleBusToTrainPlansWhenSeveralBusesFeedStations() throws {
         let stations: [LStation] = [
             LStation(id: 1, name: "Transfer Station", latitude: 41.880, longitude: -87.680,
