@@ -147,6 +147,8 @@ public enum TripPlannerError: Error, Sendable, LocalizedError {
 /// isolation gymnastics across the `await` boundary.
 public struct TripPlanner: Sendable {
     public let fallback: LocalTransitPlanner
+    private static let maxMapKitPlans = 6
+    private static let maxMergedPlans = 48
 
     public init(fallback: LocalTransitPlanner = LocalTransitPlanner()) {
         self.fallback = fallback
@@ -252,15 +254,15 @@ public struct TripPlanner: Sendable {
         var merged: [TripPlan] = []
         var signatures: Set<String> = []
 
-        for plan in mapKitPlans.prefix(4) {
-            appendUnique(plan, to: &merged, signatures: &signatures, maxCount: 6)
+        for plan in mapKitPlans.prefix(maxMapKitPlans) {
+            appendUnique(plan, to: &merged, signatures: &signatures, maxCount: maxMergedPlans)
         }
 
         let prioritizedLocal = localPlans.sorted {
             localPriority($0.flavor) < localPriority($1.flavor)
         }
         for plan in prioritizedLocal {
-            appendUnique(plan, to: &merged, signatures: &signatures, maxCount: 6)
+            appendUnique(plan, to: &merged, signatures: &signatures, maxCount: maxMergedPlans)
         }
 
         return merged

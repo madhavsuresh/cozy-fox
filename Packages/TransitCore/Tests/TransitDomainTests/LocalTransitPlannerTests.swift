@@ -30,6 +30,33 @@ struct LocalTransitPlannerTests {
         #expect(plans.count == 1)
     }
 
+    @Test func producesMultipleTrainPlansForDifferentBoardingStations() throws {
+        let stations: [LStation] = [
+            LStation(id: 1, name: "Closest Origin", latitude: 41.880, longitude: -87.700,
+                     servedLines: [.blue]),
+            LStation(id: 2, name: "Bikeable Origin", latitude: 41.880, longitude: -87.690,
+                     servedLines: [.blue]),
+            LStation(id: 3, name: "Closest Destination", latitude: 41.880, longitude: -87.640,
+                     servedLines: [.blue]),
+            LStation(id: 4, name: "Alternate Destination", latitude: 41.880, longitude: -87.650,
+                     servedLines: [.blue]),
+        ]
+        let planner = LocalTransitPlanner()
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
+            to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
+            stations: stations,
+            busStops: [],
+            metraStations: []
+        )
+        let trainPlans = plans.filter { $0.flavor == .train }
+        #expect(trainPlans.count >= 2)
+        let boardingInstructions = Set(trainPlans.compactMap {
+            $0.legs.first(where: { $0.mode == .transit })?.instructions
+        })
+        #expect(boardingInstructions.count >= 2)
+    }
+
     /// No L stations in range, but a #22 bus route with stops bracketing the
     /// trip. Should produce just a bus plan.
     @Test func producesBusPlanWhenOnlyBusRoutesAreReachable() throws {
@@ -109,6 +136,43 @@ struct LocalTransitPlannerTests {
         let transitResolutions = plan.legs.compactMap(\.transit?.resolution)
         #expect(transitResolutions == [.bus("65"), .line(.blue)])
         #expect(plan.legs.count == 5)
+    }
+
+    @Test func producesMultipleBusToTrainPlansWhenSeveralBusesFeedStations() throws {
+        let stations: [LStation] = [
+            LStation(id: 1, name: "Transfer Station", latitude: 41.880, longitude: -87.680,
+                     servedLines: [.blue]),
+            LStation(id: 2, name: "Destination Station", latitude: 41.880, longitude: -87.641,
+                     servedLines: [.blue]),
+        ]
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "65", name: "65 Origin",
+                    latitude: 41.880, longitude: -87.699, directionLabel: "Westbound"),
+            BusStop(id: 101, route: "65", name: "65 Transfer",
+                    latitude: 41.880, longitude: -87.6805, directionLabel: "Westbound"),
+            BusStop(id: 200, route: "66", name: "66 Origin",
+                    latitude: 41.880, longitude: -87.7005, directionLabel: "Westbound"),
+            BusStop(id: 201, route: "66", name: "66 Transfer",
+                    latitude: 41.880, longitude: -87.6810, directionLabel: "Westbound"),
+        ]
+        let planner = LocalTransitPlanner()
+        let plans = planner.plan(
+            from: PlannerCoordinate(latitude: 41.880, longitude: -87.700),
+            to: PlannerCoordinate(latitude: 41.880, longitude: -87.640),
+            stations: stations,
+            busStops: stops,
+            metraStations: []
+        )
+        let busToTrainPlans = plans.filter { $0.flavor == .busToTrain }
+        #expect(busToTrainPlans.count >= 2)
+        let busRoutes = Set(busToTrainPlans.compactMap { plan -> String? in
+            guard case .bus(let route) = plan.legs.compactMap(\.transit?.resolution).first else {
+                return nil
+            }
+            return route
+        })
+        #expect(busRoutes.contains("65"))
+        #expect(busRoutes.contains("66"))
     }
 
     /// Two bus routes where each represents a different tradeoff: route 22
