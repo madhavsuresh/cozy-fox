@@ -73,18 +73,12 @@ struct SmallDashboardView: View {
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
                     .lineLimit(1)
-                if let terminalSummary = metraGroup.terminalSummary {
-                    Text(terminalSummary)
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .lineLimit(1)
-                }
                 Spacer(minLength: 0)
-                MetraDepartureTimesView(
+                MetraDepartureListView(
                     predictions: metraGroup.departures,
-                    maxCount: 3,
-                    size: .sm,
-                    accessibilityPrefix: "Metra \(metraGroup.title.lowercased()) departures at"
+                    maxCount: 2,
+                    density: .compact,
+                    accessibilityPrefix: "Metra \(metraGroup.title.lowercased()) departures"
                 )
                 HeadwayDotStrip(
                     arrivals: Array(upcoming),

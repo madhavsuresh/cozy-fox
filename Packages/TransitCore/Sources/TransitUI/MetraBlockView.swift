@@ -38,19 +38,12 @@ public struct MetraBlockView: View {
                         .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .lineLimit(1)
-                    if let terminalSummary = group.terminalSummary {
-                        Text(terminalSummary)
-                            .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                            .foregroundStyle(ChicagoPalette.Gray.medium)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
                 }
-                MetraDepartureTimesView(
+                MetraDepartureListView(
                     predictions: group.departures,
-                    maxCount: 3,
-                    size: .sm,
-                    accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+                    maxCount: 2,
+                    density: .compact,
+                    accessibilityPrefix: "Metra \(group.title.lowercased()) departures"
                 )
                 HeadwayDotStrip(
                     arrivals: group.departures.prefix(8).map(\.arrivalAt),
