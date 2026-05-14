@@ -22,43 +22,31 @@ public enum MetraStationCatalog {
         stationId: String,
         now: Date = .now
     ) -> [MetraDirectionChoice] {
-        let entries = MetraCatalogStore.shared.scheduleEntries(stationId: stationId, routeId: routeId)
-        var seen: Set<String> = []
-        var choices: [MetraDirectionChoice] = []
-        for entry in entries {
-            let key = "\(entry.directionId.map(String.init) ?? "any")-\(entry.headsign)"
-            guard seen.insert(key).inserted else { continue }
-            let nextDeparture = MetraCatalogStore.shared.upcomingDepartures(
-                stationId: stationId,
-                routeId: routeId,
-                directionId: entry.directionId,
-                destinationName: entry.headsign,
-                now: now,
-                horizon: 24 * 60 * 60,
-                limit: 1
-            ).first?.arrivalAt
-            choices.append(MetraDirectionChoice(
-                routeId: routeId,
-                directionId: entry.directionId,
-                destinationName: entry.headsign,
-                nextDepartureAt: nextDeparture
-            ))
-        }
-        return choices.sorted {
-            switch ($0.nextDepartureAt, $1.nextDepartureAt) {
-            case let (left?, right?) where left != right:
-                return left < right
-            case (_?, nil):
-                return true
-            case (nil, _?):
-                return false
-            default:
-                if ($0.directionId ?? -1) == ($1.directionId ?? -1) {
-                    return $0.destinationName < $1.destinationName
-                }
-                return ($0.directionId ?? -1) < ($1.directionId ?? -1)
+        departureGroups(routeId: routeId, stationId: stationId, now: now, limitPerGroup: 1)
+            .map { group in
+                MetraDirectionChoice(
+                    routeId: group.routeId,
+                    directionId: group.directionId,
+                    destinationName: group.title,
+                    nextDepartureAt: group.nextDepartureAt
+                )
             }
-        }
+    }
+
+    public static func departureGroups(
+        routeId: String,
+        stationId: String,
+        now: Date = .now,
+        horizon: TimeInterval = 24 * 60 * 60,
+        limitPerGroup: Int = 3
+    ) -> [MetraDepartureGroup] {
+        MetraCatalogStore.shared.departureGroups(
+            routeId: routeId,
+            stationId: stationId,
+            now: now,
+            horizon: horizon,
+            limitPerGroup: limitPerGroup
+        )
     }
 }
 
@@ -96,6 +84,7 @@ private struct MetraCatalogStore: Sendable {
     let stationById: [String: MetraStation]
     let stationsByRoute: [String: [MetraStation]]
     let scheduleByStationRoute: [String: [MetraScheduleEntry]]
+    let lastStopSequenceByTrip: [String: Int]
 
     init() {
         let resource = Self.loadResource()
@@ -106,6 +95,12 @@ private struct MetraCatalogStore: Sendable {
         self.schedule = resource.schedule.map(\.model)
         self.routeById = Dictionary(uniqueKeysWithValues: routes.map { ($0.id, $0) })
         self.stationById = Dictionary(uniqueKeysWithValues: stations.map { ($0.id, $0) })
+
+        var lastStops: [String: Int] = [:]
+        for entry in schedule {
+            lastStops[entry.tripId] = max(lastStops[entry.tripId] ?? entry.stopSequence, entry.stopSequence)
+        }
+        self.lastStopSequenceByTrip = lastStops
 
         var stationBuckets: [String: [MetraStation]] = [:]
         for station in stations {
@@ -124,6 +119,48 @@ private struct MetraCatalogStore: Sendable {
 
     func scheduleEntries(stationId: String, routeId: String) -> [MetraScheduleEntry] {
         scheduleByStationRoute[Self.scheduleKey(stationId: stationId, routeId: routeId)] ?? []
+    }
+
+    func departureGroups(
+        routeId: String,
+        stationId: String,
+        now: Date,
+        horizon: TimeInterval,
+        limitPerGroup: Int
+    ) -> [MetraDepartureGroup] {
+        let entries = scheduleEntries(stationId: stationId, routeId: routeId)
+        let directionIds = Set(entries.compactMap(\.directionId)).sorted()
+        let limit = max(limitPerGroup * 4, limitPerGroup)
+        let predictions: [MetraPrediction]
+        if directionIds.isEmpty {
+            predictions = upcomingDepartures(
+                stationId: stationId,
+                routeId: routeId,
+                directionId: nil,
+                destinationName: nil,
+                now: now,
+                horizon: horizon,
+                limit: limit * 2
+            )
+        } else {
+            predictions = directionIds.flatMap { directionId in
+                upcomingDepartures(
+                    stationId: stationId,
+                    routeId: routeId,
+                    directionId: directionId,
+                    destinationName: nil,
+                    now: now,
+                    horizon: horizon,
+                    limit: limit
+                )
+            }
+        }
+
+        var seen: Set<String> = []
+        let unique = predictions
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+            .filter { seen.insert($0.id).inserted }
+        return MetraDepartureGrouper.groups(from: unique, limitPerGroup: limitPerGroup)
     }
 
     func upcomingDepartures(
@@ -154,6 +191,10 @@ private struct MetraCatalogStore: Sendable {
             guard !active.isEmpty else { return [] }
             return filtered.compactMap { entry in
                 guard active.contains(entry.serviceId) else { return nil }
+                if let lastStopSequence = lastStopSequenceByTrip[entry.tripId],
+                   entry.stopSequence >= lastStopSequence {
+                    return nil
+                }
                 let departure = serviceDate.startOfDay.addingTimeInterval(TimeInterval(entry.departureSeconds))
                 guard departure >= now.addingTimeInterval(-120),
                       departure <= now.addingTimeInterval(horizon)

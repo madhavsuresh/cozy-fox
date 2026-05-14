@@ -688,9 +688,8 @@ struct DashboardScreen: View {
             .filter { $0.routeId == metra.routeId }
             .filter { metra.stationId == nil || $0.stationId == metra.stationId }
             .filter { metra.directionId == nil || $0.directionId == metra.directionId }
-            .filter { metra.destinationName == nil || $0.destinationName == metra.destinationName }
             .sorted { $0.arrivalAt < $1.arrivalAt }
-        let first = predictions.first
+        let group = MetraDepartureGrouper.groups(from: predictions, limitPerGroup: 3).first
         let accent = MetraStationCatalog.route(id: metra.routeId)?.swiftUIColor ?? ChicagoPalette.bahama
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(spacing: ChicagoSpacing.xs) {
@@ -699,28 +698,30 @@ struct DashboardScreen: View {
                     Text(metra.stationName)
                         .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    if let destination = metra.destinationName, !destination.isEmpty {
-                        Text("→ \(destination)")
+                    if let group {
+                        Text(group.title)
                             .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                             .foregroundStyle(ChicagoPalette.Gray.medium)
                     }
                 }
                 Spacer()
             }
-            if let first {
-                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
-                    MetraDepartureTimeView(
-                        date: first.arrivalAt,
+            if let group {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let terminalSummary = group.terminalSummary {
+                        Text(terminalSummary)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .lineLimit(1)
+                    }
+                    MetraDepartureTimesView(
+                        predictions: group.departures,
+                        maxCount: 3,
                         size: .md,
-                        tone: first.isDelayed || first.isCanceled ? .alert : .primary,
-                        accessibilityPrefix: "Next Metra train departs at"
+                        accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
                     )
-                    Text("→ \(first.destinationName)")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .lineLimit(1)
                 }
-                HeadwayDotStrip(arrivals: predictions.prefix(8).map(\.arrivalAt),
+                HeadwayDotStrip(arrivals: group.departures.prefix(8).map(\.arrivalAt),
                                 accent: accent)
             } else {
                 Text(model.isRefreshing ? "Fetching Metra trains…" : "No upcoming Metra trains returned yet.")
@@ -766,7 +767,7 @@ struct DashboardScreen: View {
                 stationId: $0.stationId,
                 stationName: $0.stationName,
                 directionId: $0.directionId,
-                destinationName: $0.destinationName
+                destinationName: nil
             )
         }
         guard train != nil || bus != nil || metra != nil else {
@@ -2337,19 +2338,18 @@ struct DashboardScreen: View {
 
     @ViewBuilder
     private func directionPickerForMetra(route: String, station: MetraStation) -> some View {
-        let choices = MetraStationCatalog.directionChoices(routeId: route, stationId: station.id)
-        if choices.count > 1 {
+        let groups = MetraStationCatalog.departureGroups(routeId: route, stationId: station.id)
+        if groups.count > 1 {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Pick a direction")
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: ChicagoSpacing.xs) {
-                        ForEach(choices) { choice in
-                            DirectionChip(
-                                label: choice.label,
-                                isSelected: pinnedMetraDirectionId == choice.directionId
-                                    && pinnedMetraDestination == choice.destinationName,
+                        ForEach(groups) { group in
+                            MetraDirectionGroupChip(
+                                group: group,
+                                isSelected: pinnedMetraDirectionId == group.directionId,
                                 accent: pinnedMetraAccent,
-                                action: { togglePinnedMetraDirection(choice) }
+                                action: { togglePinnedMetraDirection(group) }
                             )
                         }
                     }
@@ -2373,7 +2373,7 @@ struct DashboardScreen: View {
             directDistanceMeters: distance
         )
         let predictions = metraPredictions(route: route, station: station)
-        let first = predictions.first
+        let group = MetraDepartureGrouper.groups(from: predictions, limitPerGroup: 3).first
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(station.name)
@@ -2399,21 +2399,27 @@ struct DashboardScreen: View {
                      : "No upcoming Metra trains in the schedule window.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
-            } else if let first {
-                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
-                    MetraDepartureTimeView(
-                        date: first.arrivalAt,
-                        size: .md,
-                        tone: first.isDelayed || first.isCanceled ? .alert : .primary,
-                        accessibilityPrefix: "Next Metra train departs at"
-                    )
-                    Text("→ \(first.destinationName)")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else if let group {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.title)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
                         .lineLimit(1)
+                    if let terminalSummary = group.terminalSummary {
+                        Text(terminalSummary)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .lineLimit(1)
+                    }
+                    MetraDepartureTimesView(
+                        predictions: group.departures,
+                        maxCount: 3,
+                        size: .md,
+                        accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+                    )
                 }
                 HeadwayDotStrip(
-                    arrivals: predictions.prefix(8).map(\.arrivalAt),
+                    arrivals: group.departures.prefix(8).map(\.arrivalAt),
                     accent: pinnedMetraAccent
                 )
             }
@@ -2427,10 +2433,6 @@ struct DashboardScreen: View {
                 guard prediction.routeId == route, prediction.stationId == station.id else { return false }
                 if let directionId = pinnedMetraDirectionId,
                    prediction.directionId != directionId {
-                    return false
-                }
-                if let destination = pinnedMetraDestination,
-                   prediction.destinationName != destination {
                     return false
                 }
                 return true
@@ -2499,14 +2501,13 @@ struct DashboardScreen: View {
         Task { await model.refreshIfNeeded(force: true) }
     }
 
-    private func togglePinnedMetraDirection(_ choice: MetraDirectionChoice) {
-        let isSame = pinnedMetraDirectionId == choice.directionId
-            && pinnedMetraDestination == choice.destinationName
-        pinnedMetraDirectionId = isSame ? nil : choice.directionId
-        pinnedMetraDestination = isSame ? nil : choice.destinationName
+    private func togglePinnedMetraDirection(_ group: MetraDepartureGroup) {
+        let isSame = pinnedMetraDirectionId == group.directionId
+        pinnedMetraDirectionId = isSame ? nil : group.directionId
+        pinnedMetraDestination = nil
         model.saveManualRoutePreferences {
-            $0.pinnedMetraDirectionId = isSame ? nil : choice.directionId
-            $0.pinnedMetraDestination = isSame ? nil : choice.destinationName
+            $0.pinnedMetraDirectionId = isSame ? nil : group.directionId
+            $0.pinnedMetraDestination = nil
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
@@ -2645,12 +2646,15 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.light)
                 }
                 SmallMultiplesRow(nearbyMetraRoutes) { entry in
-                    let pred = metraPredictions(for: entry).first
-                    DepartureTimeTile(
+                    let group = MetraDepartureGrouper.groups(
+                        from: metraPredictions(for: entry),
+                        limitPerGroup: 3
+                    ).first
+                    DepartureTimesTile(
                         badge: RouteBadge(metra: entry.routeId, size: .md),
-                        departureAt: pred?.arrivalAt,
-                        subtitle: entry.station.name,
-                        isAlert: pred.map { $0.isDelayed || $0.isCanceled } ?? false
+                        title: group?.title,
+                        departures: group?.departures ?? [],
+                        subtitle: group?.terminalSummary ?? entry.station.name
                     )
                     .onTapGesture { setPinnedMetra(entry.routeId) }
                 }
@@ -3295,6 +3299,53 @@ private struct DirectionChip: View {
                             lineWidth: ChicagoSpacing.Stroke.thin
                         )
                 )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct MetraDirectionGroupChip: View {
+    let group: MetraDepartureGroup
+    let isSelected: Bool
+    let accent: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                MetraDepartureTimesView(
+                    predictions: group.departures,
+                    maxCount: 3,
+                    size: .sm,
+                    tone: isSelected ? .onDark : .primary,
+                    accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+                )
+                if let terminalSummary = group.terminalSummary {
+                    Text(terminalSummary)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .padding(.horizontal, ChicagoSpacing.md)
+            .padding(.vertical, ChicagoSpacing.sm)
+            .frame(minWidth: 168, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .fill(isSelected ? accent : ChicagoPalette.Surface.elevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .strokeBorder(
+                        isSelected ? .clear : ChicagoPalette.cornflower.opacity(0.5),
+                        lineWidth: ChicagoSpacing.Stroke.thin
+                    )
+            )
         }
         .buttonStyle(.plain)
     }

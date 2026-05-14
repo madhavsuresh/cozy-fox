@@ -197,6 +197,149 @@ public struct MetraRealtimeUpdate: Codable, Sendable, Hashable {
     }
 }
 
+public enum MetraChicagoDirection: String, Codable, Sendable, Hashable, CaseIterable {
+    case toChicago
+    case fromChicago
+
+    public var label: String {
+        switch self {
+        case .toChicago: "To Chicago"
+        case .fromChicago: "From Chicago"
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .toChicago: 0
+        case .fromChicago: 1
+        }
+    }
+}
+
+public struct MetraDepartureGroup: Sendable, Hashable, Identifiable {
+    public let routeId: String
+    public let stationId: String
+    public let directionId: Int?
+    public let direction: MetraChicagoDirection
+    public let terminalSummary: String?
+    public let departures: [MetraPrediction]
+
+    public init(
+        routeId: String,
+        stationId: String,
+        directionId: Int?,
+        direction: MetraChicagoDirection,
+        terminalSummary: String?,
+        departures: [MetraPrediction]
+    ) {
+        self.routeId = routeId
+        self.stationId = stationId
+        self.directionId = directionId
+        self.direction = direction
+        self.terminalSummary = terminalSummary
+        self.departures = departures
+    }
+
+    public var id: String {
+        "\(routeId)-\(stationId)-\(directionId.map(String.init) ?? direction.rawValue)"
+    }
+
+    public var title: String {
+        direction.label
+    }
+
+    public var nextDepartureAt: Date? {
+        departures.first?.arrivalAt
+    }
+}
+
+public enum MetraDepartureGrouper {
+    public static func groups(
+        from predictions: [MetraPrediction],
+        limitPerGroup: Int = 3
+    ) -> [MetraDepartureGroup] {
+        let sorted = predictions.sorted { $0.arrivalAt < $1.arrivalAt }
+        let buckets = Dictionary(grouping: sorted) { prediction in
+            direction(for: prediction.directionId, destinationName: prediction.destinationName)
+        }
+
+        return buckets.map { direction, departures in
+            let limited = Array(departures.prefix(limitPerGroup))
+            let routeId = limited.first?.routeId ?? departures.first?.routeId ?? ""
+            let stationId = limited.first?.stationId ?? departures.first?.stationId ?? ""
+            let directionIds = Set(departures.compactMap(\.directionId))
+            let directionId = directionIds.count == 1 ? directionIds.first : nil
+            return MetraDepartureGroup(
+                routeId: routeId,
+                stationId: stationId,
+                directionId: directionId,
+                direction: direction,
+                terminalSummary: terminalSummary(for: limited),
+                departures: limited
+            )
+        }
+        .sorted(by: compareGroups)
+    }
+
+    public static func direction(
+        for directionId: Int?,
+        destinationName: String
+    ) -> MetraChicagoDirection {
+        if directionId == 1 { return .toChicago }
+        if directionId == 0 { return .fromChicago }
+        return chicagoTerminalNames.contains(normalizedKey(destinationName)) ? .toChicago : .fromChicago
+    }
+
+    public static func displayDestinationName(_ name: String) -> String {
+        switch normalizedKey(name) {
+        case "chicago union station": "Union Station"
+        case "chicago otc": "Ogilvie"
+        case "lasalle street": "LaSalle Street"
+        case "millennium station": "Millennium"
+        default: name
+        }
+    }
+
+    public static func terminalSummary(
+        for predictions: [MetraPrediction],
+        maximumDestinations: Int = 3
+    ) -> String? {
+        var seen: Set<String> = []
+        let names = predictions.compactMap { prediction -> String? in
+            let display = displayDestinationName(prediction.destinationName)
+            guard !display.isEmpty, seen.insert(display).inserted else { return nil }
+            return display
+        }
+        guard !names.isEmpty else { return nil }
+        let clipped = Array(names.prefix(maximumDestinations))
+        return clipped.joined(separator: " / ")
+    }
+
+    private static func compareGroups(_ left: MetraDepartureGroup, _ right: MetraDepartureGroup) -> Bool {
+        switch (left.nextDepartureAt, right.nextDepartureAt) {
+        case let (leftDate?, rightDate?) where leftDate != rightDate:
+            return leftDate < rightDate
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            return left.direction.sortOrder < right.direction.sortOrder
+        }
+    }
+
+    private static func normalizedKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static let chicagoTerminalNames: Set<String> = [
+        "chicago union station",
+        "chicago otc",
+        "lasalle street",
+        "millennium station"
+    ]
+}
+
 public struct MetraDirectionChoice: Sendable, Hashable, Identifiable {
     public let routeId: String
     public let directionId: Int?

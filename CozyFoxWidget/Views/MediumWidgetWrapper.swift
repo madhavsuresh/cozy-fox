@@ -87,7 +87,6 @@ struct MediumWidgetWrapper: View {
                 .filter { $0.routeId == tripMetra.routeId }
                 .filter { tripMetra.stationId == nil || $0.stationId == tripMetra.stationId }
                 .filter { tripMetra.directionId == nil || $0.directionId == tripMetra.directionId }
-                .filter { tripMetra.destinationName == nil || $0.destinationName == tripMetra.destinationName }
             guard let first = predictions.first else { return nil }
             return MediumDashboardView.MetraPick(
                 route: first.routeId,

@@ -17,6 +17,10 @@ struct MetraDetailScreen: View {
             .sorted { $0.arrivalAt < $1.arrivalAt }
     }
 
+    var groups: [MetraDepartureGroup] {
+        MetraDepartureGrouper.groups(from: predictions, limitPerGroup: 8)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -31,21 +35,8 @@ struct MetraDetailScreen: View {
                                     eyebrow: first.stationName,
                                     ornament: .icon(systemName: "train.side.front.car")) {
                             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-                                MetraDepartureTimeView(
-                                    date: first.arrivalAt,
-                                    size: .lg,
-                                    tone: first.isDelayed || first.isCanceled ? .alert : .primary,
-                                    accessibilityPrefix: "Next Metra train departs at"
-                                )
-                                HeadwayDotStrip(
-                                    arrivals: predictions.prefix(8).map(\.arrivalAt),
-                                    accent: MetraStationCatalog.route(id: route)?.swiftUIColor ?? ChicagoPalette.bahama
-                                )
-                                Rectangle()
-                                    .fill(ChicagoPalette.cornflower.opacity(0.3))
-                                    .frame(height: ChicagoSpacing.Stroke.hairline)
-                                ForEach(predictions.prefix(8), id: \.id) { prediction in
-                                    predictionRow(prediction)
+                                ForEach(groups) { group in
+                                    groupSection(group)
                                 }
                             }
                         }
@@ -59,11 +50,44 @@ struct MetraDetailScreen: View {
         }
     }
 
+    private func groupSection(_ group: MetraDepartureGroup) -> some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title)
+                    .font(ChicagoTypography.displaySM(relativeTo: .subheadline))
+                    .tracking(0.5)
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                if let terminalSummary = group.terminalSummary {
+                    Text(terminalSummary)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                }
+            }
+            MetraDepartureTimesView(
+                predictions: group.departures,
+                maxCount: 3,
+                size: .md,
+                accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+            )
+            HeadwayDotStrip(
+                arrivals: group.departures.prefix(8).map(\.arrivalAt),
+                accent: MetraStationCatalog.route(id: route)?.swiftUIColor ?? ChicagoPalette.bahama
+            )
+            Rectangle()
+                .fill(ChicagoPalette.cornflower.opacity(0.3))
+                .frame(height: ChicagoSpacing.Stroke.hairline)
+            ForEach(group.departures.prefix(8), id: \.id) { prediction in
+                predictionRow(prediction)
+            }
+        }
+    }
+
     private func predictionRow(_ prediction: MetraPrediction) -> some View {
         HStack(spacing: ChicagoSpacing.sm) {
             RouteBadge(metra: prediction.routeId, size: .sm)
             VStack(alignment: .leading) {
-                Text("→ \(prediction.destinationName)")
+                Text("→ \(MetraDepartureGrouper.displayDestinationName(prediction.destinationName))")
                     .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
