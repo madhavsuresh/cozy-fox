@@ -1,5 +1,6 @@
 import ChicagoTheme
 import SwiftUI
+import TransitModels
 
 /// A horizontal row of identically-shaped tiles, each showing one
 /// nearby route's next arrival. Tufte's **small multiples** principle
@@ -127,6 +128,64 @@ public struct DepartureTimeTile: View {
         }
         .padding(ChicagoSpacing.sm)
         .frame(minWidth: 88, maxWidth: 120, alignment: .leading)
+        .background(
+            ChicagoPalette.Surface.card,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                              lineWidth: ChicagoSpacing.Stroke.hairline)
+        )
+    }
+}
+
+/// Tile variant for Metra direction groups, where the useful glance is the
+/// next few clock departures instead of a single relative countdown.
+public struct DepartureTimesTile: View {
+    public let badge: RouteBadge
+    public let title: String?
+    public let departures: [MetraPrediction]
+    public let subtitle: String?
+
+    public init(
+        badge: RouteBadge,
+        title: String? = nil,
+        departures: [MetraPrediction],
+        subtitle: String? = nil
+    ) {
+        self.badge = badge
+        self.title = title
+        self.departures = departures
+        self.subtitle = subtitle
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            badge
+            if let title {
+                Text(title)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            MetraDepartureTimesView(
+                predictions: departures,
+                maxCount: 3,
+                size: .sm,
+                accessibilityPrefix: "Metra departures at"
+            )
+            if let subtitle {
+                Text(subtitle)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(ChicagoSpacing.sm)
+        .frame(minWidth: 104, maxWidth: 144, alignment: .leading)
         .background(
             ChicagoPalette.Surface.card,
             in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)

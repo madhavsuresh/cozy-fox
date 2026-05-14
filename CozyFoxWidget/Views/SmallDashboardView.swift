@@ -51,16 +51,16 @@ struct SmallDashboardView: View {
             }
             .padding(ChicagoSpacing.sm)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else if let metra = displayedMetraPrediction {
-            let upcoming = displayedMetraPredictions
+        } else if let metraGroup = displayedMetraGroup {
+            let upcoming = metraGroup.departures
                 .prefix(8)
                 .map(\.arrivalAt)
             let hasAlert = entry.snapshot.activeAlerts.contains {
-                $0.impactedRoutes.contains(metra.routeId)
+                $0.impactedRoutes.contains(metraGroup.routeId)
             }
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
-                    RouteBadge(metra: metra.routeId, size: .sm)
+                    RouteBadge(metra: metraGroup.routeId, size: .sm)
                     Spacer()
                     if hasAlert {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -69,20 +69,26 @@ struct SmallDashboardView: View {
                             .accessibilityLabel("Alert")
                     }
                 }
-                Text(metra.destinationName)
+                Text(metraGroup.title)
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
                     .lineLimit(1)
+                if let terminalSummary = metraGroup.terminalSummary {
+                    Text(terminalSummary)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 0)
-                MetraDepartureTimeView(
-                    date: metra.arrivalAt,
-                    size: .lg,
-                    tone: metra.isDelayed || metra.isCanceled ? .alert : .primary,
-                    accessibilityPrefix: "Next Metra train departs at"
+                MetraDepartureTimesView(
+                    predictions: metraGroup.departures,
+                    maxCount: 3,
+                    size: .sm,
+                    accessibilityPrefix: "Metra \(metraGroup.title.lowercased()) departures at"
                 )
                 HeadwayDotStrip(
                     arrivals: Array(upcoming),
-                    accent: MetraStationCatalog.route(id: metra.routeId)?.swiftUIColor ?? ChicagoPalette.bahama,
+                    accent: MetraStationCatalog.route(id: metraGroup.routeId)?.swiftUIColor ?? ChicagoPalette.bahama,
                     now: entry.date
                 )
             }
@@ -124,7 +130,6 @@ struct SmallDashboardView: View {
                 .filter { $0.routeId == tripMetra.routeId }
                 .filter { tripMetra.stationId == nil || $0.stationId == tripMetra.stationId }
                 .filter { tripMetra.directionId == nil || $0.directionId == tripMetra.directionId }
-                .filter { tripMetra.destinationName == nil || $0.destinationName == tripMetra.destinationName }
         }
         guard let first = entry.snapshot.metraPredictions.first else { return [] }
         return entry.snapshot.metraPredictions.filter {
@@ -132,7 +137,7 @@ struct SmallDashboardView: View {
         }
     }
 
-    private var displayedMetraPrediction: MetraPrediction? {
-        displayedMetraPredictions.first
+    private var displayedMetraGroup: MetraDepartureGroup? {
+        MetraDepartureGrouper.groups(from: displayedMetraPredictions, limitPerGroup: 3).first
     }
 }

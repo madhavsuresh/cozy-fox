@@ -594,6 +594,9 @@ struct SettingsScreen: View {
                let station = MetraStationCatalog.station(id: stationId)
             {
                 pieces.append("Metra \(route) at \(station.name)")
+            } else if let directionId = preferences.pinnedMetraDirectionId {
+                let direction = directionId == 1 ? "to Chicago" : "from Chicago"
+                pieces.append("Metra \(route) \(direction)")
             } else if let destination = preferences.pinnedMetraDestination {
                 pieces.append("Metra \(route) to \(destination)")
             } else {

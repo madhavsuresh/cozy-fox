@@ -32,23 +32,28 @@ public struct MetraBlockView: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 0)
-            if let first = predictions.first {
-                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.xs) {
-                    MetraDepartureTimeView(
-                        date: first.arrivalAt,
-                        size: .md,
-                        tone: first.isDelayed || first.isCanceled ? .alert : .primary,
-                        accessibilityPrefix: "Next Metra train on \(routeLabel) departs at"
-                    )
-                    if first.isDelayed || first.isCanceled {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundStyle(ChicagoPalette.starRed)
-                            .accessibilityHidden(true)
+            if let group {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.title)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                        .lineLimit(1)
+                    if let terminalSummary = group.terminalSummary {
+                        Text(terminalSummary)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
+                MetraDepartureTimesView(
+                    predictions: group.departures,
+                    maxCount: 3,
+                    size: .sm,
+                    accessibilityPrefix: "Metra \(group.title.lowercased()) departures at"
+                )
                 HeadwayDotStrip(
-                    arrivals: predictions.prefix(8).map(\.arrivalAt),
+                    arrivals: group.departures.prefix(8).map(\.arrivalAt),
                     accent: MetraStationCatalog.route(id: routeLabel)?.swiftUIColor ?? ChicagoPalette.bahama,
                     now: now
                 )
@@ -61,5 +66,9 @@ public struct MetraBlockView: View {
         }
         .padding(ChicagoSpacing.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var group: MetraDepartureGroup? {
+        MetraDepartureGrouper.groups(from: predictions, limitPerGroup: 3).first
     }
 }
