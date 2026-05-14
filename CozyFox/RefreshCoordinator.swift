@@ -19,11 +19,9 @@ final class RefreshCoordinator {
     /// profile when computing autopin hints. Held weakly because both objects
     /// are owned by `AppViewModel` and we don't want a retain cycle.
     weak var mobilitySummaryStore: MobilitySummaryStore?
-    /// Same weak-reference pattern: the bias store is owned by
-    /// `AppViewModel`; the coordinator only writes through it via the
-    /// `ArrivalGrader`.
-    weak var arrivalBiasStore: ArrivalBiasStore?
-    /// Phase 2 grader. In-memory state (the pending-grade table and the
+    /// Phase 2 grader. Holds its own weak ref to `ArrivalBiasStore`, so
+    /// the coordinator only needs the store at construction time to wire
+    /// the grader. In-memory state (the pending-grade table and the
     /// previous-snapshot map) is reset every app launch by construction.
     let arrivalGrader: ArrivalGrader
 
@@ -67,7 +65,6 @@ final class RefreshCoordinator {
         self.location = location
         self.walkingStore = walkingStore
         self.mobilitySummaryStore = mobilitySummaryStore
-        self.arrivalBiasStore = arrivalBiasStore
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
 
         let session = LiveHTTPClient.makeSharedSession()
