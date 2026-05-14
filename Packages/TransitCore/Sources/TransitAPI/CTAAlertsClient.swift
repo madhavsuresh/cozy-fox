@@ -58,7 +58,6 @@ extension ServiceAlert {
         }()
         let routes = (raw.ImpactedService?.services ?? []).compactMap { $0.ServiceId }
         let colors = routes.compactMap { LineColor(ctaRouteCode: $0) }
-        let detailURL = raw.AlertURL?.url ?? Self.fallbackDetailURL(forAlertId: raw.AlertId)
         self.init(
             id: raw.AlertId,
             headline: raw.Headline,
@@ -68,18 +67,8 @@ extension ServiceAlert {
             impactedLineColors: colors,
             beginsAt: begin,
             endsAt: end,
-            isMajor: (raw.MajorAlert ?? "0") == "1",
-            detailURL: detailURL
+            isMajor: (raw.MajorAlert ?? "0") == "1"
         )
-    }
-
-    /// CTA's alerts feed sometimes omits `AlertURL`. Their service-updates page
-    /// accepts `?AlertId=` and links straight to the detail card, so we synthesize
-    /// that URL as a fallback so every alert has a "more details" target.
-    private static func fallbackDetailURL(forAlertId id: String) -> URL? {
-        var comps = URLComponents(string: "https://www.transitchicago.com/travel-information/service-updates/alert/")
-        comps?.queryItems = [URLQueryItem(name: "AlertId", value: id)]
-        return comps?.url
     }
 }
 
@@ -140,34 +129,6 @@ struct AlertsEnvelope: Decodable {
             let EventStart: String
             let EventEnd: String?
             let ImpactedService: Impacted?
-            let AlertURL: AlertURLValue?
-
-            /// CTA's `AlertURL` decodes inconsistently: in some responses it's a
-            /// bare string, in others it's an object wrapping a `URL` key (the
-            /// XML-to-JSON shim leaks the wrapper through). Accept both shapes
-            /// so neither variant silently drops the link.
-            struct AlertURLValue: Decodable {
-                let url: URL?
-
-                init(from decoder: Decoder) throws {
-                    let container = try decoder.singleValueContainer()
-                    if let raw = try? container.decode(String.self) {
-                        self.url = AlertURLValue.parse(raw)
-                        return
-                    }
-                    let keyed = try decoder.container(keyedBy: CodingKeys.self)
-                    let raw = try? keyed.decode(String.self, forKey: .URL)
-                    self.url = raw.flatMap(AlertURLValue.parse)
-                }
-
-                private static func parse(_ raw: String) -> URL? {
-                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return nil }
-                    return URL(string: trimmed)
-                }
-
-                private enum CodingKeys: String, CodingKey { case URL }
-            }
 
             struct Impacted: Decodable {
                 // Property is `services` (lowercased + plural) so it doesn't

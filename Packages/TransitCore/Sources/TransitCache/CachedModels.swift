@@ -198,6 +198,10 @@ public final class CachedAlert {
     public var beginsAt: Date
     public var endsAt: Date?
     public var isMajor: Bool
+    /// Kept as a nil-always column to avoid a destructive SwiftData migration for
+    /// users who installed the previous build. The "Details" link is now a static
+    /// pointer to `ServiceAlert.detailsURL` (the CTA alerts hub) since the
+    /// per-alert URL the API hands out goes to a page CTA no longer renders.
     public var detailURLString: String?
     public var fetchedAt: Date
 
@@ -210,7 +214,7 @@ public final class CachedAlert {
         self.beginsAt = alert.beginsAt
         self.endsAt = alert.endsAt
         self.isMajor = alert.isMajor
-        self.detailURLString = alert.detailURL?.absoluteString
+        self.detailURLString = nil
         self.fetchedAt = fetchedAt
     }
 
@@ -225,8 +229,7 @@ public final class CachedAlert {
             impactedLineColors: impactedRoutes.compactMap { LineColor(ctaRouteCode: $0) },
             beginsAt: beginsAt,
             endsAt: endsAt,
-            isMajor: isMajor,
-            detailURL: detailURLString.flatMap(URL.init(string:))
+            isMajor: isMajor
         )
     }
 }
