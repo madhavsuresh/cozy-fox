@@ -18,13 +18,14 @@ public struct NearestStationResolver: Sendable {
         catalog: [LStation] = LStationCatalog.all,
         excludingStationIds: Set<Int> = []
     ) -> [LStation] {
-        all(
+        boundedNearest(
             within: maxDistanceMeters,
             of: origin,
+            limit: limit,
             catalog: catalog,
-            excludingStationIds: excludingStationIds
+            excludingStationIds: excludingStationIds,
+            matches: { _ in true }
         )
-        .prefix(limit)
         .map(\.station)
     }
 
@@ -48,22 +49,14 @@ public struct NearestStationResolver: Sendable {
         catalog: [LStation] = LStationCatalog.all,
         excludingStationIds: Set<Int> = []
     ) -> [(station: LStation, distance: Double)] {
-        catalog
-            .filter { !excludingStationIds.contains($0.id) }
-            .filter { $0.servedLines.contains(line) }
-            .map { station in
-                (
-                    station: station,
-                    distance: Distance.meters(
-                        from: origin,
-                        to: (station.latitude, station.longitude)
-                    )
-                )
-            }
-            .filter { $0.distance <= maxDistanceMeters }
-            .sorted { $0.distance < $1.distance }
-            .prefix(limit)
-            .map { (station: $0.station, distance: $0.distance) }
+        boundedNearest(
+            within: maxDistanceMeters,
+            of: origin,
+            limit: limit,
+            catalog: catalog,
+            excludingStationIds: excludingStationIds,
+            matches: { $0.servedLines.contains(line) }
+        )
     }
 
     /// Returns every station within `radiusMeters`, sorted by Haversine
@@ -87,5 +80,36 @@ public struct NearestStationResolver: Sendable {
             }
             .filter { $0.distance <= radiusMeters }
             .sorted { $0.distance < $1.distance }
+    }
+
+    private func boundedNearest(
+        within radiusMeters: Double,
+        of origin: (lat: Double, lon: Double),
+        limit: Int,
+        catalog: [LStation],
+        excludingStationIds: Set<Int>,
+        matches: (LStation) -> Bool
+    ) -> [(station: LStation, distance: Double)] {
+        guard limit > 0 else { return [] }
+        var best: [(station: LStation, distance: Double)] = []
+        best.reserveCapacity(limit)
+        for station in catalog where !excludingStationIds.contains(station.id) && matches(station) {
+            let distance = Distance.meters(
+                from: origin,
+                to: (station.latitude, station.longitude)
+            )
+            guard distance <= radiusMeters else { continue }
+            let entry = (station: station, distance: distance)
+            let index = best.firstIndex { entry.distance < $0.distance } ?? best.endIndex
+            if index < best.endIndex {
+                best.insert(entry, at: index)
+            } else if best.count < limit {
+                best.append(entry)
+            }
+            if best.count > limit {
+                best.removeLast()
+            }
+        }
+        return best
     }
 }
