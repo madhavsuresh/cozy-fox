@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import TransitModels
 
@@ -21,5 +22,32 @@ struct IntercampusCatalogTests {
         #expect(ward.servedDirections.contains(.southbound))
         #expect(ryanField.servedDirections.contains(.northbound))
         #expect(ryanField.servedDirections.contains(.southbound))
+    }
+
+    @Test func resolvesTripRoutesAndStaticSchedule() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        let now = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 5,
+            day: 14,
+            hour: 10,
+            minute: 38
+        ))!
+
+        #expect(
+            IntercampusCatalog.routeId(forTrip: "4afda0c4-b03b-4499-85f0-7137d34d8f24")
+                == "ebee9228-c993-4279-b7ce-8fca0a46ca65"
+        )
+
+        let arrivals = IntercampusCatalog.scheduledArrivals(
+            stopIds: ["b3f50cbe-621f-4664-934a-fe48d4901250"],
+            after: now,
+            generatedAt: now
+        )
+
+        #expect(arrivals.count >= 2)
+        #expect(arrivals.first?.direction == .southbound)
+        #expect(arrivals.first?.arrivalAt ?? now > now)
     }
 }
