@@ -49,6 +49,14 @@ public struct MediumDashboardView: View {
     public let trainsFetchedAt: Date?
     public let isStale: Bool
     public let now: Date
+    /// Optional Phase 3 corrections, one per mode. `nil` ⇒ the
+    /// corresponding block view renders without the secondary line, which
+    /// is the right behaviour when the host has no bias store (e.g. the
+    /// widget process — see `MediumWidgetWrapper` for the deferral
+    /// rationale).
+    public let trainBiasCorrection: ArrivalBiasCorrection?
+    public let busBiasCorrection: ArrivalBiasCorrection?
+    public let metraBiasCorrection: ArrivalBiasCorrection?
 
     public init(
         train: TrainPick?,
@@ -59,7 +67,10 @@ public struct MediumDashboardView: View {
         vehiclePositions: [VehiclePosition] = [],
         trainsFetchedAt: Date? = nil,
         isStale: Bool,
-        now: Date = .now
+        now: Date = .now,
+        trainBiasCorrection: ArrivalBiasCorrection? = nil,
+        busBiasCorrection: ArrivalBiasCorrection? = nil,
+        metraBiasCorrection: ArrivalBiasCorrection? = nil
     ) {
         self.train = train
         self.bus = bus
@@ -70,6 +81,9 @@ public struct MediumDashboardView: View {
         self.trainsFetchedAt = trainsFetchedAt
         self.isStale = isStale
         self.now = now
+        self.trainBiasCorrection = trainBiasCorrection
+        self.busBiasCorrection = busBiasCorrection
+        self.metraBiasCorrection = metraBiasCorrection
     }
 
     public var body: some View {
@@ -81,7 +95,8 @@ public struct MediumDashboardView: View {
                     directionLabel: train.directionLabel,
                     now: now,
                     vehiclePositions: vehiclePositions,
-                    arrivalsFetchedAt: trainsFetchedAt
+                    arrivalsFetchedAt: trainsFetchedAt,
+                    biasCorrection: trainBiasCorrection
                 )
             } else {
                 emptyBlock("Pick a train")
@@ -92,7 +107,8 @@ public struct MediumDashboardView: View {
                     predictions: bus.predictions,
                     routeLabel: bus.route,
                     stopLabel: bus.stopLabel,
-                    now: now
+                    now: now,
+                    biasCorrection: busBiasCorrection
                 )
             } else {
                 emptyBlock("Pick a bus")
@@ -103,7 +119,8 @@ public struct MediumDashboardView: View {
                     predictions: metra.predictions,
                     routeLabel: metra.route,
                     stationLabel: metra.stationLabel,
-                    now: now
+                    now: now,
+                    biasCorrection: metraBiasCorrection
                 )
             } else {
                 emptyBlock("Pick Metra")
