@@ -100,10 +100,14 @@ final class RefreshCoordinator {
             group.addTask { await self.refreshMetra(prefs: prefs, lastLocation: lastLocation) }
             group.addTask { await self.refreshIntercampus(prefs: prefs, lastLocation: lastLocation) }
             group.addTask {
-                await self.refreshBikes(
-                    origin: lastLocation,
-                    includeFreeFloating: prefs.includeFreeFloatingBikes
-                )
+                if prefs.isModeVisible(.bikes) {
+                    await self.refreshBikes(
+                        origin: lastLocation,
+                        includeFreeFloating: prefs.includeFreeFloatingBikes
+                    )
+                } else {
+                    await self.store.replaceNearbyBikePicks([])
+                }
             }
             group.addTask { await self.refreshPositions(prefs: prefs) }
         }
@@ -127,8 +131,12 @@ final class RefreshCoordinator {
     func handleRegionExit(direction: CommuteDirection) async {
         let prefs = preferences.loadRoutePreferences()
         guard prefs.autoStartLiveActivity else { return }
-        guard let pref = prefs.trains.first(where: { $0.direction == direction })
-            ?? prefs.buses.first(where: { $0.direction == direction }).map(toTrainStub) else {
+        guard let pref = prefs.trains.first(where: {
+            $0.direction == direction && prefs.isTrainLineVisible($0.line)
+        })
+            ?? prefs.buses.first(where: {
+                $0.direction == direction && prefs.isBusRouteVisible($0.route)
+            }).map(toTrainStub) else {
             return
         }
         await refreshAll()
@@ -188,15 +196,20 @@ final class RefreshCoordinator {
         // for: tracked stations OR the nearest few + the pinned-line station.
         var targets: [(mapId: Int, stopId: Int?)] = []
 
-        if !prefs.trains.isEmpty {
+        let visibleTrainPrefs = prefs.trains.filter {
+            prefs.isTrainLineVisible($0.line) || prefs.pinnedLine == $0.line
+        }
+        if !visibleTrainPrefs.isEmpty {
             // Honor tracked stations even if the alerts feed says they're
             // closed — the user picked them on purpose, surface the staleness.
-            targets.append(contentsOf: prefs.trains.map { ($0.mapId, $0.stopId) })
-        } else if let lastLocation {
+            targets.append(contentsOf: visibleTrainPrefs.map { ($0.mapId, $0.stopId) })
+        } else if prefs.isModeVisible(.trains), let lastLocation {
             let nearest = stationResolver.nearest(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 limit: 3,
-                catalog: LStationCatalog.all,
+                catalog: LStationCatalog.all.filter { station in
+                    station.servedLines.contains(where: prefs.isTrainLineVisible)
+                },
                 excludingStationIds: closedStations
             )
             targets.append(contentsOf: nearest.map { ($0.id, nil) })
@@ -270,15 +283,18 @@ final class RefreshCoordinator {
     ) async {
         var targets: [(route: String, stopId: Int)] = []
 
-        if !prefs.buses.isEmpty {
-            targets.append(contentsOf: prefs.buses.map { ($0.route, $0.stopId) })
-        } else if let lastLocation {
+        let visibleBusPrefs = prefs.buses.filter {
+            prefs.isBusRouteVisible($0.route) || prefs.pinnedBusRoute == $0.route
+        }
+        if !visibleBusPrefs.isEmpty {
+            targets.append(contentsOf: visibleBusPrefs.map { ($0.route, $0.stopId) })
+        } else if prefs.isModeVisible(.buses), let lastLocation {
             // No tracked buses — surface predictions for the nearest 5
             // distinct routes from the bundled CTA bus stop catalog.
             let nearest = busStopResolver.nearest(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 limit: 5,
-                catalog: BusStopCatalog.all
+                catalog: BusStopCatalog.all.filter { prefs.isBusRouteVisible($0.route) }
             )
             targets.append(contentsOf: nearest.map { ($0.route, $0.id) })
         }
@@ -342,15 +358,20 @@ final class RefreshCoordinator {
     ) async {
         var targets: [(routeId: String, stationId: String, directionId: Int?)] = []
 
-        if !prefs.metra.isEmpty {
-            targets.append(contentsOf: prefs.metra.map {
+        let visibleMetraPrefs = prefs.metra.filter {
+            prefs.isMetraRouteVisible($0.routeId) || prefs.pinnedMetraRoute == $0.routeId
+        }
+        if !visibleMetraPrefs.isEmpty {
+            targets.append(contentsOf: visibleMetraPrefs.map {
                 ($0.routeId, $0.stationId, $0.directionId)
             })
-        } else if let lastLocation {
+        } else if prefs.isModeVisible(.metra), let lastLocation {
             let nearest = metraStationResolver.nearestPerRoute(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 limit: 5,
-                catalog: MetraStationCatalog.all
+                catalog: MetraStationCatalog.all.filter { station in
+                    station.servedRoutes.contains(where: prefs.isMetraRouteVisible)
+                }
             )
             targets.append(contentsOf: nearest.map { ($0.routeId, $0.station.id, nil) })
         }
@@ -423,7 +444,9 @@ final class RefreshCoordinator {
         prefs: UserRoutePreferences,
         lastLocation: LastKnownLocation?
     ) async {
-        guard prefs.includeIntercampus else {
+        guard prefs.includeIntercampus,
+              prefs.isModeVisible(.intercampus) || prefs.pinnedIntercampusStopId != nil
+        else {
             await store.replaceIntercampusArrivals([])
             return
         }
@@ -503,13 +526,33 @@ final class RefreshCoordinator {
     }
 
     private func refreshAlerts(prefs: UserRoutePreferences) async {
-        let routes = Set(
-            prefs.trains.map { $0.line.rawValue.capitalized }
-            + prefs.buses.map { $0.route }
-            + (prefs.plannedTripPin?.trainLegs.map { $0.line.rawValue.capitalized } ?? [])
-            + (prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
-            + (prefs.plannedTripPin?.metraLegs.map(\.routeId) ?? [])
-        )
+        var routes: Set<String> = []
+        let visibleTrackedLines = prefs.trains
+            .filter { prefs.isTrainLineVisible($0.line) || prefs.pinnedLine == $0.line }
+            .map { $0.line.rawValue.capitalized }
+        let visibleTrackedBuses = prefs.buses
+            .filter { prefs.isBusRouteVisible($0.route) || prefs.pinnedBusRoute == $0.route }
+            .map(\.route)
+        let visibleTrackedMetra = prefs.metra
+            .filter { prefs.isMetraRouteVisible($0.routeId) || prefs.pinnedMetraRoute == $0.routeId }
+            .map(\.routeId)
+
+        routes.formUnion(visibleTrackedLines)
+        routes.formUnion(visibleTrackedBuses)
+        routes.formUnion(visibleTrackedMetra)
+        if let pinnedLine = prefs.pinnedLine {
+            routes.insert(pinnedLine.rawValue.capitalized)
+        }
+        if let pinnedBusRoute = prefs.pinnedBusRoute {
+            routes.insert(pinnedBusRoute)
+        }
+        if let pinnedMetraRoute = prefs.pinnedMetraRoute {
+            routes.insert(pinnedMetraRoute)
+        }
+        routes.formUnion(prefs.plannedTripPin?.trainLegs.map { $0.line.rawValue.capitalized } ?? [])
+        routes.formUnion(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+        routes.formUnion(prefs.plannedTripPin?.metraLegs.map(\.routeId) ?? [])
+
         async let metraAlerts = (try? metraClient.fetchAlerts()) ?? []
         do {
             let alerts = try await alertsClient.fetchActiveAlerts(forRoutes: Array(routes))

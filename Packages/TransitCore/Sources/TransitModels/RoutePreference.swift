@@ -114,6 +114,24 @@ public enum RoutePinSource: String, Codable, Sendable, Hashable {
     }
 }
 
+public enum TransitVisibilityMode: String, Codable, Sendable, Hashable, CaseIterable {
+    case trains
+    case buses
+    case metra
+    case bikes
+    case intercampus
+
+    public var label: String {
+        switch self {
+        case .trains: "Trains"
+        case .buses: "Buses"
+        case .metra: "Metra"
+        case .bikes: "Divvy"
+        case .intercampus: "Intercampus"
+        }
+    }
+}
+
 public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
     public enum DestinationKind: String, Codable, Sendable, Hashable {
         case home
@@ -356,6 +374,15 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var buses: [BusPreference]
     public var metra: [MetraPreference]
     public var includeFreeFloatingBikes: Bool
+    /// Modes hidden from discovery, pickers, widgets, planning, and default
+    /// refresh targets. Existing pinned items still render until cleared.
+    public var hiddenModes: Set<TransitVisibilityMode>
+    /// Individual L lines hidden from discovery and route pickers.
+    public var hiddenTrainLines: Set<LineColor>
+    /// Individual CTA bus routes hidden from discovery and route pickers.
+    public var hiddenBusRoutes: Set<String>
+    /// Individual Metra routes hidden from discovery and route pickers.
+    public var hiddenMetraRoutes: Set<String>
     /// Auto-start a Live Activity on region exit (leaving home/work).
     /// Only meaningful when `alwaysShowLiveActivity == false`.
     public var autoStartLiveActivity: Bool
@@ -429,6 +456,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         buses: [BusPreference] = [],
         metra: [MetraPreference] = [],
         includeFreeFloatingBikes: Bool = true,
+        hiddenModes: Set<TransitVisibilityMode> = [],
+        hiddenTrainLines: Set<LineColor> = [],
+        hiddenBusRoutes: Set<String> = [],
+        hiddenMetraRoutes: Set<String> = [],
         autoStartLiveActivity: Bool = true,
         alwaysShowLiveActivity: Bool = true,
         pinnedLine: LineColor? = nil,
@@ -456,6 +487,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.buses = buses
         self.metra = metra
         self.includeFreeFloatingBikes = includeFreeFloatingBikes
+        self.hiddenModes = hiddenModes
+        self.hiddenTrainLines = hiddenTrainLines
+        self.hiddenBusRoutes = hiddenBusRoutes
+        self.hiddenMetraRoutes = hiddenMetraRoutes
         self.autoStartLiveActivity = autoStartLiveActivity
         self.alwaysShowLiveActivity = alwaysShowLiveActivity
         self.pinnedLine = pinnedLine
@@ -488,6 +523,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.buses = (try? c.decode([BusPreference].self, forKey: .buses)) ?? []
         self.metra = (try? c.decode([MetraPreference].self, forKey: .metra)) ?? []
         self.includeFreeFloatingBikes = (try? c.decode(Bool.self, forKey: .includeFreeFloatingBikes)) ?? true
+        self.hiddenModes = (try? c.decode(Set<TransitVisibilityMode>.self, forKey: .hiddenModes)) ?? []
+        self.hiddenTrainLines = (try? c.decode(Set<LineColor>.self, forKey: .hiddenTrainLines)) ?? []
+        self.hiddenBusRoutes = (try? c.decode(Set<String>.self, forKey: .hiddenBusRoutes)) ?? []
+        self.hiddenMetraRoutes = (try? c.decode(Set<String>.self, forKey: .hiddenMetraRoutes)) ?? []
         self.autoStartLiveActivity = (try? c.decode(Bool.self, forKey: .autoStartLiveActivity)) ?? true
         self.alwaysShowLiveActivity = (try? c.decode(Bool.self, forKey: .alwaysShowLiveActivity)) ?? true
         self.pinnedLine = try? c.decode(LineColor.self, forKey: .pinnedLine)
@@ -516,6 +555,22 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
 
     public var hasPinnedTransit: Bool {
         pinnedLine != nil || pinnedBusRoute != nil || pinnedMetraRoute != nil || plannedTripPin != nil
+    }
+
+    public func isModeVisible(_ mode: TransitVisibilityMode) -> Bool {
+        !hiddenModes.contains(mode)
+    }
+
+    public func isTrainLineVisible(_ line: LineColor) -> Bool {
+        isModeVisible(.trains) && !hiddenTrainLines.contains(line)
+    }
+
+    public func isBusRouteVisible(_ route: String) -> Bool {
+        isModeVisible(.buses) && !hiddenBusRoutes.contains(route)
+    }
+
+    public func isMetraRouteVisible(_ routeId: String) -> Bool {
+        isModeVisible(.metra) && !hiddenMetraRoutes.contains(routeId)
     }
 
     public mutating func markManualPin(at date: Date = .now) {

@@ -130,12 +130,14 @@ public struct CommuteAutopinner: Sendable {
         var choice = routePreferenceChoice(preferences, direction: direction)
         choice.fillMissing(from: learnedRouteChoice(
             profile: profile,
+            preferences: preferences,
             direction: direction,
             origin: origin
         ))
         choice.fillMissing(from: localRouteChoice(
             from: origin,
-            to: destination
+            to: destination,
+            preferences: preferences
         ))
 
         guard !choice.isEmpty else {
@@ -257,9 +259,18 @@ public struct CommuteAutopinner: Sendable {
         _ preferences: UserRoutePreferences,
         direction: CommuteDirection
     ) -> RouteChoice {
-        let train = select(preferences.trains, direction: direction)
-        let bus = select(preferences.buses, direction: direction)
-        let metra = select(preferences.metra, direction: direction)
+        let train = select(
+            preferences.trains.filter { preferences.isTrainLineVisible($0.line) },
+            direction: direction
+        )
+        let bus = select(
+            preferences.buses.filter { preferences.isBusRouteVisible($0.route) },
+            direction: direction
+        )
+        let metra = select(
+            preferences.metra.filter { preferences.isMetraRouteVisible($0.routeId) },
+            direction: direction
+        )
         return RouteChoice(
             line: train?.line,
             stationId: train?.mapId,
@@ -274,6 +285,7 @@ public struct CommuteAutopinner: Sendable {
 
     private func learnedRouteChoice(
         profile: MobilityProfile,
+        preferences: UserRoutePreferences,
         direction: CommuteDirection,
         origin: PlannerCoordinate
     ) -> RouteChoice {
@@ -283,7 +295,7 @@ public struct CommuteAutopinner: Sendable {
 
         for observation in profile.routeObservations where observation.direction == direction {
             let score = score(observation)
-            if let line = observation.line {
+            if let line = observation.line, preferences.isTrainLineVisible(line) {
                 let current = lineScores[line]
                 if current == nil
                     || score > current!.score
@@ -292,7 +304,7 @@ public struct CommuteAutopinner: Sendable {
                     lineScores[line] = (score, observation.recordedAt, observation.stationId)
                 }
             }
-            if let route = observation.busRoute {
+            if let route = observation.busRoute, preferences.isBusRouteVisible(route) {
                 let current = busScores[route]
                 if current == nil
                     || score > current!.score
@@ -301,7 +313,7 @@ public struct CommuteAutopinner: Sendable {
                     busScores[route] = (score, observation.recordedAt, observation.busDirection)
                 }
             }
-            if let route = observation.metraRoute {
+            if let route = observation.metraRoute, preferences.isMetraRouteVisible(route) {
                 let current = metraScores[route]
                 if current == nil
                     || score > current!.score
@@ -350,7 +362,8 @@ public struct CommuteAutopinner: Sendable {
 
     private func localRouteChoice(
         from origin: PlannerCoordinate,
-        to destination: PlannerCoordinate
+        to destination: PlannerCoordinate,
+        preferences: UserRoutePreferences
     ) -> RouteChoice {
         let plans = planner.plan(from: origin, to: destination)
         var choice = RouteChoice()
@@ -359,12 +372,12 @@ public struct CommuteAutopinner: Sendable {
                 continue
             }
             switch resolution {
-            case .line(let line) where choice.line == nil:
+            case .line(let line) where choice.line == nil && preferences.isTrainLineVisible(line):
                 choice.line = line
-            case .bus(let route) where choice.busRoute == nil:
+            case .bus(let route) where choice.busRoute == nil && preferences.isBusRouteVisible(route):
                 choice.busRoute = route
                 choice.busDirection = inferredBusDirection(route: route, from: origin, to: destination)
-            case .metra(let route) where choice.metraRoute == nil:
+            case .metra(let route) where choice.metraRoute == nil && preferences.isMetraRouteVisible(route):
                 choice.metraRoute = route
             default:
                 continue

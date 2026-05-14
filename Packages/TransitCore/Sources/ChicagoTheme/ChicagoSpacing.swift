@@ -18,9 +18,9 @@ public enum ChicagoSpacing {
         /// Badges and chips — small sharp civic edge.
         public static let sm: CGFloat = 6
         /// Inline controls, sub-cards.
-        public static let md: CGFloat = 10
+        public static let md: CGFloat = 8
         /// Full content cards.
-        public static let lg: CGFloat = 14
+        public static let lg: CGFloat = 8
     }
 
     public enum Stroke {

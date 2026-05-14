@@ -1,3 +1,4 @@
+import ChicagoTheme
 import SwiftUI
 import MapKit
 import TransitDomain
@@ -112,14 +113,12 @@ struct SettingsScreen: View {
                 }
             }
 
+            visibilitySection
+
             Section {
                 Toggle("Include free-floating e-bikes", isOn: Binding(
                     get: { prefs.includeFreeFloatingBikes },
-                    set: { prefs.includeFreeFloatingBikes = $0; save() }
-                ))
-                Toggle("Include Northwestern Intercampus", isOn: Binding(
-                    get: { prefs.includeIntercampus },
-                    set: { setIntercampusEnabled($0) }
+                    set: { prefs.includeFreeFloatingBikes = $0; save(refresh: true) }
                 ))
                 Toggle("Auto-pin commute routes",
                        isOn: Binding(
@@ -139,9 +138,6 @@ struct SettingsScreen: View {
                 .disabled(prefs.alwaysShowLiveActivity)
             } header: {
                 Text("Behavior")
-            } footer: {
-                Text("Intercampus adds nearby Northwestern shuttle arrivals to the dashboard only. Auto-pin predicts a commute direction locally from home/work context and coarse time patterns. Manual pins override it for 30 minutes. With \"Always show\" on, the Live Activity stays in the Dynamic Island / Lock Screen and refreshes whenever the app updates.")
-                    .font(.footnote)
             }
 
             autopinBeliefSection
@@ -272,8 +268,221 @@ struct SettingsScreen: View {
         metraSaveStatus = m.isEmpty ? "Keychain empty" : "✓ Loaded \(m.count) chars from Keychain"
     }
 
-    private func save() {
+    @ViewBuilder
+    private var visibilitySection: some View {
+        Section {
+            modeToggle(.trains, title: "Trains", systemImage: "tram.fill")
+            modeToggle(.buses, title: "Buses", systemImage: "bus.fill")
+            modeToggle(.metra, title: "Metra", systemImage: "train.side.front.car")
+            modeToggle(.bikes, title: "Divvy", systemImage: "bicycle")
+            modeToggle(.intercampus, title: "Intercampus", systemImage: "bus.fill")
+
+            routeVisibilityHeader(
+                title: "L lines",
+                selected: visibleTrainLineCount,
+                total: LineColor.allCases.count,
+                allAction: { setAllTrainLines(visible: true) },
+                noneAction: { setAllTrainLines(visible: false) }
+            )
+            LazyVGrid(columns: visibilityChipColumns, alignment: .leading, spacing: ChicagoSpacing.xs) {
+                ForEach(LineColor.allCases, id: \.self) { line in
+                    VisibilityRouteChip(
+                        isVisible: isTrainLineSelected(line),
+                        action: { toggleTrainLine(line) }
+                    ) {
+                        RouteBadge(line: line, size: .sm)
+                    }
+                }
+            }
+
+            routeVisibilityHeader(
+                title: "Bus routes",
+                selected: visibleBusRouteCount,
+                total: BusStopCatalog.allRoutes.count,
+                allAction: { setAllBusRoutes(visible: true) },
+                noneAction: { setAllBusRoutes(visible: false) }
+            )
+            LazyVGrid(columns: visibilityChipColumns, alignment: .leading, spacing: ChicagoSpacing.xs) {
+                ForEach(BusStopCatalog.allRoutes, id: \.self) { route in
+                    VisibilityRouteChip(
+                        isVisible: isBusRouteSelected(route),
+                        action: { toggleBusRoute(route) }
+                    ) {
+                        RouteBadge(bus: route, size: .sm)
+                    }
+                }
+            }
+
+            routeVisibilityHeader(
+                title: "Metra lines",
+                selected: visibleMetraRouteCount,
+                total: MetraStationCatalog.routes.count,
+                allAction: { setAllMetraRoutes(visible: true) },
+                noneAction: { setAllMetraRoutes(visible: false) }
+            )
+            LazyVGrid(columns: visibilityChipColumns, alignment: .leading, spacing: ChicagoSpacing.xs) {
+                ForEach(MetraStationCatalog.routes, id: \.id) { route in
+                    VisibilityRouteChip(
+                        isVisible: isMetraRouteSelected(route.id),
+                        action: { toggleMetraRoute(route.id) }
+                    ) {
+                        RouteBadge(metra: route.id, size: .sm)
+                    }
+                }
+            }
+        } header: {
+            Text("Visible service")
+        }
+    }
+
+    private var visibilityChipColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 74), spacing: ChicagoSpacing.xs)]
+    }
+
+    private var visibleTrainLineCount: Int {
+        LineColor.allCases.filter(isTrainLineSelected).count
+    }
+
+    private var visibleBusRouteCount: Int {
+        BusStopCatalog.allRoutes.filter(isBusRouteSelected).count
+    }
+
+    private var visibleMetraRouteCount: Int {
+        MetraStationCatalog.routes.map(\.id).filter(isMetraRouteSelected).count
+    }
+
+    private func isTrainLineSelected(_ line: LineColor) -> Bool {
+        !prefs.hiddenTrainLines.contains(line)
+    }
+
+    private func isBusRouteSelected(_ route: String) -> Bool {
+        !prefs.hiddenBusRoutes.contains(route)
+    }
+
+    private func isMetraRouteSelected(_ routeId: String) -> Bool {
+        !prefs.hiddenMetraRoutes.contains(routeId)
+    }
+
+    private func modeToggle(
+        _ mode: TransitVisibilityMode,
+        title: String,
+        systemImage: String
+    ) -> some View {
+        Toggle(isOn: Binding(
+            get: { modeIsVisible(mode) },
+            set: { setMode(mode, visible: $0) }
+        )) {
+            Label(title, systemImage: systemImage)
+                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+        }
+        .tint(ChicagoPalette.flagBlue)
+    }
+
+    private func routeVisibilityHeader(
+        title: String,
+        selected: Int,
+        total: Int,
+        allAction: @escaping () -> Void,
+        noneAction: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .center, spacing: ChicagoSpacing.sm) {
+            Text(title)
+                .font(ChicagoTypography.body(.bold, relativeTo: .subheadline))
+            Text("\(selected)/\(total)")
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                .monospacedDigit()
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+            Spacer()
+            Button("All", action: allAction)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+            Button("None", action: noneAction)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+        }
+        .padding(.top, ChicagoSpacing.xs)
+    }
+
+    private func modeIsVisible(_ mode: TransitVisibilityMode) -> Bool {
+        switch mode {
+        case .intercampus:
+            prefs.includeIntercampus && prefs.isModeVisible(.intercampus)
+        default:
+            prefs.isModeVisible(mode)
+        }
+    }
+
+    private func setMode(_ mode: TransitVisibilityMode, visible: Bool) {
+        if visible {
+            prefs.hiddenModes.remove(mode)
+            if mode == .intercampus {
+                prefs.includeIntercampus = true
+            }
+        } else {
+            prefs.hiddenModes.insert(mode)
+        }
+        save(refresh: true)
+    }
+
+    private func toggleTrainLine(_ line: LineColor) {
+        if prefs.hiddenTrainLines.contains(line) {
+            prefs.hiddenTrainLines.remove(line)
+        } else {
+            prefs.hiddenTrainLines.insert(line)
+        }
+        save(refresh: true)
+    }
+
+    private func setAllTrainLines(visible: Bool) {
+        if visible {
+            prefs.hiddenTrainLines.subtract(Set(LineColor.allCases))
+        } else {
+            prefs.hiddenTrainLines.formUnion(LineColor.allCases)
+        }
+        save(refresh: true)
+    }
+
+    private func toggleBusRoute(_ route: String) {
+        if prefs.hiddenBusRoutes.contains(route) {
+            prefs.hiddenBusRoutes.remove(route)
+        } else {
+            prefs.hiddenBusRoutes.insert(route)
+        }
+        save(refresh: true)
+    }
+
+    private func setAllBusRoutes(visible: Bool) {
+        if visible {
+            prefs.hiddenBusRoutes.subtract(Set(BusStopCatalog.allRoutes))
+        } else {
+            prefs.hiddenBusRoutes.formUnion(BusStopCatalog.allRoutes)
+        }
+        save(refresh: true)
+    }
+
+    private func toggleMetraRoute(_ routeId: String) {
+        if prefs.hiddenMetraRoutes.contains(routeId) {
+            prefs.hiddenMetraRoutes.remove(routeId)
+        } else {
+            prefs.hiddenMetraRoutes.insert(routeId)
+        }
+        save(refresh: true)
+    }
+
+    private func setAllMetraRoutes(visible: Bool) {
+        let routeIds = MetraStationCatalog.routes.map(\.id)
+        if visible {
+            prefs.hiddenMetraRoutes.subtract(Set(routeIds))
+        } else {
+            prefs.hiddenMetraRoutes.formUnion(routeIds)
+        }
+        save(refresh: true)
+    }
+
+    private func save(refresh: Bool = false) {
         model.preferences.saveRoutePreferences(prefs)
+        model.pinRevision += 1
+        if refresh {
+            Task { await model.refreshIfNeeded(force: true) }
+        }
     }
 
     private func setIntercampusEnabled(_ enabled: Bool) {
@@ -704,6 +913,41 @@ private struct DepartureTimeBelief {
     let count: Int
     let peakHour: Int?
     let latest: Date?
+}
+
+private struct VisibilityRouteChip<Badge: View>: View {
+    let isVisible: Bool
+    let action: () -> Void
+    @ViewBuilder let badge: () -> Badge
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: ChicagoSpacing.xs) {
+                badge()
+                    .opacity(isVisible ? 1 : 0.42)
+                Spacer(minLength: 0)
+                Image(systemName: isVisible ? "checkmark" : "minus")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(isVisible ? ChicagoPalette.green : ChicagoPalette.Gray.light)
+                    .frame(width: 12)
+            }
+            .padding(.horizontal, ChicagoSpacing.xs)
+            .frame(height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .fill(isVisible ? ChicagoPalette.Surface.elevated : ChicagoPalette.Gray.lightest.opacity(0.35))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .strokeBorder(
+                        isVisible ? ChicagoPalette.cornflower.opacity(0.45) : ChicagoPalette.Gray.light.opacity(0.28),
+                        lineWidth: ChicagoSpacing.Stroke.hairline
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(isVisible ? "Visible" : "Hidden")
+    }
 }
 
 /// Hits each CTA API directly with the keychain-stored key and inspects the
