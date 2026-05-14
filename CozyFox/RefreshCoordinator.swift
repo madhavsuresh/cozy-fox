@@ -19,6 +19,13 @@ final class RefreshCoordinator {
     /// profile when computing autopin hints. Held weakly because both objects
     /// are owned by `AppViewModel` and we don't want a retain cycle.
     weak var mobilitySummaryStore: MobilitySummaryStore?
+    /// Same weak-reference pattern: the bias store is owned by
+    /// `AppViewModel`; the coordinator only writes through it via the
+    /// `ArrivalGrader`.
+    weak var arrivalBiasStore: ArrivalBiasStore?
+    /// Phase 2 grader. In-memory state (the pending-grade table and the
+    /// previous-snapshot map) is reset every app launch by construction.
+    let arrivalGrader: ArrivalGrader
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -52,13 +59,16 @@ final class RefreshCoordinator {
         preferences: PreferencesStore,
         location: LocationCoordinator?,
         walkingStore: WalkingDistanceStore,
-        mobilitySummaryStore: MobilitySummaryStore? = nil
+        mobilitySummaryStore: MobilitySummaryStore? = nil,
+        arrivalBiasStore: ArrivalBiasStore? = nil
     ) {
         self.store = store
         self.preferences = preferences
         self.location = location
         self.walkingStore = walkingStore
         self.mobilitySummaryStore = mobilitySummaryStore
+        self.arrivalBiasStore = arrivalBiasStore
+        self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -325,6 +335,11 @@ final class RefreshCoordinator {
         if !collected.isEmpty {
             await store.replaceTrainArrivals(collected)
         }
+        // Phase 2: hand the freshly-fetched arrivals to the grader so it can
+        // register pending grades. Always runs (even on empty `collected`)
+        // so callers see consistent behavior; the grader's own guard short-
+        // circuits the empty case.
+        await arrivalGrader.ingestArrivals(collected)
     }
 
     private func refreshBuses(
@@ -579,6 +594,12 @@ final class RefreshCoordinator {
             }
         }
         latestPositions = collected
+        // Phase 2: feed the snapshot to the grader so it can resolve any
+        // pending grades against this snapshot's `nextStopId` transitions
+        // before the store overwrite. Either order is correct (the grader
+        // owns its own state) but doing it before `replaceVehiclePositions`
+        // keeps the pre/post-store-write boundary readable.
+        await arrivalGrader.ingestPositions(collected)
         await store.replaceVehiclePositions(collected)
     }
 
