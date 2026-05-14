@@ -184,6 +184,7 @@ public final class CachedIntercampusArrival {
     public var arrivalAt: Date
     public var delaySeconds: Int?
     public var isDelayed: Bool
+    public var timeSourceRaw: String?
     public var fetchedAt: Date
 
     public init(arrival: IntercampusArrival, fetchedAt: Date) {
@@ -200,11 +201,17 @@ public final class CachedIntercampusArrival {
         self.arrivalAt = arrival.arrivalAt
         self.delaySeconds = arrival.delaySeconds
         self.isDelayed = arrival.isDelayed
+        self.timeSourceRaw = arrival.timeSource.rawValue
         self.fetchedAt = fetchedAt
     }
 
     public var asModel: IntercampusArrival? {
         guard let direction = IntercampusDirection(rawValue: directionRaw) else { return nil }
+        let fallbackSource: IntercampusArrivalTimeSource = id.hasPrefix("intercampus-scheduled-")
+            ? .schedule
+            : .liveMap
+        let timeSource = timeSourceRaw
+            .flatMap(IntercampusArrivalTimeSource.init(rawValue:)) ?? fallbackSource
         return IntercampusArrival(
             id: id,
             routeId: routeId,
@@ -218,7 +225,8 @@ public final class CachedIntercampusArrival {
             generatedAt: generatedAt,
             arrivalAt: arrivalAt,
             delaySeconds: delaySeconds,
-            isDelayed: isDelayed
+            isDelayed: isDelayed,
+            timeSource: timeSource
         )
     }
 }

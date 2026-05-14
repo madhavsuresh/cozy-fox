@@ -114,6 +114,7 @@ struct NorthwesternIntercampusClientTests {
         #expect(arrivals.count == 1)
         #expect(arrivals.first?.direction == .southbound)
         #expect(arrivals.first?.vehicleLabel == "35007")
+        #expect(arrivals.first?.timeSource == .liveMap)
     }
 
     @Test func fallsBackToStaticScheduleWhenRealtimeHasNoStopPredictions() async throws {
@@ -140,6 +141,7 @@ struct NorthwesternIntercampusClientTests {
         #expect(arrivals.first?.routeId == "ebee9228-c993-4279-b7ce-8fca0a46ca65")
         #expect(arrivals.first?.direction == .southbound)
         #expect(arrivals.first?.arrivalAt ?? now > now)
+        #expect(arrivals.first?.timeSource == .schedule)
     }
 }
 

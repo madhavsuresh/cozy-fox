@@ -55,6 +55,21 @@ public struct IntercampusStop: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+public enum IntercampusArrivalTimeSource: String, Codable, Sendable, Hashable {
+    /// Time came from TripShot realtime updates, backed by the live vehicle map.
+    case liveMap
+    /// Time came from the static GTFS schedule because no realtime stop update
+    /// was available for this trip/stop.
+    case schedule
+
+    public var label: String {
+        switch self {
+        case .liveMap: "Live map"
+        case .schedule: "Schedule"
+        }
+    }
+}
+
 public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let routeId: String
@@ -69,6 +84,7 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
     public let arrivalAt: Date
     public let delaySeconds: Int?
     public let isDelayed: Bool
+    public let timeSource: IntercampusArrivalTimeSource
 
     public init(
         id: String,
@@ -83,7 +99,8 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
         generatedAt: Date,
         arrivalAt: Date,
         delaySeconds: Int?,
-        isDelayed: Bool
+        isDelayed: Bool,
+        timeSource: IntercampusArrivalTimeSource = .liveMap
     ) {
         self.id = id
         self.routeId = routeId
@@ -98,6 +115,7 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
         self.arrivalAt = arrivalAt
         self.delaySeconds = delaySeconds
         self.isDelayed = isDelayed
+        self.timeSource = timeSource
     }
 
     public func minutesUntilArrival(now: Date = .now) -> Int {
@@ -253,7 +271,8 @@ private struct IntercampusCatalogStore: Sendable {
                         generatedAt: generatedAt,
                         arrivalAt: arrivalAt,
                         delaySeconds: nil,
-                        isDelayed: false
+                        isDelayed: false,
+                        timeSource: .schedule
                     ))
                 }
             }
