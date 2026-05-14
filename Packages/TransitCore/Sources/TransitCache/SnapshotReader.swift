@@ -21,6 +21,7 @@ public struct SnapshotReader: Sendable {
         let trainArrivals = (try? context.fetch(FetchDescriptor<CachedTrainArrival>())) ?? []
         let busPredictions = (try? context.fetch(FetchDescriptor<CachedBusPrediction>())) ?? []
         let metraPredictions = (try? context.fetch(FetchDescriptor<CachedMetraPrediction>())) ?? []
+        let vehiclePositions = (try? context.fetch(FetchDescriptor<CachedVehiclePosition>())) ?? []
         let intercampusArrivals = (try? context.fetch(FetchDescriptor<CachedIntercampusArrival>())) ?? []
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
@@ -37,6 +38,10 @@ public struct SnapshotReader: Sendable {
         let metra = metraPredictions.map(\.asModel)
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
             .sorted { $0.arrivalAt < $1.arrivalAt }
+
+        let positions = vehiclePositions.compactMap(\.asModel)
+            .filter { $0.observedAt > now.addingTimeInterval(-10 * 60) }
+            .sorted { $0.observedAt > $1.observedAt }
 
         let intercampus = intercampusArrivals.compactMap(\.asModel)
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
@@ -88,6 +93,7 @@ public struct SnapshotReader: Sendable {
             busPredictions: Array(predictions.prefix(50)),
             metraPredictions: Array(metra.prefix(50)),
             intercampusArrivals: Array(intercampus.prefix(80)),
+            vehiclePositions: Array(positions.prefix(80)),
             nearestBike: nearbyPicks.first,
             nearbyBikePicks: nearbyPicks,
             nearbyFreeBikePicks: nearbyFreePicks,

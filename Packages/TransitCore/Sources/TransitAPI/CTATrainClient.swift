@@ -69,7 +69,7 @@ public actor CTATrainClient: CTATrainClientProtocol {
                         heading: Int(raw.heading ?? ""),
                         destinationName: raw.destNm,
                         nextStopId: Int(raw.nextStpId ?? ""),
-                        observedAt: Date()
+                        observedAt: raw.prdt.flatMap(CTAFormatter.parse) ?? Date()
                     )
                 }
             }

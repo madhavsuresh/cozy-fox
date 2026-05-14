@@ -13,9 +13,15 @@ struct SmallDashboardView: View {
     var body: some View {
         if let arrival = displayedTrainArrival {
             let line = arrival.line
-            let upcoming = displayedTrainArrivals
-                .prefix(8)
-                .map(\.arrivalAt)
+            let displayedArrivals = displayedTrainArrivals
+            let upcoming = displayedArrivals.prefix(8).map(\.arrivalAt)
+            let assessments = GhostTrainDetector().assessments(
+                for: displayedArrivals,
+                vehiclePositions: entry.snapshot.vehiclePositions,
+                arrivalsFetchedAt: entry.snapshot.trainsFetchedAt,
+                now: entry.date
+            )
+            let firstAssessment = assessments[arrival.id]
             let minutes = max(0, Int((arrival.arrivalAt.timeIntervalSince(entry.date) / 60).rounded()))
             let hasAlert = entry.snapshot.activeAlerts.contains {
                 $0.impactedLineColors.contains(line)
@@ -40,13 +46,19 @@ struct SmallDashboardView: View {
                     minutes,
                     unit: "min",
                     size: .lg,
-                    tone: arrival.isDelayed ? .alert : .primary,
+                    tone: arrival.isDelayed || firstAssessment?.isGhostLikely == true ? .alert : .primary,
                     accessibilityLabel: "\(minutes) minutes to next \(line.displayName) train"
                 )
+                if let badge = GhostTrainBadge(firstAssessment) {
+                    badge
+                }
                 HeadwayDotStrip(
                     arrivals: Array(upcoming),
                     accent: line.swiftUIColor,
-                    now: entry.date
+                    now: entry.date,
+                    complications: displayedArrivals.prefix(8).map {
+                        assessments[$0.id]?.headwayComplication
+                    }
                 )
             }
             .padding(ChicagoSpacing.sm)

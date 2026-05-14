@@ -19,6 +19,8 @@ struct MediumWidgetWrapper: View {
             metra: metra,
             bike: entry.snapshot.nearestBike,
             alerts: alerts,
+            vehiclePositions: entry.snapshot.vehiclePositions,
+            trainsFetchedAt: entry.snapshot.trainsFetchedAt,
             isStale: entry.snapshot.isAnythingStale(),
             now: entry.date
         )

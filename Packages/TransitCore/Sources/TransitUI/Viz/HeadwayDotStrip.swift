@@ -17,6 +17,12 @@ import SwiftUI
 /// opacity. Later arrivals fade with distance. Past arrivals are
 /// clamped out. Caps at 6 dots to keep the strip from feeling busy.
 public struct HeadwayDotStrip: View {
+    public enum Complication: Sendable, Hashable {
+        case unconfirmed
+        case likelyGhost
+        case stale
+    }
+
     public enum Style: Sendable {
         /// Standard surface — light card or dashboard background.
         case standard
@@ -32,12 +38,14 @@ public struct HeadwayDotStrip: View {
     private let accent: Color
     private let now: Date
     private let style: Style
+    private let complications: [Complication?]
 
     public init(
         arrivals: [Date],
         window: TimeInterval = 30 * 60,
         accent: Color,
         now: Date = .now,
+        complications: [Complication?] = [],
         style: Style = .standard
     ) {
         self.arrivals = arrivals
@@ -45,6 +53,7 @@ public struct HeadwayDotStrip: View {
         self.accent = accent
         self.now = now
         self.style = style
+        self.complications = complications
     }
 
     private var trackColor: Color {
@@ -96,8 +105,7 @@ public struct HeadwayDotStrip: View {
 
                 // Dots on the track
                 ForEach(Array(dotData.enumerated()), id: \.offset) { _, dot in
-                    Circle()
-                        .fill(accent.opacity(dot.opacity))
+                    dotView(dot)
                         .frame(width: dot.diameter, height: dot.diameter)
                         .position(x: dot.fraction * geo.size.width, y: trackY)
                 }
@@ -123,6 +131,30 @@ public struct HeadwayDotStrip: View {
         let diameter: CGFloat
         let opacity: Double
         let minutes: Int
+        let complication: Complication?
+    }
+
+    @ViewBuilder
+    private func dotView(_ dot: Dot) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Circle()
+                .fill(accent.opacity(dot.opacity))
+                .overlay {
+                    if let complication = dot.complication {
+                        Circle()
+                            .stroke(complicationColor(complication), lineWidth: 1.5)
+                    }
+                }
+            if let complication = dot.complication {
+                Image(systemName: complicationSymbol(complication))
+                    .font(.system(size: dot.diameter <= 8 ? 5 : 6, weight: .black))
+                    .foregroundStyle(complicationForeground(complication))
+                    .frame(width: 8, height: 8)
+                    .background(complicationColor(complication), in: Circle())
+                    .offset(x: 4, y: -4)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 
     /// Greedy left-to-right pass over the first three dots: keep each
@@ -146,7 +178,8 @@ public struct HeadwayDotStrip: View {
     private var dotData: [Dot] {
         arrivals
             .prefix(10)
-            .compactMap { arrival -> Dot? in
+            .enumerated()
+            .compactMap { index, arrival -> Dot? in
                 let delta = arrival.timeIntervalSince(now)
                 guard delta >= 0, delta <= window else { return nil }
                 let fraction = delta / window
@@ -159,10 +192,46 @@ public struct HeadwayDotStrip: View {
                 return Dot(fraction: fraction,
                            diameter: diameter,
                            opacity: opacity,
-                           minutes: minutes)
+                           minutes: minutes,
+                           complication: complication(at: index))
             }
             .prefix(6)
             .map { $0 }
+    }
+
+    private func complication(at index: Int) -> Complication? {
+        guard index < complications.count else { return nil }
+        return complications[index]
+    }
+
+    private func complicationSymbol(_ complication: Complication) -> String {
+        switch complication {
+        case .unconfirmed: "questionmark"
+        case .likelyGhost: "exclamationmark"
+        case .stale: "clock"
+        }
+    }
+
+    private func complicationColor(_ complication: Complication) -> Color {
+        switch (style, complication) {
+        case (_, .likelyGhost):
+            ChicagoPalette.starRed
+        case (_, .unconfirmed):
+            ChicagoPalette.gold
+        case (.standard, .stale):
+            ChicagoPalette.Gray.medium
+        case (.onDark, .stale):
+            ChicagoPalette.OnDarkSafe.tertiary
+        }
+    }
+
+    private func complicationForeground(_ complication: Complication) -> Color {
+        switch complication {
+        case .unconfirmed:
+            ChicagoPalette.Gray.darkest
+        case .likelyGhost, .stale:
+            .white
+        }
     }
 
     private var accessibleSummary: String {
@@ -172,6 +241,10 @@ public struct HeadwayDotStrip: View {
             .filter { $0 >= 0 }
         if minutes.isEmpty { return "No upcoming arrivals" }
         let list = minutes.map(String.init).joined(separator: ", ")
+        let flagged = complications.prefix(4).compactMap { $0 }.count
+        if flagged > 0 {
+            return "Upcoming arrivals at \(list) minutes, with \(flagged) unverified"
+        }
         return "Upcoming arrivals at \(list) minutes"
     }
 }

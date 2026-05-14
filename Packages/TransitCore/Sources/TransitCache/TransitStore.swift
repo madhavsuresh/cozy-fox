@@ -72,6 +72,18 @@ public actor TransitStore {
         }
     }
 
+    public func replaceVehiclePositions(_ positions: [VehiclePosition]) async {
+        let now = Date()
+        await MainActor.run {
+            let ctx = ModelContext(container)
+            try? ctx.delete(model: CachedVehiclePosition.self)
+            for position in positions {
+                ctx.insert(CachedVehiclePosition(position: position, fetchedAt: now))
+            }
+            try? ctx.save()
+        }
+    }
+
     public func replaceAlerts(_ alerts: [ServiceAlert]) async {
         let now = Date()
         await MainActor.run {
