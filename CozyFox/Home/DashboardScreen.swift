@@ -793,7 +793,7 @@ struct DashboardScreen: View {
         let trainChoices = homeTripTrainChoices(in: options)
         let busChoices = homeTripBusChoices(in: options)
         let metraChoices = homeTripMetraChoices(in: options)
-        selectedTrainChoiceIds = Set(option.trainChoices.compactMap { selected in
+        selectedTrainChoiceIds = Set(option.trainChoices.prefix(1).compactMap { selected in
             trainChoices.first { trainPinKey($0) == trainPinKey(selected) }?.id
         })
         selectedBusChoiceIds = Set(option.busChoices.compactMap { selected in
