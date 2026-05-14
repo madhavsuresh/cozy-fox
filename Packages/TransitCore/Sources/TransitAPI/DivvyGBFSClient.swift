@@ -24,13 +24,21 @@ public actor DivvyGBFSClient: DivvyGBFSClientProtocol {
 
     public func fetchStations() async throws -> [BikeStation] {
         async let info = fetch(StationInformationFeed.self, path: "station_information.json")
-        async let status = fetch(StationStatusFeed.self, path: "station_status.json")
+        async let status = fetch(
+            StationStatusFeed.self,
+            path: "station_status.json",
+            bypassLocalCache: true
+        )
         let (infoFeed, statusFeed) = try await (info, status)
         return merge(info: infoFeed.data.stations, status: statusFeed.data.stations)
     }
 
     public func fetchEBikes() async throws -> [EBike] {
-        async let bikes = fetch(FreeBikeStatusFeed.self, path: "free_bike_status.json")
+        async let bikes = fetch(
+            FreeBikeStatusFeed.self,
+            path: "free_bike_status.json",
+            bypassLocalCache: true
+        )
         // The vehicle_types feed is small and rarely changes, but we read it once
         // so we don't hardcode the "2" mapping forever.
         async let types = fetchVehicleTypes()
@@ -86,9 +94,20 @@ public actor DivvyGBFSClient: DivvyGBFSClientProtocol {
         }
     }
 
-    private func fetch<T: Decodable>(_ type: T.Type, path: String) async throws -> T {
+    private func fetch<T: Decodable>(
+        _ type: T.Type,
+        path: String,
+        bypassLocalCache: Bool = false
+    ) async throws -> T {
         let url = Self.baseURL.appendingPathComponent(path)
-        let request = URLRequest(url: url)
+        var request = URLRequest(url: url)
+        if bypassLocalCache {
+            // Availability feeds are already polled on the app refresh cadence;
+            // do not let URLCache reuse a response until the GBFS TTL expires.
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        }
         let (data, response) = try await http.data(for: request)
         guard (200..<300).contains(response.statusCode) else {
             throw APIError.http(status: response.statusCode)
