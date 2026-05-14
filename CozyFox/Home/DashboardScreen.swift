@@ -984,12 +984,16 @@ struct DashboardScreen: View {
         if plan.flavor == .standard, !plan.summary.isEmpty {
             return plan.summary
         }
+        if plan.flavor == .busToTrain {
+            return "Bus + train route"
+        }
         if transitLegCount > 1 {
             return "Multimodal route"
         }
         switch plan.flavor {
         case .train: return "Train route"
         case .metra: return "Metra route"
+        case .busToTrain: return "Bus + train route"
         case .busShortestRide: return "Bus route"
         case .busShortestWalk: return "Low-walk bus route"
         case .standard: return "Transit route"

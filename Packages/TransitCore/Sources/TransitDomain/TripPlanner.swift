@@ -98,6 +98,8 @@ public enum TripPlanFlavor: String, Sendable, Hashable {
     /// ride). Only emitted when it's on a different route than the
     /// `busShortestRide` pick — same-route picks would set the same `pinnedBusRoute`.
     case busShortestWalk
+    /// Bus access to an L station, followed by a train ride.
+    case busToTrain
     /// The fastest Metra option we found.
     case metra
 }
@@ -166,14 +168,19 @@ public struct TripPlanner: Sendable {
         request.requestsAlternateRoutes = true
 
         let directions = MKDirections(request: request)
+        let local = fallback.plan(from: origin, to: destination)
         if let response = try? await directions.calculate(), !response.routes.isEmpty {
-            return response.routes.prefix(2).map(Self.decompose(route:))
+            let mapKitPlans = response.routes.map(Self.decompose(route:))
+            let merged = Self.merge(mapKitPlans: mapKitPlans, localPlans: local)
+            if !merged.isEmpty {
+                return merged
+            }
         }
 
         // Apple Maps refused the transit query — fall back to a heuristic
-        // pick from the bundled CTA catalogs. The local planner returns up to
-        // two plans (best train, best bus) so the user can compare.
-        let local = fallback.plan(from: origin, to: destination)
+        // pick from the bundled CTA catalogs. The local planner returns
+        // comparison plans (train, bus, bus-to-train, Metra) so the user can
+        // compare the routes that produce distinct live pins.
         if !local.isEmpty {
             return local
         }
@@ -239,6 +246,73 @@ public struct TripPlanner: Sendable {
             PlannerCoordinate(latitude: start.latitude, longitude: start.longitude),
             PlannerCoordinate(latitude: end.latitude, longitude: end.longitude)
         )
+    }
+
+    private static func merge(mapKitPlans: [TripPlan], localPlans: [TripPlan]) -> [TripPlan] {
+        var merged: [TripPlan] = []
+        var signatures: Set<String> = []
+
+        for plan in mapKitPlans.prefix(4) {
+            appendUnique(plan, to: &merged, signatures: &signatures, maxCount: 6)
+        }
+
+        let prioritizedLocal = localPlans.sorted {
+            localPriority($0.flavor) < localPriority($1.flavor)
+        }
+        for plan in prioritizedLocal {
+            appendUnique(plan, to: &merged, signatures: &signatures, maxCount: 6)
+        }
+
+        return merged
+    }
+
+    private static func appendUnique(
+        _ plan: TripPlan,
+        to plans: inout [TripPlan],
+        signatures: inout Set<String>,
+        maxCount: Int
+    ) {
+        guard plans.count < maxCount else { return }
+        let signature = transitSignature(for: plan)
+        guard signatures.insert(signature).inserted else { return }
+        plans.append(plan)
+    }
+
+    private static func localPriority(_ flavor: TripPlanFlavor) -> Int {
+        switch flavor {
+        case .busToTrain: return 0
+        case .train: return 1
+        case .metra: return 2
+        case .busShortestRide: return 3
+        case .busShortestWalk: return 4
+        case .standard: return 5
+        }
+    }
+
+    private static func transitSignature(for plan: TripPlan) -> String {
+        let pieces = plan.legs.compactMap { leg -> String? in
+            guard let resolution = leg.transit?.resolution else { return nil }
+            let coordinate = leg.startCoordinate.map {
+                "@\(Int(($0.latitude * 1_000).rounded())):\(Int(($0.longitude * 1_000).rounded()))"
+            } ?? ""
+            return "\(resolution.signature)\(coordinate)"
+        }
+        return pieces.isEmpty ? plan.summary : pieces.joined(separator: "→")
+    }
+}
+
+private extension TransitResolution {
+    var signature: String {
+        switch self {
+        case .line(let line):
+            return "line:\(line.rawValue)"
+        case .bus(let route):
+            return "bus:\(route)"
+        case .metra(let route):
+            return "metra:\(route)"
+        case .unknown(let raw):
+            return "unknown:\(raw)"
+        }
     }
 }
 
