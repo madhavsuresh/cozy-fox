@@ -435,6 +435,10 @@ struct DashboardScreen: View {
                 selectedTrainChoiceId = options.first?.trainChoices.first?.id
                 selectedBusChoiceId = options.first?.busChoices.first?.id
                 selectedMetraChoiceId = options.first?.metraChoices.first?.id
+                ensureHomeTripAccessRoutes(
+                    options,
+                    origin: (lat: origin.latitude, lon: origin.longitude)
+                )
                 homePinStatusText = options.isEmpty
                     ? "No pin-ready transit legs found for \(destinationInfo.title)."
                     : "Choose the route pieces to pin."
@@ -490,6 +494,13 @@ struct DashboardScreen: View {
                         Text("\(durationText(option.expectedTravelTime)) · \(option.transitSummary)")
                             .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                             .foregroundStyle(ChicagoPalette.Gray.medium)
+                        if let boardingAccess = option.boardingAccess, let origin {
+                            Text(homeTripBoardingAccessText(boardingAccess, origin: origin))
+                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                .foregroundStyle(ChicagoPalette.Gray.medium)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                        }
                     }
                     Spacer()
                 }
@@ -864,6 +875,14 @@ struct DashboardScreen: View {
             let dedupedBuses = dedupeBusChoices(busChoices)
             let dedupedMetra = dedupeMetraChoices(metraChoices)
             guard !dedupedTrains.isEmpty || !dedupedBuses.isEmpty || !dedupedMetra.isEmpty else { return nil }
+            let boardingAccess = homeTripBoardingAccess(
+                plan: plan,
+                transitLegs: transitLegs,
+                trains: dedupedTrains,
+                buses: dedupedBuses,
+                metras: dedupedMetra,
+                origin: origin
+            )
 
             return HomeTripOption(
                 title: homeTripTitle(plan: plan, transitLegCount: transitLegs.count),
@@ -874,11 +893,117 @@ struct DashboardScreen: View {
                 ),
                 expectedTravelTime: plan.expectedTravelTime,
                 totalDistanceMeters: plan.totalDistanceMeters,
+                boardingAccess: boardingAccess,
                 trainChoices: dedupedTrains,
                 busChoices: dedupedBuses,
                 metraChoices: dedupedMetra
             )
         }
+    }
+
+    private func homeTripBoardingAccess(
+        plan: TripPlan,
+        transitLegs: [(offset: Int, element: TripLeg)],
+        trains: [HomeTripTrainChoice],
+        buses: [HomeTripBusChoice],
+        metras: [HomeTripMetraChoice],
+        origin: PlannerCoordinate
+    ) -> HomeTripBoardingAccess? {
+        guard let firstTransit = transitLegs.min(by: { $0.offset < $1.offset }),
+              let resolution = firstTransit.element.transit?.resolution
+        else { return nil }
+
+        let accessMeters = accessDistanceForTransitLeg(
+            plan: plan,
+            transitLegIndex: firstTransit.offset,
+            origin: origin
+        )
+
+        switch resolution {
+        case .line:
+            guard let choice = trains.first(where: { $0.legIndex == firstTransit.offset }) else { return nil }
+            return HomeTripBoardingAccess(
+                kind: .train(stationId: choice.stationId),
+                title: choice.stationName,
+                destinationKey: WalkingDistanceStore.stationDestinationKey(stationId: choice.stationId),
+                directDistanceMeters: accessMeters
+            )
+        case .bus:
+            guard let choice = buses.first(where: { $0.legIndex == firstTransit.offset }) else { return nil }
+            return HomeTripBoardingAccess(
+                kind: .bus(stopId: choice.stopId),
+                title: choice.stopName,
+                destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: choice.stopId),
+                directDistanceMeters: accessMeters
+            )
+        case .metra:
+            guard let choice = metras.first(where: { $0.legIndex == firstTransit.offset }) else { return nil }
+            return HomeTripBoardingAccess(
+                kind: .metra(stationId: choice.stationId),
+                title: choice.stationName,
+                destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: choice.stationId),
+                directDistanceMeters: accessMeters
+            )
+        case .unknown:
+            return nil
+        }
+    }
+
+    private func accessDistanceForTransitLeg(
+        plan: TripPlan,
+        transitLegIndex: Int,
+        origin: PlannerCoordinate
+    ) -> Double {
+        if transitLegIndex > plan.legs.startIndex {
+            let previousLeg = plan.legs[plan.legs.index(before: transitLegIndex)]
+            if previousLeg.mode == .walking {
+                return previousLeg.distanceMeters
+            }
+        }
+        guard let start = plan.legs[transitLegIndex].startCoordinate else { return 0 }
+        return Distance.meters(
+            from: (origin.latitude, origin.longitude),
+            to: (start.latitude, start.longitude)
+        )
+    }
+
+    private func homeTripBoardingAccessText(
+        _ boardingAccess: HomeTripBoardingAccess,
+        origin: (lat: Double, lon: Double)
+    ) -> String {
+        let summary = accessTimeSummary(
+            origin: origin,
+            destinationKey: boardingAccess.destinationKey,
+            directDistanceMeters: boardingAccess.directDistanceMeters
+        )
+        return "\(AccessTimeFormatter.short(summary)) to \(boardingAccess.title)"
+    }
+
+    private func ensureHomeTripAccessRoutes(
+        _ options: [HomeTripOption],
+        origin: (lat: Double, lon: Double)
+    ) {
+        let accesses = options.compactMap(\.boardingAccess)
+        let stationIds = Set(accesses.compactMap { access -> Int? in
+            if case .train(stationId: let stationId) = access.kind { return stationId }
+            return nil
+        })
+        let stopIds = Set(accesses.compactMap { access -> Int? in
+            if case .bus(stopId: let stopId) = access.kind { return stopId }
+            return nil
+        })
+        let metraStationIds = Set(accesses.compactMap { access -> String? in
+            if case .metra(stationId: let stationId) = access.kind { return stationId }
+            return nil
+        })
+
+        let stations = LStationCatalog.all.filter { stationIds.contains($0.id) }
+        let stops = BusStopCatalog.all.filter { stopIds.contains($0.id) }
+        let metraStations = MetraStationCatalog.all.filter { metraStationIds.contains($0.id) }
+
+        model.walkingResolver.ensureFresh(origin: origin, stations: stations)
+        model.walkingResolver.ensureFresh(origin: origin, stops: stops)
+        model.walkingResolver.ensureFresh(origin: origin, metraStations: metraStations)
     }
 
     private func trainChoicesForHomeTrip(
@@ -976,15 +1101,15 @@ struct DashboardScreen: View {
     }
 
     private func homeTripTitle(plan: TripPlan, transitLegCount: Int) -> String {
-        if plan.flavor == .standard, !plan.summary.isEmpty {
-            return plan.summary
+        if let summary = cleanedTripSummary(plan.summary) {
+            switch plan.flavor {
+            case .standard:
+                return summary
+            case .train, .busShortestRide, .busShortestWalk, .busToTrain, .metra:
+                return summary
+            }
         }
-        if plan.flavor == .busToTrain {
-            return "Bus + train route"
-        }
-        if transitLegCount > 1 {
-            return "Multimodal route"
-        }
+        if transitLegCount > 1 { return "Multimodal route" }
         switch plan.flavor {
         case .train: return "Train route"
         case .metra: return "Metra route"
@@ -993,6 +1118,13 @@ struct DashboardScreen: View {
         case .busShortestWalk: return "Low-walk bus route"
         case .standard: return "Transit route"
         }
+    }
+
+    private func cleanedTripSummary(_ summary: String) -> String? {
+        let cleaned = summary
+            .replacingOccurrences(of: " · estimated", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     private func homeTripTransitSummary(
@@ -1610,6 +1742,7 @@ struct DashboardScreen: View {
             walkingTravelTime: entry.displayTravelTime,
             isApproximateWalkingTime: entry.isApproximateTravelTime,
             cyclingTravelTime: cycling?.expectedTravelTime
+                ?? AccessTimeFormatter.approximateCyclingTravelTime(distanceMeters: entry.accessDistanceMeters)
         )
     }
 
@@ -1633,6 +1766,7 @@ struct DashboardScreen: View {
                 ?? AccessTimeFormatter.approximateWalkingTravelTime(distanceMeters: directDistanceMeters),
             isApproximateWalkingTime: walking == nil,
             cyclingTravelTime: cycling?.expectedTravelTime
+                ?? AccessTimeFormatter.approximateCyclingTravelTime(distanceMeters: directDistanceMeters)
         )
     }
 
@@ -3206,9 +3340,23 @@ private struct HomeTripOption: Identifiable {
     let transitSummary: String
     let expectedTravelTime: TimeInterval
     let totalDistanceMeters: Double
+    let boardingAccess: HomeTripBoardingAccess?
     let trainChoices: [HomeTripTrainChoice]
     let busChoices: [HomeTripBusChoice]
     let metraChoices: [HomeTripMetraChoice]
+}
+
+private struct HomeTripBoardingAccess: Hashable {
+    enum Kind: Hashable {
+        case train(stationId: Int)
+        case bus(stopId: Int)
+        case metra(stationId: String)
+    }
+
+    let kind: Kind
+    let title: String
+    let destinationKey: String
+    let directDistanceMeters: Double
 }
 
 private struct HomeTripTrainChoice: Identifiable, Hashable {
@@ -3575,10 +3723,15 @@ private struct AccessTimeSummary {
 
 private enum AccessTimeFormatter {
     private static let walkingMetersPerMinute = 84.0
+    private static let cyclingMetersPerMinute = 250.0
     private static let minimumCyclingDisplayTime: TimeInterval = 2 * 60
 
     static func approximateWalkingTravelTime(distanceMeters: Double) -> TimeInterval {
         (distanceMeters / walkingMetersPerMinute) * 60
+    }
+
+    static func approximateCyclingTravelTime(distanceMeters: Double) -> TimeInterval {
+        (distanceMeters / cyclingMetersPerMinute) * 60
     }
 
     static func short(_ summary: AccessTimeSummary) -> String {
