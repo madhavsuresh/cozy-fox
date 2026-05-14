@@ -52,6 +52,7 @@ struct DashboardScreen: View {
 
     private let tripPlanner = TripPlanner()
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
+    private let corridorResolver = TransitCorridorResolver()
 
     var body: some View {
         NavigationStack {
@@ -3209,7 +3210,10 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                 } else {
                     nearbyLLines
-                    if !nearbyLines.isEmpty || !nearbyBusRoutes.isEmpty || !nearbyMetraRoutes.isEmpty {
+                    if !nearbyTrainCorridors.isEmpty
+                        || !nearbyBusCorridors.isEmpty
+                        || !nearbyMetraRoutes.isEmpty
+                    {
                         Rectangle()
                             .fill(ChicagoPalette.cornflower.opacity(0.4))
                             .frame(height: ChicagoSpacing.Stroke.hairline)
@@ -3225,21 +3229,15 @@ struct DashboardScreen: View {
     private var nearbyLLines: some View {
         if !routePreferences.isModeVisible(.trains) {
             EmptyView()
-        } else if !nearbyLines.isEmpty {
+        } else if !nearbyTrainCorridors.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                sectionLabel("Trains within walking distance")
-                SmallMultiplesRow(nearbyLines) { entry in
-                    let arrival = arrivals(forLine: entry.line, station: entry.station).first
-                    let minutes = arrival.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
-                    ArrivalTile(
-                        badge: RouteBadge(line: entry.line, size: .md),
-                        minutes: minutes,
-                        subtitle: entry.station.name
-                    )
+                sectionLabel("Train corridors nearby")
+                SmallMultiplesRow(nearbyTrainCorridors) { entry in
+                    NearbyTrainCorridorTile(entry: entry, now: .now)
                 }
             }
         } else {
-            Text("No L lines within 1.5 km")
+            Text("No L corridors within 2 km")
                 .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         }
@@ -3249,17 +3247,11 @@ struct DashboardScreen: View {
     private var nearbyBuses: some View {
         if !routePreferences.isModeVisible(.buses) {
             EmptyView()
-        } else if !nearbyBusRoutes.isEmpty {
+        } else if !nearbyBusCorridors.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                sectionLabel("Buses nearby")
-                SmallMultiplesRow(nearbyBusRoutes) { entry in
-                    let pred = predictions(for: entry.stop).first
-                    let minutes = pred.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
-                    ArrivalTile(
-                        badge: RouteBadge(bus: entry.stop.route, size: .md),
-                        minutes: minutes,
-                        subtitle: entry.stop.name
-                    )
+                sectionLabel("Bus corridors nearby")
+                SmallMultiplesRow(nearbyBusCorridors) { entry in
+                    NearbyBusCorridorTile(entry: entry, now: .now)
                     .onTapGesture { setPinnedBus(entry.stop.route) }
                 }
             }
@@ -3309,64 +3301,84 @@ struct DashboardScreen: View {
         ClosedStationsAnalyzer.closedStationIds(from: model.snapshot.activeAlerts)
     }
 
-    private var nearbyLines: [LineEntry] {
+    private var nearbyTrainCorridors: [TrainCorridorEntry] {
         guard routePreferences.isModeVisible(.trains), let origin else { return [] }
-        let stations = NearestStationResolver(maxDistanceMeters: 2_000)
-            .all(
-                within: 2_000,
-                of: origin,
-                catalog: LStationCatalog.all,
-                excludingStationIds: closedStationIds
+        let candidates = corridorResolver.nearbyTrainCandidates(
+            to: origin,
+            radiusMeters: 2_000,
+            limitPerCorridor: 5,
+            catalog: LStationCatalog.all,
+            excludingStationIds: closedStationIds,
+            excludingLines: pinnedLine.map { Set([$0]) } ?? [],
+            isLineVisible: isTrainLineDiscoverable
+        )
+
+        var bestByCorridor: [TransitCorridor: TrainCorridorEntry] = [:]
+        for candidate in candidates {
+            let walking = model.walkingResolver.cached(
+                origin: origin,
+                stationId: candidate.station.id
             )
-
-        // Opportunistic walking-aware re-ranking: if MapKit has already
-        // resolved a walking distance for this (origin-bucket, station)
-        // pair via the pinned-line card, use it. Otherwise keep the
-        // resolver's Haversine order. No new MapKit requests are kicked
-        // off here — the "Near you" view is glanceable and we don't want
-        // to fan out per-line walking queries on every refresh.
-        let walkingResolver = model.walkingResolver
-        let reranked: [(station: LStation, haversine: Double, rankingMeters: Double)] = stations
-            .map { entry in
-                let walking = walkingResolver.cached(
-                    origin: origin,
-                    stationId: entry.station.id
-                )
-                return (entry.station, entry.distance, walking?.meters ?? entry.distance)
-            }
-            .sorted { $0.rankingMeters < $1.rankingMeters }
-
-        var byLine: [LineColor: (station: LStation, distance: Double)] = [:]
-        for entry in reranked {
-            for line in entry.station.servedLines {
-                if byLine[line] == nil {
-                    byLine[line] = (entry.station, entry.haversine)
+            let distance = walking?.meters ?? candidate.distanceMeters
+            let arrivals = arrivals(
+                forLine: candidate.line,
+                station: candidate.station,
+                limit: 12
+            )
+            let entry = TrainCorridorEntry(
+                corridor: candidate.corridor,
+                line: candidate.line,
+                station: candidate.station,
+                distance: distance,
+                directionGroups: trainDirectionGroups(from: arrivals),
+                catchableArrivalAt: catchableArrival(from: arrivals, distanceMeters: distance)?.arrivalAt
+            )
+            if let current = bestByCorridor[candidate.corridor] {
+                if isBetterTrainCorridorEntry(entry, than: current) {
+                    bestByCorridor[candidate.corridor] = entry
                 }
+            } else {
+                bestByCorridor[candidate.corridor] = entry
             }
         }
 
-        return byLine
-            .filter { $0.key != pinnedLine }
-            .filter { isTrainLineDiscoverable($0.key) }
-            .map { LineEntry(line: $0.key, station: $0.value.station, distance: $0.value.distance) }
-            .sorted { $0.distance < $1.distance }
+        return TransitCorridor.trainOrder.compactMap { bestByCorridor[$0] }
     }
 
-    private var nearbyBusRoutes: [BusEntry] {
+    private var nearbyBusCorridors: [BusCorridorEntry] {
         guard routePreferences.isModeVisible(.buses), let origin else { return [] }
-        let resolver = NearestBusStopResolver(maxDistanceMeters: 1_500)
-        let stops = resolver.nearest(to: origin, limit: 8, catalog: BusStopCatalog.all)
-        return stops
-            .filter { $0.route != pinnedBusRoute }
-            .filter { isBusRouteDiscoverable($0.route) }
-            .prefix(5)
-            .map { stop -> BusEntry in
-                let d = Distance.meters(
-                    from: origin,
-                    to: (stop.latitude, stop.longitude)
+        let candidates = corridorResolver.nearbyBusCandidates(
+            to: origin,
+            radiusMeters: 1_500,
+            limitPerCorridor: 8,
+            catalog: BusStopCatalog.all,
+            excludingRoute: pinnedBusRoute,
+            isRouteVisible: isBusRouteDiscoverable
+        )
+
+        var bestByCorridor: [TransitCorridor: BusCorridorEntry] = [:]
+        for candidate in candidates {
+            let predictions = predictions(for: candidate.stop, limit: 4)
+            let entry = BusCorridorEntry(
+                corridor: candidate.corridor,
+                stop: candidate.stop,
+                distance: candidate.distanceMeters,
+                predictions: predictions,
+                catchablePrediction: catchablePrediction(
+                    from: predictions,
+                    distanceMeters: candidate.distanceMeters
                 )
-                return BusEntry(stop: stop, distance: d)
+            )
+            if let current = bestByCorridor[candidate.corridor] {
+                if isBetterBusCorridorEntry(entry, than: current) {
+                    bestByCorridor[candidate.corridor] = entry
+                }
+            } else {
+                bestByCorridor[candidate.corridor] = entry
             }
+        }
+
+        return TransitCorridor.busOrder.compactMap { bestByCorridor[$0] }
     }
 
     private var nearbyMetraRoutes: [MetraEntry] {
@@ -3382,12 +3394,113 @@ struct DashboardScreen: View {
             .map { MetraEntry(routeId: $0.routeId, station: $0.station, distance: $0.distance) }
     }
 
-    private func arrivals(forLine line: LineColor, station: LStation) -> [Arrival] {
+    private func arrivals(
+        forLine line: LineColor,
+        station: LStation,
+        limit: Int = 3
+    ) -> [Arrival] {
         model.snapshot.trainArrivals
             .filter { $0.line == line && $0.stationId == station.id }
             .sorted { $0.arrivalAt < $1.arrivalAt }
-            .prefix(3)
+            .prefix(limit)
             .map { $0 }
+    }
+
+    private func trainDirectionGroups(from arrivals: [Arrival]) -> [NearbyTrainDirectionGroup] {
+        Dictionary(grouping: arrivals, by: \.destinationName)
+            .map { destination, grouped in
+                NearbyTrainDirectionGroup(
+                    destinationName: destination,
+                    arrivals: grouped
+                        .sorted { $0.arrivalAt < $1.arrivalAt }
+                        .prefix(2)
+                        .map(\.arrivalAt)
+                )
+            }
+            .sorted { lhs, rhs in
+                guard let lhsFirst = lhs.arrivals.first else { return false }
+                guard let rhsFirst = rhs.arrivals.first else { return true }
+                return lhsFirst < rhsFirst
+            }
+            .prefix(2)
+            .map { $0 }
+    }
+
+    private func catchableArrival(
+        from arrivals: [Arrival],
+        distanceMeters: Double,
+        now: Date = .now
+    ) -> Arrival? {
+        let cutoff = now.addingTimeInterval(
+            AccessTimeFormatter.approximateWalkingTravelTime(distanceMeters: distanceMeters)
+                + NearbyTransitCatchability.boardingBuffer
+        )
+        return arrivals.first { $0.arrivalAt >= cutoff }
+    }
+
+    private func catchablePrediction(
+        from predictions: [BusPrediction],
+        distanceMeters: Double,
+        now: Date = .now
+    ) -> BusPrediction? {
+        let cutoff = now.addingTimeInterval(
+            AccessTimeFormatter.approximateWalkingTravelTime(distanceMeters: distanceMeters)
+                + NearbyTransitCatchability.boardingBuffer
+        )
+        return predictions.first { $0.arrivalAt >= cutoff }
+    }
+
+    private func isBetterTrainCorridorEntry(
+        _ lhs: TrainCorridorEntry,
+        than rhs: TrainCorridorEntry
+    ) -> Bool {
+        if (lhs.catchableArrivalAt != nil) != (rhs.catchableArrivalAt != nil) {
+            return lhs.catchableArrivalAt != nil
+        }
+        if let lhsArrival = lhs.catchableArrivalAt,
+           let rhsArrival = rhs.catchableArrivalAt,
+           lhsArrival != rhsArrival
+        {
+            return lhsArrival < rhsArrival
+        }
+        if let lhsNext = lhs.nextArrivalAt, let rhsNext = rhs.nextArrivalAt, lhsNext != rhsNext {
+            return lhsNext < rhsNext
+        }
+        if (lhs.nextArrivalAt != nil) != (rhs.nextArrivalAt != nil) {
+            return lhs.nextArrivalAt != nil
+        }
+        if lhs.distance != rhs.distance {
+            return lhs.distance < rhs.distance
+        }
+        return lhs.line.rawValue < rhs.line.rawValue
+    }
+
+    private func isBetterBusCorridorEntry(
+        _ lhs: BusCorridorEntry,
+        than rhs: BusCorridorEntry
+    ) -> Bool {
+        if (lhs.catchablePrediction != nil) != (rhs.catchablePrediction != nil) {
+            return lhs.catchablePrediction != nil
+        }
+        if let lhsArrival = lhs.catchablePrediction?.arrivalAt,
+           let rhsArrival = rhs.catchablePrediction?.arrivalAt,
+           lhsArrival != rhsArrival
+        {
+            return lhsArrival < rhsArrival
+        }
+        if let lhsNext = lhs.displayPrediction?.arrivalAt,
+           let rhsNext = rhs.displayPrediction?.arrivalAt,
+           lhsNext != rhsNext
+        {
+            return lhsNext < rhsNext
+        }
+        if (lhs.displayPrediction != nil) != (rhs.displayPrediction != nil) {
+            return lhs.displayPrediction != nil
+        }
+        if lhs.distance != rhs.distance {
+            return lhs.distance < rhs.distance
+        }
+        return lhs.stop.route.localizedStandardCompare(rhs.stop.route) == .orderedAscending
     }
 
     private var trainVehiclePositions: [VehiclePosition] {
@@ -3413,11 +3526,11 @@ struct DashboardScreen: View {
         arrivals.map { assessments[$0.id]?.headwayComplication }
     }
 
-    private func predictions(for stop: BusStop) -> [BusPrediction] {
+    private func predictions(for stop: BusStop, limit: Int = 3) -> [BusPrediction] {
         model.snapshot.busPredictions
             .filter { $0.stopId == stop.id && $0.route == stop.route }
             .sorted { $0.arrivalAt < $1.arrivalAt }
-            .prefix(3)
+            .prefix(limit)
             .map { $0 }
     }
 
@@ -3965,17 +4078,47 @@ private struct AlertRow: View {
 
 // MARK: - Row entry types
 
-private struct LineEntry: Identifiable {
+private struct TrainCorridorEntry: Identifiable {
+    let corridor: TransitCorridor
     let line: LineColor
     let station: LStation
     let distance: Double
-    var id: LineColor { line }
+    let directionGroups: [NearbyTrainDirectionGroup]
+    let catchableArrivalAt: Date?
+
+    var id: String { "\(corridor.rawValue)-\(line.rawValue)-\(station.id)" }
+
+    var nextArrivalAt: Date? {
+        directionGroups.compactMap(\.arrivals.first).min()
+    }
 }
 
-private struct BusEntry: Identifiable {
+private struct NearbyTrainDirectionGroup: Identifiable, Hashable {
+    let destinationName: String
+    let arrivals: [Date]
+
+    var id: String { destinationName }
+}
+
+private struct BusCorridorEntry: Identifiable {
+    let corridor: TransitCorridor
     let stop: BusStop
     let distance: Double
-    var id: String { "\(stop.id)-\(stop.route)" }
+    let predictions: [BusPrediction]
+    let catchablePrediction: BusPrediction?
+
+    var id: String { "\(corridor.rawValue)-\(stop.id)-\(stop.route)" }
+
+    var displayPrediction: BusPrediction? {
+        catchablePrediction ?? predictions.first
+    }
+
+    var displayDirection: String {
+        if let prediction = displayPrediction, !prediction.directionName.isEmpty {
+            return prediction.directionName
+        }
+        return stop.directionLabel
+    }
 }
 
 private struct MetraEntry: Identifiable {
@@ -3983,6 +4126,212 @@ private struct MetraEntry: Identifiable {
     let station: MetraStation
     let distance: Double
     var id: String { "\(routeId)-\(station.id)" }
+}
+
+private struct NearbyTrainCorridorTile: View {
+    let entry: TrainCorridorEntry
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
+                corridorLabel(entry.corridor)
+                RouteBadge(line: entry.line, size: .sm)
+            }
+            Text(entry.station.name)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(walkLabel)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+                .lineLimit(1)
+
+            if entry.directionGroups.isEmpty {
+                Text("No trains")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.Gray.light)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(entry.directionGroups) { group in
+                        HStack(alignment: .firstTextBaseline, spacing: ChicagoSpacing.xs) {
+                            Text(shortDestination(group.destinationName))
+                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: ChicagoSpacing.xs)
+                            Text(minutesList(group.arrivals))
+                                .font(ChicagoTypography.body(.bold, relativeTo: .caption))
+                                .monospacedDigit()
+                                .foregroundStyle(entry.line.swiftUIColor)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(ChicagoSpacing.sm)
+        .frame(width: 150, height: 132, alignment: .topLeading)
+        .background(
+            ChicagoPalette.Surface.card,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                              lineWidth: ChicagoSpacing.Stroke.hairline)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var walkLabel: String {
+        AccessTimeFormatter.short(AccessTimeSummary(
+            walkingTravelTime: AccessTimeFormatter.approximateWalkingTravelTime(distanceMeters: entry.distance),
+            isApproximateWalkingTime: true,
+            cyclingTravelTime: nil
+        ))
+    }
+
+    private var accessibilityLabel: String {
+        let directionText = entry.directionGroups
+            .map { "\($0.destinationName), \(minutesList($0.arrivals)) minutes" }
+            .joined(separator: ", ")
+        return "\(entry.corridor.displayName), \(entry.line.displayName), \(entry.station.name), \(walkLabel), \(directionText)"
+    }
+
+    private func minutesList(_ dates: [Date]) -> String {
+        let minutes = dates.map { max(0, Int(($0.timeIntervalSince(now) / 60).rounded())) }
+        guard !minutes.isEmpty else { return "No train" }
+        return minutes.map(String.init).joined(separator: ", ")
+    }
+
+    private func shortDestination(_ destination: String) -> String {
+        if destination.count <= 14 { return destination }
+        if let slash = destination.firstIndex(of: "/") {
+            return String(destination[..<slash])
+        }
+        return destination
+    }
+
+    private func corridorLabel(_ corridor: TransitCorridor) -> some View {
+        Text(corridor.shortLabel)
+            .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
+            .foregroundStyle(ChicagoPalette.bahama)
+            .padding(.horizontal, ChicagoSpacing.xs)
+            .padding(.vertical, 2)
+            .background(
+                ChicagoPalette.Surface.elevated,
+                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm)
+            )
+    }
+}
+
+private struct NearbyBusCorridorTile: View {
+    let entry: BusCorridorEntry
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .center, spacing: ChicagoSpacing.xs) {
+                corridorLabel(entry.corridor)
+                RouteBadge(bus: entry.stop.route, size: .sm)
+            }
+            Text(entry.displayDirection)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(entry.stop.name)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+            if let prediction = entry.displayPrediction {
+                let minutes = max(0, Int((prediction.arrivalAt.timeIntervalSince(now) / 60).rounded()))
+                BigNumber(
+                    minutes,
+                    unit: "min",
+                    size: .md,
+                    tone: prediction.isDelayed ? .alert : .primary,
+                    accessibilityLabel: "\(minutes) minutes to route \(entry.stop.route)"
+                )
+            } else {
+                Text("No buses")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.Gray.light)
+            }
+            Text(walkLabel)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+                .lineLimit(1)
+        }
+        .padding(ChicagoSpacing.sm)
+        .frame(width: 138, height: 132, alignment: .topLeading)
+        .background(
+            ChicagoPalette.Surface.card,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(ChicagoPalette.cornflower.opacity(0.3),
+                              lineWidth: ChicagoSpacing.Stroke.hairline)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var walkLabel: String {
+        AccessTimeFormatter.short(AccessTimeSummary(
+            walkingTravelTime: AccessTimeFormatter.approximateWalkingTravelTime(distanceMeters: entry.distance),
+            isApproximateWalkingTime: true,
+            cyclingTravelTime: nil
+        ))
+    }
+
+    private var accessibilityLabel: String {
+        let minutes = entry.displayPrediction.map {
+            "\(max(0, Int(($0.arrivalAt.timeIntervalSince(now) / 60).rounded()))) minutes"
+        } ?? "no buses"
+        return "\(entry.corridor.displayName), bus route \(entry.stop.route), \(entry.displayDirection), \(entry.stop.name), \(minutes), \(walkLabel)"
+    }
+
+    private func corridorLabel(_ corridor: TransitCorridor) -> some View {
+        Text(corridor.shortLabel)
+            .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
+            .foregroundStyle(ChicagoPalette.bahama)
+            .padding(.horizontal, ChicagoSpacing.xs)
+            .padding(.vertical, 2)
+            .background(
+                ChicagoPalette.Surface.elevated,
+                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm)
+            )
+    }
+}
+
+private extension TransitCorridor {
+    var shortLabel: String {
+        switch self {
+        case .northSouth: "N/S"
+        case .eastWest: "E/W"
+        case .diagonal: "Diag"
+        case .loop: "Loop"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .northSouth: "north south corridor"
+        case .eastWest: "east west corridor"
+        case .diagonal: "diagonal corridor"
+        case .loop: "Loop corridor"
+        }
+    }
 }
 
 private struct IntercampusDirectionStopChoice: Identifiable {
@@ -4411,6 +4760,10 @@ private struct StationChipPlaceholder: View {
 }
 
 // MARK: - Formatters
+
+private enum NearbyTransitCatchability {
+    static let boardingBuffer: TimeInterval = 60
+}
 
 private enum DistanceFormatter {
     static func short(_ meters: Double) -> String {
