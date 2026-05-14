@@ -166,7 +166,9 @@ final class AppViewModel {
             }
         }
         snapshot = await store.currentSnapshot()
-        vehiclePositions = refreshCoordinator.latestPositions
+        vehiclePositions = refreshCoordinator.latestPositions.isEmpty
+            ? snapshot.vehiclePositions
+            : refreshCoordinator.latestPositions
         WidgetCenter.shared.reloadAllTimelines()
     }
 

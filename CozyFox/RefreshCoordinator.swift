@@ -499,6 +499,7 @@ final class RefreshCoordinator {
             }
         }
         latestPositions = collected
+        await store.replaceVehiclePositions(collected)
     }
 
     private func refreshAlerts(prefs: UserRoutePreferences) async {

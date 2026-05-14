@@ -16,6 +16,7 @@ public final class CachedTrainArrival {
     public var arrivalAt: Date
     public var isApproaching: Bool
     public var isDelayed: Bool
+    public var isFault: Bool = false
     public var isScheduled: Bool
     public var fetchedAt: Date
 
@@ -32,6 +33,7 @@ public final class CachedTrainArrival {
         self.arrivalAt = arrival.arrivalAt
         self.isApproaching = arrival.isApproaching
         self.isDelayed = arrival.isDelayed
+        self.isFault = arrival.isFault
         self.isScheduled = arrival.isScheduled
         self.fetchedAt = fetchedAt
     }
@@ -51,7 +53,7 @@ public final class CachedTrainArrival {
             arrivalAt: arrivalAt,
             isApproaching: isApproaching,
             isDelayed: isDelayed,
-            isFault: false,
+            isFault: isFault,
             isScheduled: isScheduled
         )
     }
@@ -165,6 +167,50 @@ public final class CachedMetraPrediction {
             isDelayed: isDelayed,
             isCanceled: isCanceled,
             isScheduled: isScheduled
+        )
+    }
+}
+
+@Model
+public final class CachedVehiclePosition {
+    @Attribute(.unique) public var key: String
+    public var vehicleId: String
+    public var modeRaw: String
+    public var route: String
+    public var latitude: Double
+    public var longitude: Double
+    public var heading: Int?
+    public var destinationName: String?
+    public var nextStopId: Int?
+    public var observedAt: Date
+    public var fetchedAt: Date
+
+    public init(position: VehiclePosition, fetchedAt: Date) {
+        self.key = "\(position.mode.rawValue)-\(position.route)-\(position.id)"
+        self.vehicleId = position.id
+        self.modeRaw = position.mode.rawValue
+        self.route = position.route
+        self.latitude = position.latitude
+        self.longitude = position.longitude
+        self.heading = position.heading
+        self.destinationName = position.destinationName
+        self.nextStopId = position.nextStopId
+        self.observedAt = position.observedAt
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: VehiclePosition? {
+        guard let mode = VehiclePosition.Mode(rawValue: modeRaw) else { return nil }
+        return VehiclePosition(
+            id: vehicleId,
+            mode: mode,
+            route: route,
+            latitude: latitude,
+            longitude: longitude,
+            heading: heading,
+            destinationName: destinationName,
+            nextStopId: nextStopId,
+            observedAt: observedAt
         )
     }
 }

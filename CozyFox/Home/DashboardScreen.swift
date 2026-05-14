@@ -622,6 +622,8 @@ struct DashboardScreen: View {
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let first = arrivals.first
         let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
+        let assessments = ghostAssessments(for: arrivals)
+        let firstAssessment = first.flatMap { assessments[$0.id] }
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(spacing: ChicagoSpacing.xs) {
                 RouteBadge(line: train.line, size: .sm)
@@ -631,12 +633,13 @@ struct DashboardScreen: View {
                 Spacer()
             }
             if let minutes, let first {
+                let isGhostLikely = firstAssessment?.isGhostLikely == true
                 HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
                     BigNumber(
                         minutes,
                         unit: "min",
                         size: .md,
-                        tone: first.isDelayed ? .alert : .primary,
+                        tone: first.isDelayed || isGhostLikely ? .alert : .primary,
                         accessibilityLabel: "\(minutes) minutes to next \(train.line.displayName) train"
                     )
                     Text("→ \(first.destinationName)")
@@ -644,8 +647,15 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
                 }
+                if let badge = GhostTrainBadge(firstAssessment) {
+                    badge
+                }
                 HeadwayDotStrip(arrivals: arrivals.prefix(8).map(\.arrivalAt),
-                                accent: train.line.swiftUIColor)
+                                accent: train.line.swiftUIColor,
+                                complications: ghostComplications(
+                                    for: arrivals.prefix(8),
+                                    assessments: assessments
+                                ))
             } else {
                 Text(model.isRefreshing ? "Fetching arrivals…" : "No upcoming arrivals returned yet.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -2224,6 +2234,9 @@ struct DashboardScreen: View {
                 ForEach(grouped, id: \.key) { dest, times in
                     let first = times.first!
                     let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
+                    let assessments = ghostAssessments(for: times)
+                    let firstAssessment = assessments[first.id]
+                    let isGhostLikely = firstAssessment?.isGhostLikely == true
                     VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                         Text("→ \(dest)")
                             .font(ChicagoTypography.displaySM(relativeTo: .caption))
@@ -2234,18 +2247,25 @@ struct DashboardScreen: View {
                                 minutes,
                                 unit: "min",
                                 size: .lg,
-                                tone: first.isDelayed ? .alert : .primary,
+                                tone: first.isDelayed || isGhostLikely ? .alert : .primary,
                                 accessibilityLabel: "\(minutes) minutes to next \(dest) train"
                             )
-                            if first.isDelayed {
+                            if first.isDelayed || isGhostLikely {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundStyle(ChicagoPalette.starRed)
-                                    .accessibilityLabel("Delayed")
+                                    .accessibilityLabel(isGhostLikely ? "Likely ghost train" : "Delayed")
                             }
+                        }
+                        if let badge = GhostTrainBadge(firstAssessment) {
+                            badge
                         }
                         HeadwayDotStrip(
                             arrivals: times.prefix(8).map(\.arrivalAt),
-                            accent: line.swiftUIColor
+                            accent: line.swiftUIColor,
+                            complications: ghostComplications(
+                                for: times.prefix(8),
+                                assessments: assessments
+                            )
                         )
                     }
                 }
@@ -3249,6 +3269,29 @@ struct DashboardScreen: View {
             .sorted { $0.arrivalAt < $1.arrivalAt }
             .prefix(3)
             .map { $0 }
+    }
+
+    private var trainVehiclePositions: [VehiclePosition] {
+        model.vehiclePositions.isEmpty ? model.snapshot.vehiclePositions : model.vehiclePositions
+    }
+
+    private func ghostAssessments(
+        for arrivals: [Arrival],
+        now: Date = .now
+    ) -> [String: GhostTrainAssessment] {
+        GhostTrainDetector().assessments(
+            for: arrivals,
+            vehiclePositions: trainVehiclePositions,
+            arrivalsFetchedAt: model.snapshot.trainsFetchedAt,
+            now: now
+        )
+    }
+
+    private func ghostComplications(
+        for arrivals: ArraySlice<Arrival>,
+        assessments: [String: GhostTrainAssessment]
+    ) -> [HeadwayDotStrip.Complication?] {
+        arrivals.map { assessments[$0.id]?.headwayComplication }
     }
 
     private func predictions(for stop: BusStop) -> [BusPrediction] {

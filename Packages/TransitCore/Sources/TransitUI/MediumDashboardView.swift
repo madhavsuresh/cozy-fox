@@ -45,6 +45,8 @@ public struct MediumDashboardView: View {
     public let metra: MetraPick?
     public let bike: NearestBikePick?
     public let alerts: [ServiceAlert]
+    public let vehiclePositions: [VehiclePosition]
+    public let trainsFetchedAt: Date?
     public let isStale: Bool
     public let now: Date
 
@@ -54,6 +56,8 @@ public struct MediumDashboardView: View {
         metra: MetraPick? = nil,
         bike: NearestBikePick?,
         alerts: [ServiceAlert],
+        vehiclePositions: [VehiclePosition] = [],
+        trainsFetchedAt: Date? = nil,
         isStale: Bool,
         now: Date = .now
     ) {
@@ -62,6 +66,8 @@ public struct MediumDashboardView: View {
         self.metra = metra
         self.bike = bike
         self.alerts = alerts
+        self.vehiclePositions = vehiclePositions
+        self.trainsFetchedAt = trainsFetchedAt
         self.isStale = isStale
         self.now = now
     }
@@ -73,7 +79,9 @@ public struct MediumDashboardView: View {
                     arrivals: train.arrivals,
                     title: train.title,
                     directionLabel: train.directionLabel,
-                    now: now
+                    now: now,
+                    vehiclePositions: vehiclePositions,
+                    arrivalsFetchedAt: trainsFetchedAt
                 )
             } else {
                 emptyBlock("Pick a train")
