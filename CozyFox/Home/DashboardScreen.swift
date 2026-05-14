@@ -58,7 +58,7 @@ struct DashboardScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                    alertsCard
+                    alertsOverflowCard
                     if shouldShowAutopinBanner {
                         contextBanner
                     }
@@ -98,6 +98,9 @@ struct DashboardScreen: View {
                     }
                 }
                 .padding(ChicagoSpacing.md)
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                topAlertsRail
             }
             .background(ChicagoPalette.Surface.background)
             .scrollDismissesKeyboard(.interactively)
@@ -648,6 +651,7 @@ struct DashboardScreen: View {
     }
 
     private func tripTrainRow(_ train: PlannedTripPin.TrainLeg) -> some View {
+        let alerts = alerts(forLine: train.line)
         let arrivals = model.snapshot.trainArrivals
             .filter { $0.line == train.line }
             .filter { train.stationId == nil || $0.stationId == train.stationId }
@@ -664,6 +668,9 @@ struct DashboardScreen: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Spacer()
+            }
+            if !alerts.isEmpty {
+                pinAlertInlineSummary(alerts)
             }
             if let minutes, let first {
                 let isGhostLikely = firstAssessment?.isGhostLikely == true
@@ -701,6 +708,7 @@ struct DashboardScreen: View {
     }
 
     private func tripBusRow(_ bus: PlannedTripPin.BusLeg) -> some View {
+        let alerts = alerts(forBusRoute: bus.route)
         let predictions = model.snapshot.busPredictions
             .filter { $0.route == bus.route }
             .filter { bus.stopId == nil || $0.stopId == bus.stopId }
@@ -722,6 +730,9 @@ struct DashboardScreen: View {
                     }
                 }
                 Spacer()
+            }
+            if !alerts.isEmpty {
+                pinAlertInlineSummary(alerts)
             }
             if let minutes, let first {
                 HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
@@ -751,6 +762,7 @@ struct DashboardScreen: View {
     }
 
     private func tripMetraRow(_ metra: PlannedTripPin.MetraLeg) -> some View {
+        let alerts = alerts(forMetraRoute: metra.routeId)
         let predictions = model.snapshot.metraPredictions
             .filter { $0.routeId == metra.routeId }
             .filter { metra.stationId == nil || $0.stationId == metra.stationId }
@@ -772,6 +784,9 @@ struct DashboardScreen: View {
                     }
                 }
                 Spacer()
+            }
+            if !alerts.isEmpty {
+                pinAlertInlineSummary(alerts)
             }
             if let group {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2060,6 +2075,7 @@ struct DashboardScreen: View {
                     pinnedRouteControlRow(
                         title: line.displayName,
                         detail: "Pinned train",
+                        alerts: alerts(forLine: line),
                         clearLabel: "Clear pinned \(line.displayName) line",
                         clearAction: { togglePinnedLine(line) }
                     ) {
@@ -2690,6 +2706,7 @@ struct DashboardScreen: View {
                     pinnedRouteControlRow(
                         title: "Route \(route)",
                         detail: pinnedBusDirection,
+                        alerts: alerts(forBusRoute: route),
                         clearLabel: "Clear pinned Route \(route)",
                         clearAction: { setPinnedBus(nil) }
                     ) {
@@ -3060,6 +3077,7 @@ struct DashboardScreen: View {
                     pinnedRouteControlRow(
                         title: MetraStationCatalog.route(id: route)?.displayName ?? route,
                         detail: "Pinned Metra",
+                        alerts: alerts(forMetraRoute: route),
                         clearLabel: "Clear pinned Metra \(route)",
                         clearAction: { setPinnedMetra(nil) }
                     ) {
@@ -3704,59 +3722,192 @@ struct DashboardScreen: View {
 
     // MARK: - Alerts
 
-    private var relevantAlerts: [ServiceAlert] {
-        var lines: Set<LineColor> = []
-        lines.formUnion(plannedTripPin?.trainLegs.map(\.line) ?? [])
-        if let line = pinnedLine { lines.insert(line) }
+    private var topAlertTargetLimit: Int { 3 }
 
+    private var pinnedAlertTargets: [DashboardAlertTarget] {
+        var targets: [DashboardAlertTarget] = []
+        var trainLines: Set<LineColor> = []
         var busRoutes: Set<String> = []
-        busRoutes.formUnion(plannedTripPin?.busLegs.map(\.route) ?? [])
-        if let route = pinnedBusRoute { busRoutes.insert(route) }
-
         var metraRoutes: Set<String> = []
-        metraRoutes.formUnion(plannedTripPin?.metraLegs.map(\.routeId) ?? [])
-        if let route = pinnedMetraRoute { metraRoutes.insert(route) }
 
-        return model.snapshot.activeAlerts.filtered(
-            forLines: lines,
-            busRoutes: busRoutes,
-            metraRoutes: metraRoutes
-        )
+        func appendTrain(_ line: LineColor) {
+            guard trainLines.insert(line).inserted else { return }
+            let alerts = alerts(forLine: line)
+            guard !alerts.isEmpty else { return }
+            targets.append(
+                DashboardAlertTarget(
+                    kind: .train(line),
+                    title: line.displayName,
+                    subtitle: "Train",
+                    alerts: alerts
+                )
+            )
+        }
+
+        func appendBus(_ route: String) {
+            guard busRoutes.insert(route).inserted else { return }
+            let alerts = alerts(forBusRoute: route)
+            guard !alerts.isEmpty else { return }
+            targets.append(
+                DashboardAlertTarget(
+                    kind: .bus(route),
+                    title: "Route \(route)",
+                    subtitle: "Bus",
+                    alerts: alerts
+                )
+            )
+        }
+
+        func appendMetra(_ route: String) {
+            guard metraRoutes.insert(route).inserted else { return }
+            let alerts = alerts(forMetraRoute: route)
+            guard !alerts.isEmpty else { return }
+            targets.append(
+                DashboardAlertTarget(
+                    kind: .metra(route),
+                    title: MetraStationCatalog.route(id: route)?.displayName ?? route,
+                    subtitle: "Metra",
+                    alerts: alerts
+                )
+            )
+        }
+
+        if let pinnedLine { appendTrain(pinnedLine) }
+        if let pinnedBusRoute { appendBus(pinnedBusRoute) }
+        if let pinnedMetraRoute { appendMetra(pinnedMetraRoute) }
+
+        if let plannedTripPin {
+            plannedTripPin.trainLegs.forEach { appendTrain($0.line) }
+            plannedTripPin.busLegs.forEach { appendBus($0.route) }
+            plannedTripPin.metraLegs.forEach { appendMetra($0.routeId) }
+        }
+
+        return targets
     }
 
     @ViewBuilder
-    private var alertsCard: some View {
-        let alerts = relevantAlerts
-        if !alerts.isEmpty {
-            let title = (pinnedLine != nil || pinnedBusRoute != nil || pinnedMetraRoute != nil)
-                ? "Alerts on your pinned routes"
-                : "Service alerts"
-            ChicagoCard(title: title,
-                        eyebrow: "Heads up",
+    private var topAlertsRail: some View {
+        let targets = Array(pinnedAlertTargets.prefix(topAlertTargetLimit))
+        if !targets.isEmpty {
+            HStack(spacing: ChicagoSpacing.xs) {
+                ForEach(targets) { target in
+                    PinnedAlertTopPill(target: target)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, ChicagoSpacing.md)
+            .padding(.vertical, ChicagoSpacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ChicagoPalette.Surface.background)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(ChicagoPalette.cornflower.opacity(0.3))
+                    .frame(height: ChicagoSpacing.Stroke.hairline)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var alertsOverflowCard: some View {
+        let targets = Array(pinnedAlertTargets.dropFirst(topAlertTargetLimit))
+        if !targets.isEmpty {
+            ChicagoCard(title: "More service alerts",
+                        eyebrow: "Pinned routes",
                         ornament: .star) {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-                    ForEach(alerts.prefix(3), id: \.id) { alert in
-                        AlertRow(alert: alert,
-                                 pinnedLine: pinnedLine,
-                                 pinnedBusRoute: pinnedBusRoute,
-                                 pinnedMetraRoute: pinnedMetraRoute)
+                    ForEach(targets) { target in
+                        PinnedAlertOverflowRow(target: target)
                     }
-                    Link(destination: alerts.first?.detailURL ?? ServiceAlert.detailsURL) {
-                        HStack(spacing: 2) {
-                            Text(alerts.first?.detailURL == ServiceAlert.metraDetailsURL
-                                 ? "Details on metra.com"
-                                 : "Details from transit agencies")
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption2)
-                        }
-                        .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
-                        .foregroundStyle(ChicagoPalette.bahama)
-                    }
-                    .accessibilityLabel("Open service alerts")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private func alerts(forLine line: LineColor) -> [ServiceAlert] {
+        orderedAlerts(
+            model.snapshot.activeAlerts.filtered(
+                forLines: Set([line]),
+                busRoutes: [],
+                metraRoutes: []
+            )
+        )
+    }
+
+    private func alerts(forBusRoute route: String) -> [ServiceAlert] {
+        orderedAlerts(
+            model.snapshot.activeAlerts.filtered(
+                forLines: [],
+                busRoutes: Set([route]),
+                metraRoutes: []
+            )
+        )
+    }
+
+    private func alerts(forMetraRoute route: String) -> [ServiceAlert] {
+        orderedAlerts(
+            model.snapshot.activeAlerts.filtered(
+                forLines: [],
+                busRoutes: [],
+                metraRoutes: Set([route])
+            )
+        )
+    }
+
+    private func orderedAlerts(_ alerts: [ServiceAlert]) -> [ServiceAlert] {
+        alerts.sorted {
+            let left = alertSeverityRank($0.severity)
+            let right = alertSeverityRank($1.severity)
+            if left != right { return left > right }
+            return $0.beginsAt > $1.beginsAt
+        }
+    }
+
+    private func alertSummaryText(_ alerts: [ServiceAlert]) -> String {
+        guard let first = alerts.first else { return "" }
+        let label = alerts.count == 1 ? "Service alert" : "\(alerts.count) service alerts"
+        return "\(label): \(first.headline)"
+    }
+
+    private func alertDetailURL(for alerts: [ServiceAlert]) -> URL {
+        alerts.first?.detailURL ?? ServiceAlert.detailsURL
+    }
+
+    private func alertColor(for alerts: [ServiceAlert]) -> Color {
+        let severity = alerts
+            .map(\.severity)
+            .max { alertSeverityRank($0) < alertSeverityRank($1) } ?? .low
+        switch severity {
+        case .high:   return ChicagoPalette.starRed
+        case .medium: return ChicagoPalette.gold
+        case .low:    return ChicagoPalette.bahama
+        }
+    }
+
+    private func alertSeverityRank(_ severity: AlertSeverity) -> Int {
+        switch severity {
+        case .low: 0
+        case .medium: 1
+        case .high: 2
+        }
+    }
+
+    private func pinAlertInlineSummary(_ alerts: [ServiceAlert]) -> some View {
+        let alerts = orderedAlerts(alerts)
+        return Link(destination: alertDetailURL(for: alerts)) {
+            HStack(alignment: .firstTextBaseline, spacing: ChicagoSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .accessibilityHidden(true)
+                Text(alertSummaryText(alerts))
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(alertColor(for: alerts))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(alertSummaryText(alerts))
     }
 
     // MARK: - Tiny helpers
@@ -3809,6 +3960,7 @@ struct DashboardScreen: View {
     private func pinnedRouteControlRow<Badge: View>(
         title: String,
         detail: String? = nil,
+        alerts: [ServiceAlert] = [],
         clearLabel: String,
         clearAction: @escaping () -> Void,
         @ViewBuilder badge: () -> Badge
@@ -3826,7 +3978,11 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
                 }
+                if !alerts.isEmpty {
+                    pinAlertInlineSummary(alerts)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: ChicagoSpacing.sm)
             Button(action: clearAction) {
                 Image(systemName: "pin.slash")
@@ -4159,80 +4315,158 @@ private enum HomeGeocodeService {
     }
 }
 
-// MARK: - Alert row
+private struct DashboardAlertTarget: Identifiable {
+    enum Kind: Hashable {
+        case train(LineColor)
+        case bus(String)
+        case metra(String)
 
-private struct AlertRow: View {
-    let alert: ServiceAlert
-    let pinnedLine: LineColor?
-    let pinnedBusRoute: String?
-    let pinnedMetraRoute: String?
-
-    var body: some View {
-        HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.subheadline)
-                .fontWeight(.bold)
-                .foregroundStyle(severityColor)
-                .accessibilityHidden(true)
-            badge
-            Text(alert.headline)
-                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                .foregroundStyle(ChicagoPalette.Gray.darkest)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        var id: String {
+            switch self {
+            case .train(let line): return "train-\(line.rawValue)"
+            case .bus(let route): return "bus-\(route)"
+            case .metra(let route): return "metra-\(route)"
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(accessibilitySummary))
     }
 
-    private var severityColor: Color {
-        switch alert.severity {
+    let kind: Kind
+    let title: String
+    let subtitle: String
+    let alerts: [ServiceAlert]
+
+    var id: String { kind.id }
+
+    var primaryHeadline: String {
+        alerts.first?.headline ?? "Service alert"
+    }
+
+    var countLabel: String {
+        alerts.count == 1 ? "1 alert" : "\(alerts.count) alerts"
+    }
+
+    var compactCountLabel: String {
+        "\(alerts.count)"
+    }
+
+    var detailURL: URL {
+        alerts.first?.detailURL ?? ServiceAlert.detailsURL
+    }
+
+    var severityColor: Color {
+        let severity = alerts
+            .map(\.severity)
+            .max { severityRank($0) < severityRank($1) } ?? .low
+        switch severity {
         case .high:   return ChicagoPalette.starRed
         case .medium: return ChicagoPalette.gold
         case .low:    return ChicagoPalette.bahama
         }
     }
 
-    @ViewBuilder
-    private var badge: some View {
-        if let line = pinnedLine, alert.impactedLineColors.contains(line) {
-            RouteBadge(line: line, size: .sm)
-        } else if let route = pinnedBusRoute, alert.impactedRoutes.contains(route) {
-            RouteBadge(bus: route, size: .sm)
-        } else if let route = pinnedMetraRoute, alert.impactedRoutes.contains(route) {
-            RouteBadge(metra: route, size: .sm)
-        } else if let line = alert.impactedLineColors.first {
-            RouteBadge(line: line, size: .sm)
-        } else if let route = alert.impactedRoutes.first,
-                  MetraStationCatalog.route(id: route) != nil {
-            RouteBadge(metra: route, size: .sm)
-        } else if let route = alert.impactedRoutes.first {
-            RouteBadge(bus: route, size: .sm)
-        } else {
-            EmptyView()
-        }
+    var accessibilitySummary: String {
+        "\(subtitle) \(title), \(countLabel): \(primaryHeadline)"
     }
 
-    private var accessibilitySummary: String {
-        let lineLabel: String
-        if let line = pinnedLine, alert.impactedLineColors.contains(line) {
-            lineLabel = "\(line.displayName) line"
-        } else if let route = pinnedBusRoute, alert.impactedRoutes.contains(route) {
-            lineLabel = "Route \(route)"
-        } else if let route = pinnedMetraRoute, alert.impactedRoutes.contains(route) {
-            lineLabel = "Metra \(route)"
-        } else if let line = alert.impactedLineColors.first {
-            lineLabel = "\(line.displayName) line"
-        } else if let route = alert.impactedRoutes.first,
-                  MetraStationCatalog.route(id: route) != nil {
-            lineLabel = "Metra \(route)"
-        } else if let route = alert.impactedRoutes.first {
-            lineLabel = "Route \(route)"
-        } else {
-            lineLabel = "Service"
+    private func severityRank(_ severity: AlertSeverity) -> Int {
+        switch severity {
+        case .low: 0
+        case .medium: 1
+        case .high: 2
         }
-        return "\(lineLabel) alert: \(alert.headline)"
+    }
+}
+
+private struct PinnedAlertTopPill: View {
+    let target: DashboardAlertTarget
+
+    var body: some View {
+        Link(destination: target.detailURL) {
+            HStack(spacing: ChicagoSpacing.xs) {
+                routeBadge
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(ChicagoTypography.body(.bold, relativeTo: .caption2))
+                    .accessibilityHidden(true)
+                Text(target.compactCountLabel)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, ChicagoSpacing.sm)
+            .padding(.vertical, ChicagoSpacing.xs)
+            .background(
+                target.severityColor.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .strokeBorder(
+                        target.severityColor.opacity(0.3),
+                        lineWidth: ChicagoSpacing.Stroke.hairline
+                    )
+            )
+            .foregroundStyle(target.severityColor)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(target.accessibilitySummary)
+    }
+
+    @ViewBuilder
+    private var routeBadge: some View {
+        switch target.kind {
+        case .train(let line):
+            RouteBadge(line: line, size: .sm)
+        case .bus(let route):
+            RouteBadge(bus: route, size: .sm)
+        case .metra(let route):
+            RouteBadge(metra: route, size: .sm)
+        }
+    }
+}
+
+private struct PinnedAlertOverflowRow: View {
+    let target: DashboardAlertTarget
+
+    var body: some View {
+        Link(destination: target.detailURL) {
+            HStack(alignment: .top, spacing: ChicagoSpacing.xs) {
+                routeBadge
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: ChicagoSpacing.xs) {
+                        Text(target.title)
+                            .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                            .foregroundStyle(ChicagoPalette.Gray.darkest)
+                            .lineLimit(1)
+                        Text(target.countLabel)
+                            .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                            .foregroundStyle(target.severityColor)
+                            .lineLimit(1)
+                    }
+                    Text(target.primaryHeadline)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: ChicagoSpacing.xs)
+                Image(systemName: "arrow.up.right")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.bahama)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(target.accessibilitySummary)
+    }
+
+    @ViewBuilder
+    private var routeBadge: some View {
+        switch target.kind {
+        case .train(let line):
+            RouteBadge(line: line, size: .sm)
+        case .bus(let route):
+            RouteBadge(bus: route, size: .sm)
+        case .metra(let route):
+            RouteBadge(metra: route, size: .sm)
+        }
     }
 }
 
