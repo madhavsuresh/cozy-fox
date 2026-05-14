@@ -16,6 +16,8 @@ final class AppViewModel {
     let refreshCoordinator: RefreshCoordinator
     let walkingStore: WalkingDistanceStore
     let walkingResolver: WalkingDistanceResolver
+    let mobilitySummaryStore: MobilitySummaryStore
+    let arrivalBiasStore: ArrivalBiasStore
 
     var snapshot: TransitSnapshot = .empty
     /// Latest live vehicle positions for whatever the user has pinned — used
@@ -53,7 +55,9 @@ final class AppViewModel {
         preferences: PreferencesStore,
         location: LocationCoordinator,
         refreshCoordinator: RefreshCoordinator,
-        walkingStore: WalkingDistanceStore
+        walkingStore: WalkingDistanceStore,
+        mobilitySummaryStore: MobilitySummaryStore? = nil,
+        arrivalBiasStore: ArrivalBiasStore? = nil
     ) {
         self.store = store
         self.preferences = preferences
@@ -61,6 +65,8 @@ final class AppViewModel {
         self.refreshCoordinator = refreshCoordinator
         self.walkingStore = walkingStore
         self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
+        self.mobilitySummaryStore = mobilitySummaryStore ?? MobilitySummaryStore()
+        self.arrivalBiasStore = arrivalBiasStore ?? ArrivalBiasStore()
         self.isOnboardingComplete = preferences.isOnboardingComplete
 
         location.onContextChanged = { [weak self] context in
@@ -76,11 +82,19 @@ final class AppViewModel {
     func bootstrap() async {
         location.bootstrap()
         let walkingHydration = Task { await walkingStore.hydrateFromDiskIfNeeded() }
+        // Phase 0 learning stores hydrate alongside walking so first refresh
+        // sees fully-warm caches. No reader is wired up yet, but joining the
+        // parallel group now keeps later phases from changing bootstrap
+        // ordering.
+        let mobilityHydration = Task { await mobilitySummaryStore.hydrateFromDiskIfNeeded() }
+        let arrivalBiasHydration = Task { await arrivalBiasStore.hydrateFromDiskIfNeeded() }
         liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
         await loadCachedSnapshot()
         await walkingHydration.value
+        await mobilityHydration.value
+        await arrivalBiasHydration.value
         await refreshIfNeeded()
         reconcileRefreshTicker()
     }

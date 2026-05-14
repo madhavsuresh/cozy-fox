@@ -24,6 +24,7 @@ struct SettingsScreen: View {
     @State private var homeApproximateAddress: String?
     @State private var workApproximateAddress: String?
     @State private var addressLookupTask: Task<Void, Never>?
+    @State private var showResetLearningConfirmation: Bool = false
 
     var body: some View {
         Form {
@@ -211,6 +212,15 @@ struct SettingsScreen: View {
                     model.walkingStore.clearAll()
                 }
             }
+
+            Section {
+                Button("Reset learning", role: .destructive) {
+                    showResetLearningConfirmation = true
+                }
+            } footer: {
+                Text("On-device data Cozy Fox keeps to learn your habits. Nothing leaves your phone.")
+                    .font(.footnote)
+            }
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showWorkEntry, onDismiss: {
@@ -228,6 +238,19 @@ struct SettingsScreen: View {
         }
         .onChange(of: model.pinRevision) { _, _ in
             reloadPredictionState()
+        }
+        .confirmationDialog(
+            "Reset on-device learning?",
+            isPresented: $showResetLearningConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset learning", role: .destructive) {
+                model.mobilitySummaryStore.clearAll()
+                model.arrivalBiasStore.clearAll()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clears what Cozy Fox has learned about your trips. New samples will be collected as you use the app.")
         }
     }
 
