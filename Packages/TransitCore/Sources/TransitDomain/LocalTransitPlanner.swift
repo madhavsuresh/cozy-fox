@@ -1,16 +1,15 @@
 import Foundation
 import TransitModels
 
-/// Builds a single-transit-leg trip plan from origin → destination using only
-/// the bundled CTA catalog (`LStationCatalog`, `BusStopCatalog`). Used as a
-/// fallback when `MKDirections.calculate(.transit)` returns "operation
-/// couldn't be completed" — which is the documented behavior of Apple's
-/// transit-routing API ("Only supported for ETA calculations") in many
-/// regions/builds.
+/// Builds comparison trip plans from origin → destination using only the
+/// bundled CTA and Metra catalogs. Used as a fallback when
+/// `MKDirections.calculate(.transit)` returns "operation couldn't be
+/// completed" — which is the documented behavior of Apple's transit-routing
+/// API ("Only supported for ETA calculations") in many regions/builds.
 ///
 /// Heuristic, not a real router:
-/// - Score every L line and every bus route by `originWalk + transit + destWalk`
-///   minutes, using ballpark speeds (~5 km/h walking, ~40 km/h L, ~16 km/h bus).
+/// - Score every L line, Metra route, and bus route by
+///   `originWalk + transit + destWalk` minutes, using ballpark speeds.
 /// - Also score bus-to-L access routes, so options like "65 to Grand, then
 ///   Blue Line" can appear when walking or biking to the train is not the
 ///   only reasonable way to start the trip.
@@ -32,6 +31,10 @@ public struct LocalTransitPlanner: Sendable {
     public let minDirectWalkMeters: Double
     public let minBusTransitMeters: Double
     public let minTrainTransitMeters: Double
+    public let maxTrainPlans: Int
+    public let maxBusPlans: Int
+    public let maxBusToTrainPlans: Int
+    public let maxMetraPlans: Int
 
     public init(
         walkingMetersPerMinute: Double = 84,
@@ -48,7 +51,11 @@ public struct LocalTransitPlanner: Sendable {
         maxMetraStationWalkMeters: Double = 3_000,
         minDirectWalkMeters: Double = 800,
         minBusTransitMeters: Double = 500,
-        minTrainTransitMeters: Double = 800
+        minTrainTransitMeters: Double = 800,
+        maxTrainPlans: Int = 4,
+        maxBusPlans: Int = 4,
+        maxBusToTrainPlans: Int = 4,
+        maxMetraPlans: Int = 2
     ) {
         self.walkingMetersPerMinute = walkingMetersPerMinute
         self.lTrainMetersPerMinute = lTrainMetersPerMinute
@@ -65,6 +72,10 @@ public struct LocalTransitPlanner: Sendable {
         self.minDirectWalkMeters = minDirectWalkMeters
         self.minBusTransitMeters = minBusTransitMeters
         self.minTrainTransitMeters = minTrainTransitMeters
+        self.maxTrainPlans = maxTrainPlans
+        self.maxBusPlans = maxBusPlans
+        self.maxBusToTrainPlans = maxBusToTrainPlans
+        self.maxMetraPlans = maxMetraPlans
     }
 
     public func plan(
@@ -80,103 +91,120 @@ public struct LocalTransitPlanner: Sendable {
         guard directMeters >= minDirectWalkMeters else { return [] }
         let directWalkMinutes = directMeters / walkingMetersPerMinute
 
-        // L-line side: take the fastest single line. The user only gets one
-        // train option (they can change line via the existing chips picker on
-        // the dashboard).
-        var bestTrain: Candidate?
-
+        var trainCandidates: [Candidate] = []
+        var trainKeys: Set<String> = []
         for line in LineColor.allCases {
             let onLine = stations.filter { $0.servedLines.contains(line) }
-            guard
-                let originStation = closest(in: onLine, to: originPair, maxMeters: maxStationWalkMeters),
-                let destStation = closest(in: onLine, to: destinationPair, maxMeters: maxStationWalkMeters),
-                originStation.entry.id != destStation.entry.id
-            else { continue }
-
-            let transitMeters = Distance.meters(
-                from: (originStation.entry.latitude, originStation.entry.longitude),
-                to: (destStation.entry.latitude, destStation.entry.longitude)
+            let candidateLimit = max(2, maxTrainPlans)
+            let originStations = nearest(
+                in: onLine,
+                to: originPair,
+                maxMeters: maxStationWalkMeters,
+                limit: candidateLimit
             )
-            let totalMinutes =
-                originStation.distance / walkingMetersPerMinute
-                + transitMeters / lTrainMetersPerMinute
-                + destStation.distance / walkingMetersPerMinute
-                + lTrainBoardingWaitMinutes
-
-            guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
-
-            let candidate = Candidate(
-                resolution: .line(line),
-                displayName: line.displayName,
-                originStopName: originStation.entry.name,
-                destinationStopName: destStation.entry.name,
-                originStopCoordinate: PlannerCoordinate(
-                    latitude: originStation.entry.latitude,
-                    longitude: originStation.entry.longitude
-                ),
-                destinationStopCoordinate: PlannerCoordinate(
-                    latitude: destStation.entry.latitude,
-                    longitude: destStation.entry.longitude
-                ),
-                originWalkMeters: originStation.distance,
-                transitMeters: transitMeters,
-                destinationWalkMeters: destStation.distance,
-                totalMinutes: totalMinutes
+            let destinationStations = nearest(
+                in: onLine,
+                to: destinationPair,
+                maxMeters: maxStationWalkMeters,
+                limit: candidateLimit
             )
-            if bestTrain == nil || totalMinutes < bestTrain!.totalMinutes {
-                bestTrain = candidate
+
+            for originStation in originStations {
+                for destStation in destinationStations where originStation.entry.id != destStation.entry.id {
+                    let transitMeters = Distance.meters(
+                        from: (originStation.entry.latitude, originStation.entry.longitude),
+                        to: (destStation.entry.latitude, destStation.entry.longitude)
+                    )
+                    guard transitMeters >= minTrainTransitMeters else { continue }
+
+                    let totalMinutes =
+                        originStation.distance / walkingMetersPerMinute
+                        + transitMeters / lTrainMetersPerMinute
+                        + destStation.distance / walkingMetersPerMinute
+                        + lTrainBoardingWaitMinutes
+
+                    guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+                    let candidate = Candidate(
+                        resolution: .line(line),
+                        displayName: line.displayName,
+                        originStopName: originStation.entry.name,
+                        destinationStopName: destStation.entry.name,
+                        originStopCoordinate: PlannerCoordinate(
+                            latitude: originStation.entry.latitude,
+                            longitude: originStation.entry.longitude
+                        ),
+                        destinationStopCoordinate: PlannerCoordinate(
+                            latitude: destStation.entry.latitude,
+                            longitude: destStation.entry.longitude
+                        ),
+                        originWalkMeters: originStation.distance,
+                        transitMeters: transitMeters,
+                        destinationWalkMeters: destStation.distance,
+                        totalMinutes: totalMinutes
+                    )
+                    appendUniqueCandidate(candidate, to: &trainCandidates, seen: &trainKeys)
+                }
             }
         }
 
-        var bestMetra: Candidate?
+        var metraCandidates: [Candidate] = []
+        var metraKeys: Set<String> = []
         for line in MetraStationCatalog.routes {
             let onLine = metraStations.filter { $0.servedRoutes.contains(line.id) }
-            guard
-                let originStation = closest(in: onLine, to: originPair, maxMeters: maxMetraStationWalkMeters),
-                let destStation = closest(in: onLine, to: destinationPair, maxMeters: maxMetraStationWalkMeters),
-                originStation.entry.id != destStation.entry.id
-            else { continue }
-
-            let transitMeters = Distance.meters(
-                from: (originStation.entry.latitude, originStation.entry.longitude),
-                to: (destStation.entry.latitude, destStation.entry.longitude)
+            let candidateLimit = max(2, maxMetraPlans)
+            let originStations = nearest(
+                in: onLine,
+                to: originPair,
+                maxMeters: maxMetraStationWalkMeters,
+                limit: candidateLimit
             )
-            let totalMinutes =
-                originStation.distance / walkingMetersPerMinute
-                + transitMeters / metraMetersPerMinute
-                + destStation.distance / walkingMetersPerMinute
-                + metraBoardingWaitMinutes
-
-            guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
-
-            let candidate = Candidate(
-                resolution: .metra(line.id),
-                displayName: "Metra \(line.shortName)",
-                originStopName: originStation.entry.name,
-                destinationStopName: destStation.entry.name,
-                originStopCoordinate: PlannerCoordinate(
-                    latitude: originStation.entry.latitude,
-                    longitude: originStation.entry.longitude
-                ),
-                destinationStopCoordinate: PlannerCoordinate(
-                    latitude: destStation.entry.latitude,
-                    longitude: destStation.entry.longitude
-                ),
-                originWalkMeters: originStation.distance,
-                transitMeters: transitMeters,
-                destinationWalkMeters: destStation.distance,
-                totalMinutes: totalMinutes
+            let destinationStations = nearest(
+                in: onLine,
+                to: destinationPair,
+                maxMeters: maxMetraStationWalkMeters,
+                limit: candidateLimit
             )
-            if bestMetra == nil || totalMinutes < bestMetra!.totalMinutes {
-                bestMetra = candidate
+
+            for originStation in originStations {
+                for destStation in destinationStations where originStation.entry.id != destStation.entry.id {
+                    let transitMeters = Distance.meters(
+                        from: (originStation.entry.latitude, originStation.entry.longitude),
+                        to: (destStation.entry.latitude, destStation.entry.longitude)
+                    )
+                    let totalMinutes =
+                        originStation.distance / walkingMetersPerMinute
+                        + transitMeters / metraMetersPerMinute
+                        + destStation.distance / walkingMetersPerMinute
+                        + metraBoardingWaitMinutes
+
+                    guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
+
+                    let candidate = Candidate(
+                        resolution: .metra(line.id),
+                        displayName: "Metra \(line.shortName)",
+                        originStopName: originStation.entry.name,
+                        destinationStopName: destStation.entry.name,
+                        originStopCoordinate: PlannerCoordinate(
+                            latitude: originStation.entry.latitude,
+                            longitude: originStation.entry.longitude
+                        ),
+                        destinationStopCoordinate: PlannerCoordinate(
+                            latitude: destStation.entry.latitude,
+                            longitude: destStation.entry.longitude
+                        ),
+                        originWalkMeters: originStation.distance,
+                        transitMeters: transitMeters,
+                        destinationWalkMeters: destStation.distance,
+                        totalMinutes: totalMinutes
+                    )
+                    appendUniqueCandidate(candidate, to: &metraCandidates, seen: &metraKeys)
+                }
             }
         }
 
-        // Bus side: collect every viable route, then surface up to two
-        // tradeoff picks — one minimizing time on the bus (more walking) and
-        // one minimizing walk distance (more time on the bus). If both
-        // tradeoffs land on the same route, only the shortest-ride one is
-        // shown — pinning either would set the same `pinnedBusRoute` anyway.
+        // Bus side: collect every viable route, then label the two classic
+        // tradeoffs while keeping additional distinct routes as alternatives.
         let byRoute = Dictionary(grouping: busStops, by: \.route)
         let uniqueStopsByRoute = byRoute.mapValues { stops in
             var seen: Set<Int> = []
@@ -186,7 +214,7 @@ public struct LocalTransitPlanner: Sendable {
             closest(in: $0, to: originPair, maxMeters: maxStopWalkMeters)
         }
 
-        let busToTrain = bestBusToTrainCandidate(
+        let busToTrainCandidates = busToTrainCandidates(
             origin: originPair,
             destination: destinationPair,
             directWalkMinutes: directWalkMinutes,
@@ -196,10 +224,8 @@ public struct LocalTransitPlanner: Sendable {
         )
 
         var busCandidates: [Candidate] = []
-        for (route, stops) in byRoute {
-            var seen: Set<Int> = []
-            let unique = stops.filter { seen.insert($0.id).inserted }
-
+        var busKeys: Set<String> = []
+        for (route, unique) in uniqueStopsByRoute {
             guard
                 let originStop = closest(in: unique, to: originPair, maxMeters: maxStopWalkMeters),
                 let destStop = closest(in: unique, to: destinationPair, maxMeters: maxStopWalkMeters),
@@ -220,7 +246,7 @@ public struct LocalTransitPlanner: Sendable {
 
             guard totalMinutes < directWalkMinutes * minimumTripSavingsFactor else { continue }
 
-            busCandidates.append(Candidate(
+            let candidate = Candidate(
                 resolution: .bus(route),
                 displayName: "Route \(route)",
                 originStopName: originStop.entry.name,
@@ -237,7 +263,8 @@ public struct LocalTransitPlanner: Sendable {
                 transitMeters: transitMeters,
                 destinationWalkMeters: destStop.distance,
                 totalMinutes: totalMinutes
-            ))
+            )
+            appendUniqueCandidate(candidate, to: &busCandidates, seen: &busKeys)
         }
 
         let shortestRide = busCandidates.min { $0.transitMeters < $1.transitMeters }
@@ -246,28 +273,52 @@ public struct LocalTransitPlanner: Sendable {
                 < ($1.originWalkMeters + $1.destinationWalkMeters)
         }
 
-        var plans: [TripPlan] = []
-        if let bestTrain { plans.append(makePlan(from: bestTrain, flavor: .train)) }
-        if let busToTrain { plans.append(makePlan(from: busToTrain)) }
-        if let bestMetra { plans.append(makePlan(from: bestMetra, flavor: .metra)) }
+        var selectedBusCandidates: [(candidate: Candidate, flavor: TripPlanFlavor)] = []
+        var selectedBusKeys: Set<String> = []
+        func appendBusCandidate(_ candidate: Candidate, flavor: TripPlanFlavor) {
+            guard maxBusPlans > 0 else { return }
+            guard selectedBusCandidates.count < maxBusPlans else { return }
+            let key = candidateKey(candidate)
+            guard selectedBusKeys.insert(key).inserted else { return }
+            selectedBusCandidates.append((candidate, flavor))
+        }
+
         if let shortestRide {
-            plans.append(makePlan(from: shortestRide, flavor: .busShortestRide))
+            appendBusCandidate(shortestRide, flavor: .busShortestRide)
         }
         if let shortestWalk, shortestWalk.resolution != shortestRide?.resolution {
-            plans.append(makePlan(from: shortestWalk, flavor: .busShortestWalk))
+            appendBusCandidate(shortestWalk, flavor: .busShortestWalk)
+        }
+        for candidate in busCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }) {
+            appendBusCandidate(candidate, flavor: .busShortestRide)
+        }
+
+        var plans: [TripPlan] = []
+        for candidate in trainCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }).prefix(max(0, maxTrainPlans)) {
+            plans.append(makePlan(from: candidate, flavor: .train))
+        }
+        for candidate in busToTrainCandidates.prefix(max(0, maxBusToTrainPlans)) {
+            plans.append(makePlan(from: candidate))
+        }
+        for candidate in metraCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }).prefix(max(0, maxMetraPlans)) {
+            plans.append(makePlan(from: candidate, flavor: .metra))
+        }
+        for entry in selectedBusCandidates {
+            plans.append(makePlan(from: entry.candidate, flavor: entry.flavor))
         }
         return plans
     }
 
-    private func bestBusToTrainCandidate(
+    private func busToTrainCandidates(
         origin: (lat: Double, lon: Double),
         destination: (lat: Double, lon: Double),
         directWalkMinutes: Double,
         stations: [LStation],
         uniqueStopsByRoute: [String: [BusStop]],
         originStopByRoute: [String: (entry: BusStop, distance: Double)]
-    ) -> BusToTrainCandidate? {
-        var best: BusToTrainCandidate?
+    ) -> [BusToTrainCandidate] {
+        var candidates: [BusToTrainCandidate] = []
+        var seen: Set<String> = []
 
         for line in LineColor.allCases {
             let onLine = stations.filter { $0.servedLines.contains(line) }
@@ -342,14 +393,14 @@ public struct LocalTransitPlanner: Sendable {
                         totalMinutes: totalMinutes
                     )
 
-                    if best == nil || candidate.totalMinutes < best!.totalMinutes {
-                        best = candidate
-                    }
+                    let key = busToTrainKey(candidate)
+                    guard seen.insert(key).inserted else { continue }
+                    candidates.append(candidate)
                 }
             }
         }
 
-        return best
+        return candidates.sorted { $0.totalMinutes < $1.totalMinutes }
     }
 
     private func makePlan(from candidate: Candidate, flavor: TripPlanFlavor) -> TripPlan {
@@ -469,25 +520,80 @@ public struct LocalTransitPlanner: Sendable {
         let totalMinutes: Double
     }
 
+    private func appendUniqueCandidate(
+        _ candidate: Candidate,
+        to candidates: inout [Candidate],
+        seen: inout Set<String>
+    ) {
+        guard seen.insert(candidateKey(candidate)).inserted else { return }
+        candidates.append(candidate)
+    }
+
+    private func candidateKey(_ candidate: Candidate) -> String {
+        "\(resolutionKey(candidate.resolution)):\(coordinateKey(candidate.originStopCoordinate)):\(coordinateKey(candidate.destinationStopCoordinate))"
+    }
+
+    private func busToTrainKey(_ candidate: BusToTrainCandidate) -> String {
+        [
+            "bus:\(candidate.busRoute)",
+            "line:\(candidate.trainLine.rawValue)",
+            coordinateKey(candidate.originBusStopCoordinate),
+            coordinateKey(candidate.transferBusStopCoordinate),
+            coordinateKey(candidate.originTrainStationCoordinate),
+            coordinateKey(candidate.destinationTrainStationCoordinate),
+        ].joined(separator: ":")
+    }
+
+    private func resolutionKey(_ resolution: TransitResolution) -> String {
+        switch resolution {
+        case .line(let line):
+            return "line:\(line.rawValue)"
+        case .bus(let route):
+            return "bus:\(route)"
+        case .metra(let route):
+            return "metra:\(route)"
+        case .unknown(let raw):
+            return "unknown:\(raw)"
+        }
+    }
+
+    private func coordinateKey(_ coordinate: PlannerCoordinate) -> String {
+        let latitude = Int((coordinate.latitude * 1_000_000).rounded())
+        let longitude = Int((coordinate.longitude * 1_000_000).rounded())
+        return "\(latitude),\(longitude)"
+    }
+
+    private func nearest<Item>(
+        in items: [Item],
+        to point: (lat: Double, lon: Double),
+        maxMeters: Double,
+        limit: Int
+    ) -> [(entry: Item, distance: Double)]
+    where Item: HasGeocoordinate {
+        items
+            .map { item in
+                (
+                    entry: item,
+                    distance: Distance.meters(from: point, to: (item.latitude, item.longitude))
+                )
+            }
+            .filter { $0.distance <= maxMeters }
+            .sorted { $0.distance < $1.distance }
+            .prefix(max(1, limit))
+            .map { (entry: $0.entry, distance: $0.distance) }
+    }
+
     private func closest<Item>(
         in items: [Item],
         to point: (lat: Double, lon: Double),
         maxMeters: Double
     ) -> (entry: Item, distance: Double)?
     where Item: HasGeocoordinate {
-        var best: (entry: Item, distance: Double)?
-        for item in items {
-            let d = Distance.meters(from: point, to: (item.latitude, item.longitude))
-            if d > maxMeters { continue }
-            if best == nil || d < best!.distance {
-                best = (item, d)
-            }
-        }
-        return best
+        nearest(in: items, to: point, maxMeters: maxMeters, limit: 1).first
     }
 }
 
-/// Internal seam so `closest(in:to:maxMeters:)` can target either `LStation`
+/// Internal seam so local proximity helpers can target either `LStation`
 /// or `BusStop` without writing two near-identical implementations.
 protocol HasGeocoordinate {
     var latitude: Double { get }
