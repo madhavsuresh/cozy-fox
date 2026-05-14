@@ -17,6 +17,7 @@ public struct ServiceAlert: Codable, Sendable, Hashable, Identifiable {
     public let beginsAt: Date
     public let endsAt: Date?
     public let isMajor: Bool
+    public let detailURL: URL?
 
     public init(
         id: String,
@@ -27,7 +28,8 @@ public struct ServiceAlert: Codable, Sendable, Hashable, Identifiable {
         impactedLineColors: [LineColor],
         beginsAt: Date,
         endsAt: Date?,
-        isMajor: Bool
+        isMajor: Bool,
+        detailURL: URL? = nil
     ) {
         self.id = id
         self.headline = headline
@@ -38,6 +40,7 @@ public struct ServiceAlert: Codable, Sendable, Hashable, Identifiable {
         self.beginsAt = beginsAt
         self.endsAt = endsAt
         self.isMajor = isMajor
+        self.detailURL = detailURL
     }
 
     public func isActive(at moment: Date = .now) -> Bool {

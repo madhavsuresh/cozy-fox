@@ -198,6 +198,7 @@ public final class CachedAlert {
     public var beginsAt: Date
     public var endsAt: Date?
     public var isMajor: Bool
+    public var detailURLString: String?
     public var fetchedAt: Date
 
     public init(alert: ServiceAlert, fetchedAt: Date) {
@@ -209,6 +210,7 @@ public final class CachedAlert {
         self.beginsAt = alert.beginsAt
         self.endsAt = alert.endsAt
         self.isMajor = alert.isMajor
+        self.detailURLString = alert.detailURL?.absoluteString
         self.fetchedAt = fetchedAt
     }
 
@@ -223,7 +225,8 @@ public final class CachedAlert {
             impactedLineColors: impactedRoutes.compactMap { LineColor(ctaRouteCode: $0) },
             beginsAt: beginsAt,
             endsAt: endsAt,
-            isMajor: isMajor
+            isMajor: isMajor,
+            detailURL: detailURLString.flatMap(URL.init(string:))
         )
     }
 }
