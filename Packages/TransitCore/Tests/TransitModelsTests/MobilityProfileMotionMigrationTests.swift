@@ -47,6 +47,8 @@ struct MobilityProfileMotionMigrationTests {
         #expect(profile.observations.first?.motion == nil)
         #expect(profile.routeObservations.count == 1)
         #expect(profile.routeObservations.first?.motion == nil)
+        #expect(profile.routeObservations.first?.origin == nil)
+        #expect(profile.routeObservations.first?.destination == nil)
     }
 
     @Test func encodesAndDecodesNewMotionField() throws {
@@ -70,5 +72,33 @@ struct MobilityProfileMotionMigrationTests {
         let roundTrip = try decoder.decode(MobilityProfile.self, from: data)
 
         #expect(roundTrip.observations.last?.motion == .walking)
+    }
+
+    @Test func encodesAndDecodesRoutePinLocations() throws {
+        var profile = MobilityProfile.empty
+        let calendar = Calendar(identifier: .gregorian)
+        let when = Date(timeIntervalSinceReferenceDate: 770_000_000)
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .elsewhere,
+            line: nil,
+            stationId: nil,
+            busRoute: "66",
+            busDirection: "Eastbound",
+            origin: .bucketed(latitude: 41.8801, longitude: -87.7001, label: "elsewhere"),
+            destination: .bucketed(latitude: 41.8811, longitude: -87.6401, label: "Logan Square"),
+            at: when,
+            calendar: calendar
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try encoder.encode(profile)
+        let roundTrip = try decoder.decode(MobilityProfile.self, from: data)
+
+        #expect(roundTrip.routeObservations.last?.origin?.label == "elsewhere")
+        #expect(roundTrip.routeObservations.last?.destination?.label == "Logan Square")
     }
 }

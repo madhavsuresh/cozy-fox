@@ -80,6 +80,53 @@ struct LocalTransitPlannerTests {
         #expect(plans.count == 1)
     }
 
+    @Test func prioritizesHistoricallyPinnedBusRouteBeforeFasterBusRoutes() throws {
+        let origin = PlannerCoordinate(latitude: 41.880, longitude: -87.700)
+        let destination = PlannerCoordinate(latitude: 41.880, longitude: -87.640)
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "22", name: "22 Origin",
+                    latitude: 41.880, longitude: -87.700, directionLabel: "East"),
+            BusStop(id: 101, route: "22", name: "22 Dest",
+                    latitude: 41.880, longitude: -87.642, directionLabel: "East"),
+            BusStop(id: 200, route: "66", name: "66 Origin",
+                    latitude: 41.880, longitude: -87.700, directionLabel: "East"),
+            BusStop(id: 201, route: "66", name: "66 Dest",
+                    latitude: 41.880, longitude: -87.632, directionLabel: "East"),
+        ]
+        var profile = MobilityProfile.empty
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date(timeIntervalSinceReferenceDate: 770_000_000)
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .elsewhere,
+            line: nil,
+            stationId: nil,
+            busRoute: "66",
+            busDirection: "East",
+            origin: .bucketed(latitude: origin.latitude, longitude: origin.longitude),
+            destination: .bucketed(latitude: destination.latitude, longitude: destination.longitude),
+            at: now,
+            calendar: calendar
+        )
+
+        let planner = LocalTransitPlanner(maxBusPlans: 1)
+        let plans = planner.plan(
+            from: origin,
+            to: destination,
+            profile: profile,
+            now: now,
+            calendar: calendar,
+            stations: [],
+            busStops: stops,
+            metraStations: []
+        )
+
+        let first = try #require(plans.first)
+        let resolution = first.legs.first(where: { $0.mode == .transit })?.transit?.resolution
+        #expect(resolution == .bus("66"))
+        #expect(plans.count == 1)
+    }
+
     /// When both an L line and a bus route are feasible, surface both — the
     /// dashboard wants to show the user both options side by side. With only
     /// one bus route in the fixture, we expect 1 train + 1 bus = 2 plans.
@@ -107,6 +154,55 @@ struct LocalTransitPlannerTests {
         #expect(plans.count == 2)
         #expect(plans.first?.flavor == .train)
         #expect(plans.last?.flavor == .busShortestRide)
+    }
+
+    @Test func prioritizesHistoricallyPinnedRoutesAcrossModes() throws {
+        let origin = PlannerCoordinate(latitude: 41.880, longitude: -87.700)
+        let destination = PlannerCoordinate(latitude: 41.880, longitude: -87.640)
+        let stations: [LStation] = [
+            LStation(id: 1, name: "Origin Station", latitude: 41.880, longitude: -87.700,
+                     servedLines: [.red]),
+            LStation(id: 2, name: "Dest Station", latitude: 41.880, longitude: -87.640,
+                     servedLines: [.red]),
+        ]
+        let stops: [BusStop] = [
+            BusStop(id: 100, route: "66", name: "66 Origin",
+                    latitude: 41.880, longitude: -87.700, directionLabel: "East"),
+            BusStop(id: 101, route: "66", name: "66 Dest",
+                    latitude: 41.880, longitude: -87.642, directionLabel: "East"),
+        ]
+        var profile = MobilityProfile.empty
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date(timeIntervalSinceReferenceDate: 770_000_000)
+        profile.recordRouteObservation(
+            direction: .toHome,
+            context: .elsewhere,
+            line: nil,
+            stationId: nil,
+            busRoute: "66",
+            busDirection: "East",
+            origin: .bucketed(latitude: origin.latitude, longitude: origin.longitude),
+            destination: .bucketed(latitude: destination.latitude, longitude: destination.longitude),
+            at: now,
+            calendar: calendar
+        )
+
+        let planner = LocalTransitPlanner()
+        let plans = planner.plan(
+            from: origin,
+            to: destination,
+            profile: profile,
+            now: now,
+            calendar: calendar,
+            stations: stations,
+            busStops: stops,
+            metraStations: []
+        )
+
+        let first = try #require(plans.first)
+        let resolution = first.legs.first(where: { $0.mode == .transit })?.transit?.resolution
+        #expect(resolution == .bus("66"))
+        #expect(plans.contains { $0.flavor == .train })
     }
 
     @Test func producesBusToTrainPlanWhenBusFeedsTrainStation() throws {

@@ -163,7 +163,10 @@ public struct TripPlanner: Sendable {
     @MainActor
     public func plan(
         from origin: PlannerCoordinate,
-        to destination: PlannerCoordinate
+        to destination: PlannerCoordinate,
+        profile: MobilityProfile = .empty,
+        now: Date = .now,
+        calendar: Calendar = .current
     ) async throws -> [TripPlan] {
         let request = MKDirections.Request()
         request.source = MKMapItem(
@@ -178,12 +181,26 @@ public struct TripPlanner: Sendable {
         let directions = MKDirections(request: request)
         let fallback = self.fallback
         let localTask = Task.detached(priority: .userInitiated) {
-            fallback.plan(from: origin, to: destination)
+            fallback.plan(
+                from: origin,
+                to: destination,
+                profile: profile,
+                now: now,
+                calendar: calendar
+            )
         }
         if let response = try? await directions.calculate(), !response.routes.isEmpty {
             let mapKitPlans = response.routes.map(Self.decompose(route:))
             let local = await localTask.value
-            let merged = Self.merge(mapKitPlans: mapKitPlans, localPlans: local)
+            let merged = Self.merge(
+                mapKitPlans: mapKitPlans,
+                localPlans: local,
+                profile: profile,
+                origin: origin,
+                destination: destination,
+                now: now,
+                calendar: calendar
+            )
             if !merged.isEmpty {
                 return merged
             }
@@ -261,7 +278,15 @@ public struct TripPlanner: Sendable {
         )
     }
 
-    private static func merge(mapKitPlans: [TripPlan], localPlans: [TripPlan]) -> [TripPlan] {
+    private static func merge(
+        mapKitPlans: [TripPlan],
+        localPlans: [TripPlan],
+        profile: MobilityProfile,
+        origin: PlannerCoordinate,
+        destination: PlannerCoordinate,
+        now: Date,
+        calendar: Calendar
+    ) -> [TripPlan] {
         var merged: [TripPlan] = []
         var signatures: Set<String> = []
 
@@ -276,7 +301,13 @@ public struct TripPlanner: Sendable {
             appendUnique(plan, to: &merged, signatures: &signatures, maxCount: maxMergedPlans)
         }
 
-        return merged
+        return TripHistoryRanker(
+            profile: profile,
+            origin: origin,
+            destination: destination,
+            now: now,
+            calendar: calendar
+        ).rankPlans(merged)
     }
 
     private static func appendUnique(

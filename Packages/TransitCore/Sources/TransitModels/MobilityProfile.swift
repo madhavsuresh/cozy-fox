@@ -16,9 +16,36 @@ public enum MotionContext: String, Codable, Sendable, Hashable {
 /// Coarse, on-device history used for commute prediction.
 ///
 /// This intentionally stores semantic states and route choices, not a raw GPS
-/// trace. Home/work coordinates already live in `CommuteAnchors`; the learner
-/// only needs context, direction, weekday, and hour buckets.
+/// trace. Route pins may include coarse origin/destination buckets so the trip
+/// planner can recognize familiar corridors without retaining exact travel
+/// points.
 public struct MobilityProfile: Codable, Sendable, Hashable {
+    public struct RouteLocation: Codable, Sendable, Hashable {
+        public let latitude: Double
+        public let longitude: Double
+        public let label: String?
+
+        public init(latitude: Double, longitude: Double, label: String? = nil) {
+            self.latitude = latitude
+            self.longitude = longitude
+            self.label = label
+        }
+
+        public static func bucketed(
+            latitude: Double,
+            longitude: Double,
+            label: String? = nil,
+            cellDegrees: Double = 0.0025
+        ) -> RouteLocation {
+            let scale = 1 / cellDegrees
+            return RouteLocation(
+                latitude: (latitude * scale).rounded() / scale,
+                longitude: (longitude * scale).rounded() / scale,
+                label: label
+            )
+        }
+    }
+
     public struct Observation: Codable, Sendable, Hashable, Identifiable {
         public let id: UUID
         public let recordedAt: Date
@@ -70,6 +97,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         public let metraRoute: String?
         public let metraStationId: String?
         public let metraDirectionId: Int?
+        public let origin: RouteLocation?
+        public let destination: RouteLocation?
         public let weekday: Int
         public let hour: Int
         public let motion: MotionContext?
@@ -86,6 +115,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             metraRoute: String? = nil,
             metraStationId: String? = nil,
             metraDirectionId: Int? = nil,
+            origin: RouteLocation? = nil,
+            destination: RouteLocation? = nil,
             weekday: Int,
             hour: Int,
             motion: MotionContext? = nil
@@ -101,6 +132,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             self.metraRoute = metraRoute
             self.metraStationId = metraStationId
             self.metraDirectionId = metraDirectionId
+            self.origin = origin
+            self.destination = destination
             self.weekday = weekday
             self.hour = hour
             self.motion = motion
@@ -164,6 +197,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         metraRoute: String? = nil,
         metraStationId: String? = nil,
         metraDirectionId: Int? = nil,
+        origin: RouteLocation? = nil,
+        destination: RouteLocation? = nil,
         motion: MotionContext? = nil,
         at date: Date = .now,
         calendar: Calendar = .current
@@ -180,6 +215,8 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             metraRoute: metraRoute,
             metraStationId: metraStationId,
             metraDirectionId: metraDirectionId,
+            origin: origin,
+            destination: destination,
             weekday: calendar.component(.weekday, from: date),
             hour: calendar.component(.hour, from: date),
             motion: motion

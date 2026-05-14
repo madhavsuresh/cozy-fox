@@ -414,10 +414,15 @@ struct DashboardScreen: View {
 
         let origin = PlannerCoordinate(latitude: current.latitude, longitude: current.longitude)
         let destination = PlannerCoordinate(latitude: latitude, longitude: longitude)
+        let profile = model.preferences.loadMobilityProfile()
 
         Task { @MainActor in
             do {
-                let plans = try await tripPlanner.plan(from: origin, to: destination)
+                let plans = try await tripPlanner.plan(
+                    from: origin,
+                    to: destination,
+                    profile: profile
+                )
                 guard !Task.isCancelled else { return }
                 let options = buildHomeTripOptions(
                     from: plans,

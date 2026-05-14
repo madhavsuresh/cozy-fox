@@ -95,10 +95,20 @@ public struct LocalTransitPlanner: Sendable {
     public func plan(
         from origin: PlannerCoordinate,
         to destination: PlannerCoordinate,
+        profile: MobilityProfile = .empty,
+        now: Date = .now,
+        calendar: Calendar = .current,
         stations: [LStation] = LStationCatalog.all,
         busStops: [BusStop] = BusStopCatalog.all,
         metraStations: [MetraStation] = MetraStationCatalog.all
     ) -> [TripPlan] {
+        let ranker = TripHistoryRanker(
+            profile: profile,
+            origin: origin,
+            destination: destination,
+            now: now,
+            calendar: calendar
+        )
         let originPair: (lat: Double, lon: Double) = (origin.latitude, origin.longitude)
         let destinationPair: (lat: Double, lon: Double) = (destination.latitude, destination.longitude)
         let directMeters = Distance.meters(from: originPair, to: destinationPair)
@@ -291,10 +301,25 @@ public struct LocalTransitPlanner: Sendable {
             selectedBusCandidates.append((candidate, flavor))
         }
 
+        let shortestRideKey = shortestRide.map(candidateKey)
+        let shortestWalkKey = shortestWalk.map(candidateKey)
+        func flavor(for candidate: Candidate) -> TripPlanFlavor {
+            let key = candidateKey(candidate)
+            if key == shortestWalkKey, key != shortestRideKey {
+                return .busShortestWalk
+            }
+            return .busShortestRide
+        }
+
+        for candidate in busCandidates.sorted(by: { lhs, rhs in
+            historyFirst(lhs, rhs, ranker: ranker)
+        }) where ranker.score(resolution: candidate.resolution) > 0 {
+            appendBusCandidate(candidate, flavor: flavor(for: candidate))
+        }
         if let shortestRide {
             appendBusCandidate(shortestRide, flavor: .busShortestRide)
         }
-        if let shortestWalk, shortestWalk.resolution != shortestRide?.resolution {
+        if let shortestWalk, shortestWalkKey != shortestRideKey {
             appendBusCandidate(shortestWalk, flavor: .busShortestWalk)
         }
         for candidate in busCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }) {
@@ -312,19 +337,25 @@ public struct LocalTransitPlanner: Sendable {
         )
 
         var plans: [TripPlan] = []
-        for candidate in trainCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }).prefix(max(0, maxTrainPlans)) {
+        for candidate in trainCandidates.sorted(by: { lhs, rhs in
+            historyFirst(lhs, rhs, ranker: ranker)
+        }).prefix(max(0, maxTrainPlans)) {
             plans.append(makePlan(from: candidate, flavor: .train))
         }
-        for candidate in transferCandidates.prefix(max(0, maxBusToTrainPlans)) {
+        for candidate in transferCandidates.sorted(by: { lhs, rhs in
+            historyFirst(lhs, rhs, ranker: ranker)
+        }).prefix(max(0, maxBusToTrainPlans)) {
             plans.append(makePlan(from: candidate))
         }
-        for candidate in metraCandidates.sorted(by: { $0.totalMinutes < $1.totalMinutes }).prefix(max(0, maxMetraPlans)) {
+        for candidate in metraCandidates.sorted(by: { lhs, rhs in
+            historyFirst(lhs, rhs, ranker: ranker)
+        }).prefix(max(0, maxMetraPlans)) {
             plans.append(makePlan(from: candidate, flavor: .metra))
         }
         for entry in selectedBusCandidates {
             plans.append(makePlan(from: entry.candidate, flavor: entry.flavor))
         }
-        return plans
+        return ranker.rankPlans(plans)
     }
 
     private func multiLegTransferCandidates(
@@ -992,6 +1023,28 @@ public struct LocalTransitPlanner: Sendable {
             totalDistanceMeters: totalDistance,
             legs: [originWalkLeg, transitLeg, destWalkLeg]
         )
+    }
+
+    private func historyFirst(
+        _ lhs: Candidate,
+        _ rhs: Candidate,
+        ranker: TripHistoryRanker
+    ) -> Bool {
+        let lhsScore = ranker.score(resolution: lhs.resolution)
+        let rhsScore = ranker.score(resolution: rhs.resolution)
+        if lhsScore != rhsScore { return lhsScore > rhsScore }
+        return lhs.totalMinutes < rhs.totalMinutes
+    }
+
+    private func historyFirst(
+        _ lhs: TransferPathCandidate,
+        _ rhs: TransferPathCandidate,
+        ranker: TripHistoryRanker
+    ) -> Bool {
+        let lhsScore = ranker.score(resolutions: lhs.segments.map { resolution(for: $0.route) })
+        let rhsScore = ranker.score(resolutions: rhs.segments.map { resolution(for: $0.route) })
+        if lhsScore != rhsScore { return lhsScore > rhsScore }
+        return lhs.totalMinutes < rhs.totalMinutes
     }
 
     private enum LocalTransitRoute: Hashable, Sendable {
