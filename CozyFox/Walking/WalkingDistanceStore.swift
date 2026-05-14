@@ -8,15 +8,63 @@ struct WalkingDistance: Codable, Equatable, Sendable {
     let cachedAt: Date
 }
 
-/// Persistent cache of MapKit walking-distance lookups, keyed on a ~50m
-/// origin grid + station id. Lives on the main actor and is `@Observable`
-/// so SwiftUI re-renders when MapKit results land. Persists to a JSON file
-/// in `Caches/` — small enough that we just rewrite the whole file on
-/// change (debounced).
+enum AccessTravelMode: String, Codable, Sendable {
+    case walking
+    case cycling
+}
+
+struct AccessRouteDistances: Codable, Equatable, Sendable {
+    var walking: WalkingDistance?
+    var cycling: WalkingDistance?
+
+    init(walking: WalkingDistance? = nil, cycling: WalkingDistance? = nil) {
+        self.walking = walking
+        self.cycling = cycling
+    }
+
+    func distance(for mode: AccessTravelMode) -> WalkingDistance? {
+        switch mode {
+        case .walking: walking
+        case .cycling: cycling
+        }
+    }
+
+    mutating func set(_ distance: WalkingDistance, for mode: AccessTravelMode) {
+        switch mode {
+        case .walking: walking = distance
+        case .cycling: cycling = distance
+        }
+    }
+
+    func invalidated(at stamp: Date) -> AccessRouteDistances {
+        AccessRouteDistances(
+            walking: walking.map {
+                WalkingDistance(
+                    meters: $0.meters,
+                    expectedTravelTime: $0.expectedTravelTime,
+                    cachedAt: stamp
+                )
+            },
+            cycling: cycling.map {
+                WalkingDistance(
+                    meters: $0.meters,
+                    expectedTravelTime: $0.expectedTravelTime,
+                    cachedAt: stamp
+                )
+            }
+        )
+    }
+}
+
+/// Persistent cache of MapKit access-route lookups, keyed on a ~50m origin
+/// grid + destination id. Lives on the main actor and is `@Observable` so
+/// SwiftUI re-renders when MapKit results land. Persists to a JSON file in
+/// `Caches/`, small enough that we just rewrite the whole file on change
+/// (debounced).
 @MainActor
 @Observable
 final class WalkingDistanceStore {
-    private(set) var distances: [String: WalkingDistance] = [:]
+    private(set) var distances: [String: AccessRouteDistances] = [:]
 
     @ObservationIgnored
     private var inflight: Set<String> = []
@@ -58,7 +106,7 @@ final class WalkingDistanceStore {
     /// chance H3 rejects the input as out-of-range.
     static let cellResolution: H3Cell.Resolution = .res10
 
-    static func bucketKey(origin: (lat: Double, lon: Double), stationId: Int) -> String {
+    static func bucketKey(origin: (lat: Double, lon: Double), destinationKey: String) -> String {
         let cellID: String
         if let cell = try? H3LatLng(
             latitudeDegs: origin.lat,
@@ -68,40 +116,148 @@ final class WalkingDistanceStore {
         } else {
             cellID = "raw-\(origin.lat)-\(origin.lon)"
         }
-        return "\(cellID)_\(stationId)"
+        return "\(cellID)_\(destinationKey)"
+    }
+
+    static func stationDestinationKey(stationId: Int) -> String {
+        String(stationId)
+    }
+
+    static func busStopDestinationKey(stopId: Int) -> String {
+        "bus-\(stopId)"
+    }
+
+    static func metraStationDestinationKey(stationId: String) -> String {
+        "metra-\(stationId)"
+    }
+
+    static func bucketKey(origin: (lat: Double, lon: Double), stationId: Int) -> String {
+        bucketKey(origin: origin, destinationKey: stationDestinationKey(stationId: stationId))
     }
 
     /// Fresh entry, or nil if missing or past TTL.
-    func fresh(origin: (lat: Double, lon: Double), stationId: Int) -> WalkingDistance? {
-        let key = Self.bucketKey(origin: origin, stationId: stationId)
-        guard let entry = distances[key] else { return nil }
+    func fresh(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) -> WalkingDistance? {
+        let key = Self.bucketKey(origin: origin, destinationKey: destinationKey)
+        guard let entry = distances[key]?.distance(for: mode) else { return nil }
         if Date().timeIntervalSince(entry.cachedAt) > freshnessTTL { return nil }
         return entry
     }
 
+    func fresh(origin: (lat: Double, lon: Double), stationId: Int) -> WalkingDistance? {
+        fresh(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
     /// Cached entry regardless of TTL — for "best we have so far" display
     /// while a fresh fetch is in flight.
+    func anyCached(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) -> WalkingDistance? {
+        let key = Self.bucketKey(origin: origin, destinationKey: destinationKey)
+        return distances[key]?.distance(for: mode)
+    }
+
     func anyCached(origin: (lat: Double, lon: Double), stationId: Int) -> WalkingDistance? {
-        let key = Self.bucketKey(origin: origin, stationId: stationId)
-        return distances[key]
+        anyCached(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
+    func isInflight(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) -> Bool {
+        inflight.contains(Self.requestKey(origin: origin, destinationKey: destinationKey, mode: mode))
     }
 
     func isInflight(origin: (lat: Double, lon: Double), stationId: Int) -> Bool {
-        inflight.contains(Self.bucketKey(origin: origin, stationId: stationId))
+        isInflight(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
+    func markInflight(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) {
+        inflight.insert(Self.requestKey(origin: origin, destinationKey: destinationKey, mode: mode))
     }
 
     func markInflight(origin: (lat: Double, lon: Double), stationId: Int) {
-        inflight.insert(Self.bucketKey(origin: origin, stationId: stationId))
+        markInflight(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
+    func clearInflight(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) {
+        inflight.remove(Self.requestKey(origin: origin, destinationKey: destinationKey, mode: mode))
     }
 
     func clearInflight(origin: (lat: Double, lon: Double), stationId: Int) {
-        inflight.remove(Self.bucketKey(origin: origin, stationId: stationId))
+        clearInflight(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
+    func isInNegativeCache(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) -> Bool {
+        let key = Self.requestKey(origin: origin, destinationKey: destinationKey, mode: mode)
+        guard let savedAt = failures[key] else { return false }
+        return Date().timeIntervalSince(savedAt) < negativeCacheTTL
     }
 
     func isInNegativeCache(origin: (lat: Double, lon: Double), stationId: Int) -> Bool {
-        let key = Self.bucketKey(origin: origin, stationId: stationId)
-        guard let savedAt = failures[key] else { return false }
-        return Date().timeIntervalSince(savedAt) < negativeCacheTTL
+        isInNegativeCache(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
+    func record(
+        meters: Double,
+        expectedTravelTime: TimeInterval,
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) {
+        let key = Self.bucketKey(origin: origin, destinationKey: destinationKey)
+        let distance = WalkingDistance(
+            meters: meters,
+            expectedTravelTime: expectedTravelTime,
+            cachedAt: Date()
+        )
+        var entry = distances[key] ?? AccessRouteDistances()
+        entry.set(distance, for: mode)
+        distances[key] = entry
+        failures[Self.requestKey(origin: origin, destinationKey: destinationKey, mode: mode)] = nil
+        persistDebounced()
     }
 
     func record(
@@ -110,22 +266,33 @@ final class WalkingDistanceStore {
         origin: (lat: Double, lon: Double),
         stationId: Int
     ) {
-        let key = Self.bucketKey(origin: origin, stationId: stationId)
-        distances[key] = WalkingDistance(
+        record(
             meters: meters,
             expectedTravelTime: expectedTravelTime,
-            cachedAt: Date()
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
         )
-        failures[key] = nil
-        persistDebounced()
     }
 
-    func recordFailure(origin: (lat: Double, lon: Double), stationId: Int) {
-        let key = Self.bucketKey(origin: origin, stationId: stationId)
+    func recordFailure(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) {
+        let key = Self.requestKey(origin: origin, destinationKey: destinationKey, mode: mode)
         failures[key] = Date()
     }
 
-    /// Wipe the cache. Used by Settings → "Clear walking distance cache."
+    func recordFailure(origin: (lat: Double, lon: Double), stationId: Int) {
+        recordFailure(
+            origin: origin,
+            destinationKey: Self.stationDestinationKey(stationId: stationId),
+            mode: .walking
+        )
+    }
+
+    /// Wipe the cache. Used by Settings -> "Clear access route cache."
     func clearAll() {
         distances.removeAll()
         failures.removeAll()
@@ -137,13 +304,7 @@ final class WalkingDistanceStore {
     /// still has the old data to fall back on while MapKit responds.
     func invalidateAll() {
         let stamp = Date.distantPast
-        distances = distances.mapValues {
-            WalkingDistance(
-                meters: $0.meters,
-                expectedTravelTime: $0.expectedTravelTime,
-                cachedAt: stamp
-            )
-        }
+        distances = distances.mapValues { $0.invalidated(at: stamp) }
         persistDebounced()
     }
 
@@ -154,10 +315,10 @@ final class WalkingDistanceStore {
     func cachedBuckets() -> Set<String> {
         var buckets: Set<String> = []
         for key in distances.keys {
-            // Key format is "{h3CellID}_{stationId}". The cell ID never
-            // contains an underscore, so splitting on the last underscore
+            // Key format is "{h3CellID}_{destinationKey}". The cell ID never
+            // contains an underscore, so splitting on the first underscore
             // is unambiguous.
-            if let underscoreIdx = key.lastIndex(of: "_") {
+            if let underscoreIdx = key.firstIndex(of: "_") {
                 buckets.insert(String(key[..<underscoreIdx]))
             }
         }
@@ -171,20 +332,32 @@ final class WalkingDistanceStore {
 
     private struct Persisted: Codable, Sendable {
         let version: Int
+        let distances: [String: AccessRouteDistances]
+    }
+
+    private struct LegacyPersisted: Codable, Sendable {
+        let version: Int
         let distances: [String: WalkingDistance]
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode(Persisted.self, from: data),
-              decoded.version == 1
-        else { return }
-        distances = decoded.distances
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        if let decoded = try? JSONDecoder().decode(Persisted.self, from: data),
+           decoded.version == 2 {
+            distances = decoded.distances
+            return
+        }
+        if let legacy = try? JSONDecoder().decode(LegacyPersisted.self, from: data),
+           legacy.version == 1 {
+            distances = legacy.distances.mapValues {
+                AccessRouteDistances(walking: $0, cycling: nil)
+            }
+        }
     }
 
     private func persistDebounced() {
         persistTask?.cancel()
-        let snapshot = Persisted(version: 1, distances: distances)
+        let snapshot = Persisted(version: 2, distances: distances)
         let url = fileURL
         persistTask = Task.detached(priority: .utility) {
             // Debounce burst writes during a refresh cycle so we don't
@@ -194,5 +367,13 @@ final class WalkingDistanceStore {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
             try? data.write(to: url, options: .atomic)
         }
+    }
+
+    private static func requestKey(
+        origin: (lat: Double, lon: Double),
+        destinationKey: String,
+        mode: AccessTravelMode
+    ) -> String {
+        "\(mode.rawValue)_\(bucketKey(origin: origin, destinationKey: destinationKey))"
     }
 }
