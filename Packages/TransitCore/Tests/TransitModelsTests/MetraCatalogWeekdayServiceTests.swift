@@ -6,78 +6,92 @@ import TransitModels
 /// GTFS `calendar.txt` order (Mon=0…Sun=6). Before the fix, the
 /// consumer was reading them in Apple `Calendar` order (Sun=0…Sat=6),
 /// which silently swapped the Mon–Fri service onto Sun–Thu and the
-/// Sat–Sun service onto Fri–Sat. The visible symptom: on Friday
-/// the UP-N catalog hid the standard weekday departures (the trains
-/// at 09:32 and 10:02 outbound from OTC) and instead returned the
-/// thinner Sat/Sun pattern.
+/// Sat–Sun service onto Fri–Sat. The user-visible symptom: on Friday
+/// the UP-N catalog returned the thinner weekend pattern (hourly
+/// departures only) instead of the denser weekday pattern, hiding
+/// the mid-hour trains.
+///
+/// The assertions below are deliberately structural — same-cohort
+/// days must match, different cohorts must differ — so they survive
+/// future GTFS publications without re-encoding specific clock
+/// times. The specific morning-rush trains used to motivate the bug
+/// report are *consequences* of the broader cohort mismatch, not the
+/// invariant itself.
 @Suite("MetraCatalog weekday → service")
 struct MetraCatalogWeekdayServiceTests {
 
-    @Test func fridayUpNHasWeekdayMorningDepartures() {
-        // Friday 2026-05-15 at 09:00 Chicago.
-        let nowFriday = Self.makeChicagoDate(year: 2026, month: 5, day: 15, hour: 9)
-        let outbound = MetraScheduleCatalog.upcomingDepartures(
-            stationId: "OTC",
-            routeId: "UP-N",
-            directionId: 0,
-            now: nowFriday,
-            horizon: 6 * 60 * 60,
-            limit: 16
-        )
-        let times = outbound.map { Self.localClock(of: $0.scheduledAt) }
-        // The canonical weekday pattern includes 09:32 → Waukegan and
-        // 10:02 → Kenosha. If we ever fall back onto the weekend
-        // service those two departures disappear (the weekend pattern
-        // only carries the hourly :32 trains).
-        #expect(times.contains("09:32"))
-        #expect(times.contains("10:02"))
+    @Test func fridayMatchesAnotherWeekday() {
+        // Friday and Thursday should be in the same weekday cohort.
+        // With the old indexing Thursday landed on the Mon–Fri
+        // service while Friday landed on the weekend service — so
+        // these two queries returned wildly different timetables on
+        // the same line and station. Asserting equality catches that
+        // exact bug without depending on any single train.
+        let thursday = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 14)
+        let friday   = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 15)
+        #expect(!friday.isEmpty)
+        #expect(friday == thursday)
     }
 
-    @Test func sundayUpNHasNoWeekdayOnlyDepartures() {
-        // Sunday 2026-05-17 at 09:00 Chicago. The 10:02 departure is
-        // weekday-only — surfacing it on Sunday would mean we were
-        // still confusing service IDs after the fix.
-        let nowSunday = Self.makeChicagoDate(year: 2026, month: 5, day: 17, hour: 9)
-        let outbound = MetraScheduleCatalog.upcomingDepartures(
-            stationId: "OTC",
-            routeId: "UP-N",
-            directionId: 0,
-            now: nowSunday,
-            horizon: 6 * 60 * 60,
-            limit: 16
-        )
-        let times = outbound.map { Self.localClock(of: $0.scheduledAt) }
-        #expect(!times.contains("10:02"))
-        // Sunday morning still has trains — sanity check we didn't
-        // simply turn the catalog off.
-        #expect(!outbound.isEmpty)
+    @Test func fridayDiffersFromSaturday() {
+        // Sanity check the other direction: weekday and weekend
+        // cohorts have visibly different timetables. If the cohort
+        // mapping ever collapsed Fri/Sat back together this would
+        // notice.
+        let friday   = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 15)
+        let saturday = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 16)
+        #expect(!friday.isEmpty)
+        #expect(!saturday.isEmpty)
+        #expect(friday != saturday)
     }
 
-    @Test func saturdayAndSundayDepartureCountIsLowerThanWeekday() {
-        // Same hour-of-day window across three days during the
-        // 2026-05-04..2026-06-07 service period. The weekday pattern
-        // is noticeably denser than either weekend day. If the
-        // weekday/weekend indices were swapped we'd see Friday
-        // matching Sat/Sun.
-        func count(year: Int, month: Int, day: Int) -> Int {
-            let now = Self.makeChicagoDate(year: year, month: month, day: day, hour: 9)
-            return MetraScheduleCatalog.upcomingDepartures(
-                stationId: "OTC",
-                routeId: "UP-N",
-                directionId: 0,
-                now: now,
-                horizon: 6 * 60 * 60,
-                limit: 32
-            ).count
-        }
-        let friday = count(year: 2026, month: 5, day: 15)
-        let saturday = count(year: 2026, month: 5, day: 16)
-        let sunday = count(year: 2026, month: 5, day: 17)
-        #expect(friday > saturday)
-        #expect(friday > sunday)
+    @Test func weekdayCarriesMoreDeparturesThanWeekend() {
+        // Density check: the weekday pattern is denser than either
+        // weekend day in a fixed morning window. Before the fix,
+        // Friday silently picked up the weekend service so it
+        // matched (or undershot) Sat/Sun counts.
+        let friday   = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 15)
+        let saturday = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 16)
+        let sunday   = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 17)
+        #expect(friday.count > saturday.count)
+        #expect(friday.count > sunday.count)
+    }
+
+    @Test func sundayDoesNotInheritWeekdayPattern() {
+        // The inverse of the user-facing bug: with the old indexing,
+        // Sunday was mapped onto the Mon–Fri service and so picked
+        // up weekday-only trains. Sunday should look like a weekend
+        // day, not like Thursday.
+        let thursday = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 14)
+        let sunday   = clockTimes(.uPN, .otc, year: 2026, month: 5, day: 17)
+        #expect(!sunday.isEmpty)
+        #expect(sunday != thursday)
     }
 
     // MARK: - Helpers
+
+    private enum Route: String { case uPN = "UP-N" }
+    private enum Station: String { case otc = "OTC" }
+
+    /// Returns the set of HH:mm clock times (Chicago local) for UP-N
+    /// outbound departures from OTC in the six-hour window starting
+    /// at 09:00 on the given date.
+    private func clockTimes(
+        _ route: Route,
+        _ station: Station,
+        year: Int, month: Int, day: Int
+    ) -> Set<String> {
+        let now = Self.makeChicagoDate(year: year, month: month, day: day, hour: 9)
+        let predictions = MetraScheduleCatalog.upcomingDepartures(
+            stationId: station.rawValue,
+            routeId: route.rawValue,
+            directionId: 0,
+            now: now,
+            horizon: 6 * 60 * 60,
+            limit: 64
+        )
+        return Set(predictions.map { Self.clockString(of: $0.scheduledAt) })
+    }
 
     private static func makeChicagoDate(
         year: Int, month: Int, day: Int, hour: Int
@@ -93,12 +107,8 @@ struct MetraCatalogWeekdayServiceTests {
         return components.date!
     }
 
-    private static func localClock(of date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        formatter.timeZone = chicagoTimeZone
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter.string(from: date)
+    private static func clockString(of date: Date) -> String {
+        clockFormatter.string(from: date)
     }
 
     private static let chicagoTimeZone = TimeZone(identifier: "America/Chicago")!
@@ -106,5 +116,12 @@ struct MetraCatalogWeekdayServiceTests {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = chicagoTimeZone
         return cal
+    }()
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        f.timeZone = chicagoTimeZone
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
     }()
 }
