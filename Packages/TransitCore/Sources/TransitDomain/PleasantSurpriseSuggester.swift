@@ -34,6 +34,11 @@ public struct PleasantSurpriseSuggester: Sendable {
         /// "Brown" for trains. The caller may further decorate.
         public let displayName: String
         public let extraMinutes: Int
+        /// 0.0–1.0 geographic novelty / delight score from the caller-
+        /// supplied closure. 0 when no delight signal is available.
+        /// Exposed so consumers can show or hide a "+ passes places
+        /// you like" hint without recomputing.
+        public let delight: Double
 
         public init(
             routeKey: String,
@@ -41,7 +46,8 @@ public struct PleasantSurpriseSuggester: Sendable {
             mode: MobilityProfileSummary.RoutePattern.Mode,
             routeId: String,
             displayName: String,
-            extraMinutes: Int
+            extraMinutes: Int,
+            delight: Double = 0
         ) {
             self.routeKey = routeKey
             self.direction = direction
@@ -49,6 +55,7 @@ public struct PleasantSurpriseSuggester: Sendable {
             self.routeId = routeId
             self.displayName = displayName
             self.extraMinutes = extraMinutes
+            self.delight = delight
         }
 
         public var prose: String {
@@ -87,7 +94,8 @@ public struct PleasantSurpriseSuggester: Sendable {
         isSuppressed: (String) -> Bool,
         recentObservationCutoff: Date,
         maxTimePenaltyFraction: Double = 0.25,
-        maxAbsolutePenaltyMinutes: Int = 5
+        maxAbsolutePenaltyMinutes: Int = 5,
+        delightScore: (AlternativeRoute) -> Double = { _ in 0 }
     ) -> Suggestion? {
         // 1) Direction inference.
         let direction: CommuteDirection
@@ -123,8 +131,11 @@ public struct PleasantSurpriseSuggester: Sendable {
         )
         let usualKey = Self.key(mode: usual.mode, routeId: usual.routeId)
 
-        // 4) Score each candidate; pick the one within budget that's
-        // most novel and cheapest. Sort by extraMinutes ascending.
+        // 4) Score each candidate; pick the one within budget. Ranking:
+        // descending delight first (passes places the user likes), then
+        // ascending extraMinutes (cheaper). Delight defaults to 0 when
+        // the caller didn't supply a scorer — falls back to the pre-
+        // delight-scoring "cheapest acceptable wins" ranking.
         let candidates: [Suggestion] = alternatives
             .compactMap { alt -> Suggestion? in
                 let altKey = Self.key(mode: alt.mode, routeId: alt.routeId)
@@ -141,10 +152,14 @@ public struct PleasantSurpriseSuggester: Sendable {
                     mode: alt.mode,
                     routeId: alt.routeId,
                     displayName: alt.displayName,
-                    extraMinutes: extraMinutes
+                    extraMinutes: extraMinutes,
+                    delight: delightScore(alt)
                 )
             }
-            .sorted { $0.extraMinutes < $1.extraMinutes }
+            .sorted { lhs, rhs in
+                if lhs.delight != rhs.delight { return lhs.delight > rhs.delight }
+                return lhs.extraMinutes < rhs.extraMinutes
+            }
 
         return candidates.first
     }
