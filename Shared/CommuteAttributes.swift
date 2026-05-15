@@ -1,5 +1,6 @@
 import ActivityKit
 import Foundation
+import TransitModels
 
 /// `ActivityAttributes` shared between the iOS app and the Live Activity
 /// extension. Both targets compile this same file so the type identity is
@@ -35,6 +36,11 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
         /// Up to ~6 upcoming arrivals (including `nextArrival`), used to
         /// drive the headway dot-strip on the Live Activity.
         public var upcomingArrivals: [Date]
+        /// Nonverbal per-arrival confidence used to vary dot weight /
+        /// opacity on the Live Activity. Empty for activities started
+        /// before this field existed; the renderer treats absent marks
+        /// as `.normal`.
+        public var confidenceMarks: [ArrivalConfidenceMark]
 
         public init(
             routeLabel: String,
@@ -44,7 +50,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             nextArrival: Date,
             followingArrival: Date? = nil,
             alertHeadline: String? = nil,
-            upcomingArrivals: [Date] = []
+            upcomingArrivals: [Date] = [],
+            confidenceMarks: [ArrivalConfidenceMark] = []
         ) {
             self.routeLabel = routeLabel
             self.lineColorRaw = lineColorRaw
@@ -54,6 +61,7 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             self.followingArrival = followingArrival
             self.alertHeadline = alertHeadline
             self.upcomingArrivals = upcomingArrivals
+            self.confidenceMarks = confidenceMarks
         }
 
         /// Decode tolerates an absent `upcomingArrivals` from older state
@@ -71,6 +79,7 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             alertHeadline = try c.decodeIfPresent(String.self, forKey: .alertHeadline)
             upcomingArrivals = (try? c.decode([Date].self, forKey: .upcomingArrivals))
                 ?? [nextArrival, followingArrival].compactMap { $0 }
+            confidenceMarks = (try? c.decode([ArrivalConfidenceMark].self, forKey: .confidenceMarks)) ?? []
         }
     }
 
@@ -85,6 +94,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
         /// Up to ~6 upcoming arrivals (including `nextArrival`), used to
         /// drive the headway dot-strip on the Live Activity.
         public var upcomingArrivals: [Date]
+        /// Nonverbal per-arrival confidence; see `TrainLeg`.
+        public var confidenceMarks: [ArrivalConfidenceMark]
 
         public init(
             routeLabel: String,
@@ -94,7 +105,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             nextArrival: Date,
             followingArrival: Date? = nil,
             alertHeadline: String? = nil,
-            upcomingArrivals: [Date] = []
+            upcomingArrivals: [Date] = [],
+            confidenceMarks: [ArrivalConfidenceMark] = []
         ) {
             self.routeLabel = routeLabel
             self.stopName = stopName
@@ -104,6 +116,7 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             self.followingArrival = followingArrival
             self.alertHeadline = alertHeadline
             self.upcomingArrivals = upcomingArrivals
+            self.confidenceMarks = confidenceMarks
         }
 
         /// Same backwards-compat decoder as `TrainLeg`.
@@ -118,6 +131,7 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             alertHeadline = try c.decodeIfPresent(String.self, forKey: .alertHeadline)
             upcomingArrivals = (try? c.decode([Date].self, forKey: .upcomingArrivals))
                 ?? [nextArrival, followingArrival].compactMap { $0 }
+            confidenceMarks = (try? c.decode([ArrivalConfidenceMark].self, forKey: .confidenceMarks)) ?? []
         }
     }
 
@@ -130,6 +144,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
         public var followingArrival: Date?
         public var alertHeadline: String?
         public var upcomingArrivals: [Date]
+        /// Nonverbal per-arrival confidence; see `TrainLeg`.
+        public var confidenceMarks: [ArrivalConfidenceMark]
 
         public init(
             routeLabel: String,
@@ -139,7 +155,8 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             nextArrival: Date,
             followingArrival: Date? = nil,
             alertHeadline: String? = nil,
-            upcomingArrivals: [Date] = []
+            upcomingArrivals: [Date] = [],
+            confidenceMarks: [ArrivalConfidenceMark] = []
         ) {
             self.routeLabel = routeLabel
             self.routeId = routeId
@@ -149,6 +166,7 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             self.followingArrival = followingArrival
             self.alertHeadline = alertHeadline
             self.upcomingArrivals = upcomingArrivals
+            self.confidenceMarks = confidenceMarks
         }
 
         public init(from decoder: Decoder) throws {
@@ -162,6 +180,7 @@ public struct CommuteAttributes: ActivityAttributes, Sendable {
             alertHeadline = try c.decodeIfPresent(String.self, forKey: .alertHeadline)
             upcomingArrivals = (try? c.decode([Date].self, forKey: .upcomingArrivals))
                 ?? [nextArrival, followingArrival].compactMap { $0 }
+            confidenceMarks = (try? c.decode([ArrivalConfidenceMark].self, forKey: .confidenceMarks)) ?? []
         }
     }
 
