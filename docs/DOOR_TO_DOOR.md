@@ -36,7 +36,11 @@ For each candidate, predict `E[time]` and a tail (p80 / p90), then pick on a pol
 ### Divvy (classic or e-bike) leg
 - [ ] Time to find a *working* bike at the origin dock(s) — not all bikes are rentable; e-bikes especially churn.
 - [ ] **Per-station, per-hour availability distribution** — not the current count, the predicted distribution at *trip-execution time*. divvy-observer's `station_status` rollups plus inferred-flow / station-community models are the input. Direction matters: the same station can be "fine" one half of the day and "always full" the other (see Evanston worked example below).
-- [ ] **Classic vs e-bike separately.** Classic Divvy only works if a dock is predicted open at the destination — it has no free-park option, so dock failure means a hard re-route. E-bike can fall back to free-parking inside the geofence.
+- [ ] **Listed vs rideable gap.** GBFS `num_bikes_available` / `num_ebikes_available` does *not* reflect lived experience. Two reasons:
+    - Disabled or low-battery e-bikes can show up as available in feed but won't rent in the app. `num_bikes_disabled` catches some of these but not all (low-battery especially).
+    - The *mean* count smooths over pulse-drain dynamics. At Sheridan & Noyes (NU) on a 30-day window, the morning mean is ~6 e-bikes, but **p(≤1 e-bike at any polled moment) ≈ 0.50**. Stations refill and drain in pulses; the lived "I keep finding nothing" matches the pulse minima, not the mean.
+    - The right summary statistic for a rider is `P(usable bike at the moment I arrive)`, not the count distribution alone.
+- [ ] **Classic vs e-bike separately.** Classic Divvy only works if a dock is predicted open at the destination — it has no free-park option, so dock failure means a hard re-route. E-bike can fall back to free-parking inside the geofence. See "Decision: classic Divvy when the destination dock might be full" below for the math.
 - [ ] Ride duration over **this corridor specifically**, from my historical mobility data on that part of the city (the divvy-observer project already partitions the city into mobility tiles).
 - [ ] Dock availability at destination at the moment I'd arrive — predicted, not current. divvy-observer has dock-state models.
 - [ ] If destination dock is full / closed: distance to the **next** viable dock, and walk back.
@@ -80,50 +84,98 @@ How does the Cozy Fox app, which is Swift / iOS and has **no backend**, actually
 
 A specific real trip the door-to-door predictor should solve. Directionality and time-of-day both matter — the same corridor has very different failure modes depending on which direction and which hour.
 
-### Morning: Metra (Central St) → campus
+### Morning: Metra (Davis St) → campus
 
-Train arrives at Central St Metra (Union Pacific North). Options to reach a campus building (~1.4 km southeast):
+Train arrives at Davis St Metra (Union Pacific North). Closest Divvy dock is **Benson Ave & Church St**, ~240 m from the platform — no dock is named "Davis." Options to reach a campus building:
 
-- **E-Divvy** from the Central St Metra dock → ride to a campus dock (University Library, Sheridan & Noyes, Chicago & Sheridan) → walk the last block.
+- **E-Divvy** from Benson & Church → ride to a campus dock (University Library, Sheridan & Noyes, Chicago & Sheridan) → walk the last block.
 - **Classic Divvy** from same dock — only viable if a dock is predicted open at the destination; classic has no free-park escape hatch.
-- **Walk** the full distance (~17 min).
+- **Walk** the full distance.
 - **Bus** along the corridor.
 
 Failure modes the prediction layer needs to surface *before* leaving the platform:
 
-- No e-bikes at Central St Metra by the time you walk to the dock.
-- All listed bikes are disabled (low battery, mechanical).
+- No e-bikes at Benson & Church by the time you walk to the dock. Mean is ~4 in the AM but the listed-vs-rideable gap above applies; ~1 disabled bike is typical so usable e-bikes is ~3.
 - Destination dock full / closed at arrival → walk back from the next-closest dock.
-- The naive campus target (University Library) is fine in the morning but unreliable later — direction and hour matter.
+- The naive campus target (University Library) is fine in the morning but **unusable as a dock-target in the afternoon** — direction and hour matter for the same station.
+- The "load-bearing" alternative dock isn't free: Sheridan & Noyes (NU) is ~500 m / ~6 min walk north of central campus, so picking it as the campus dock adds walk time on the campus side.
 
 ### Afternoon: campus → Metra
 
 This direction is where the station imbalance really bites, *and* there's a hard catching deadline at the Metra side. To catch a specific Metra departure:
 
-- **Walk to a campus Divvy station, ride to Central St Metra, dock there.** Two failure points: pickup and drop-off.
+- **Walk to a campus Divvy station, ride to Benson & Church (Davis Metra), dock there.** Two failure points: pickup and drop-off.
 - **Walk the full distance** (fixed cost, no surprises).
 - **Bus** along the corridor.
 
 Failure modes:
 
-- The closest campus dock might be empty of e-bikes. Worse, the obvious target (University Library) is **historically ~100% full from 3 PM to 7 PM** — full means no bikes leaving, so it's a non-starter for pickup. Sheridan & Noyes is the load-bearing alternative.
-- Even after a successful pickup, **Central St Metra is ~50–90% full at commute hours** — you may arrive bike-in-hand with no dock. Walking from the next-closest dock with a Metra clock ticking is the worst outcome.
-- The Metra departure is **fixed**, so the catching-probability term dominates here. Free-park inside the Divvy geofence (if eligible at that station) eliminates the docking risk — that affordance might be worth surfacing explicitly.
+- The closest campus dock might be empty of *usable* bikes — and the listed-vs-rideable gap is the operative thing, not the mean. The user reports Sheridan & Noyes is "constantly" without a bike despite a 30-day afternoon mean of 5–7 e-bikes. The afternoon hourly-mean data doesn't reproduce that experience, which is the point: the residual is some mix of (1) low-battery e-bikes that appear as available in GBFS but won't actually rent, (2) pulse-drain at class-out times the hourly mean smooths over, and (3) the user's specific commute minute catching the empty windows. The prediction layer needs to learn from *individual rental outcomes*, not just the smoothed feed.
+- The obvious target (University Library) is **~100% full from 3 PM to 7 PM** — which means no bikes leaving, so it's a non-starter for pickup at the *exact* afternoon hours you'd want it.
+- Even after a successful pickup, **docking at Benson & Church (Davis Metra) is the user's reported pain point**. The 30-day hourly mean understates it — afternoon p(dock full) sits low on average — but the dock *does* fill in pulses, especially when a southbound train is about to depart and other commuters are converging on the same dock. Lived experience > smoothed mean here, and the prediction layer should treat individual outcomes as evidence that updates the per-station, per-hour, per-departure model.
+- The Metra departure is **fixed**, so the catching-probability term dominates here. Free-park inside the Divvy geofence (if eligible at that station) eliminates the docking risk entirely — that affordance might be worth surfacing explicitly when only classics are available. (See "Decision" below.)
 
 ### What `../divvy-observer/` already shows
 
-30-day `station_status` window, four Evanston stations along the corridor:
+30-day `station_status` window, key Evanston stations along the corridor. Numbers below show the mean count *and* the lived-experience-matching tail metric where it diverges:
 
-| Station                     | 7–9 AM e-bikes / p(dock full) | 3–6 PM e-bikes / p(dock full) |
-|-----------------------------|--------------------------------|--------------------------------|
-| Central St Metra            | ~4–5 / ~50%                    | ~4 / ~60–90%                   |
-| University Library (NU)     | ~2 / ~50%                      | ~1.5 / **~100%**               |
-| Sheridan Rd & Noyes (NU)    | ~6 / ~0%                       | ~5–7 / ~0%                     |
-| Chicago Ave & Sheridan Rd   | ~2 / ~0%                       | dropping to ~0 e-bikes by 5 PM |
+| Station                                | 7–9 AM                                                              | 3–6 PM                                                                |
+|----------------------------------------|---------------------------------------------------------------------|-----------------------------------------------------------------------|
+| Benson & Church St (Davis Metra)       | ~4 e-bikes mean, **p(dock full) ≈ 0.45 at 7 AM** (drops to ~0 by 8 AM) | ~1–2 e-bikes mean, dock rarely full                                  |
+| Central St Metra                       | ~4–5 e-bikes mean, p(dock full) ≈ 0.50                              | ~4 e-bikes mean, p(dock full) ≈ 0.60–0.90                            |
+| Sheridan Rd & Noyes (NU)               | ~6 e-bikes mean **but p(≤1 e-bike) ≈ 0.50** — drains in pulses        | ~5–7 e-bikes mean, dock fine                                          |
+| University Library (NU)                | ~2 e-bikes mean, p(dock full) ≈ 0.50                                | ~1–2 e-bikes mean, **p(dock full) ≈ 1.00** (3–7 PM)                  |
+| Chicago Ave & Sheridan Rd              | ~2 e-bikes mean, dock fine                                          | drops to ~0 e-bikes by 5 PM, p(no e-bike) ≈ 0.87 at 5 PM             |
 
-(Sparse hourly bins for a 30-day window, so the table is illustrative, not authoritative. But the *shape* matches the lived experience: the corridor is structurally unbalanced. Re-run the query for current values; see `../divvy-observer/data/divvy_readonly.duckdb` → `station_status`.)
+(Sparse hourly bins for a 30-day window, so the table is illustrative, not authoritative. Re-run the query for current values; see `../divvy-observer/data/divvy_readonly.duckdb` → `station_status`. Disabled-bike count is also in the schema and should reduce listed counts.)
 
-The directional asymmetry is the prediction layer's job. The point-estimate dashboards the Divvy app shows today don't capture it; the user just learns "no bikes again" mid-trip. The whole point of this work is to move that surprise to *before the leg starts*.
+Two lessons stick out and they're the whole reason the prediction layer earns its keep:
+
+1. **The mean is the wrong summary.** "~6 e-bikes mean at Sheridan & Noyes morning" sounds great. But you arrive at a specific moment, and `p(≤1 e-bike) ≈ 0.50` says it's a coin flip whether you find anything. Use the distribution-at-arrival-time, not the count.
+2. **Directional asymmetry is structural.** University Library is fine in the morning and unusable in the afternoon. Benson & Church is risky in the morning (dock full) and easier in the afternoon. Same station, opposite failure modes across the day. The user just learns "no bikes again" / "dock full again" mid-trip — the point of this work is to move that surprise to *before the leg starts*.
+
+## Decision: classic Divvy when the destination dock might be full
+
+The user's question, made concrete. You're at the campus side, classic-only at the source (no e-bikes left at Sheridan & Noyes), heading to Davis Metra (Benson & Church) for a fixed train. The dock at the Metra side is full a meaningful fraction of the time. Worth biking, or just walk?
+
+Variables for the decision:
+
+- `B` = time saved by biking vs walking, conditional on success.
+- `P_dock` = probability the destination dock has space at arrival.
+- `R` = recovery cost when the dock is full (ride to next dock + walk back to target).
+- `M` = penalty for missing the Metra (next departure interval — UP-N at 30-min headways is typical off-peak, sometimes 10–15 min at peak, can be 60 min late at night).
+- `P_miss(R)` = probability the recovery time pushes you past the Metra cutoff (depends on slack in the plan).
+
+Expected loss vs walking the whole way (which is reliable):
+
+```
+E[loss] = -B + (1 − P_dock) × (R + P_miss(R) × M)
+```
+
+Plug in a realistic case — return trip toward the 5:40 PM Metra, classic bike, ~9 min ride vs ~17 min walk, dock-full probability roughly 0.4, +6 min if you have to bail to the next dock, 30 min until the next train, 50/50 you'd miss the Metra given the recovery hit:
+
+```
+E[loss] = -8 + 0.4 × (6 + 0.5 × 30)
+       = -8 + 0.4 × 21
+       = -8 + 8.4
+       = +0.4 min
+```
+
+Roughly **a wash, with all the variance loaded on the downside**. A small overestimate of `P_dock` or `P_miss` and walking pulls ahead. Classic Divvy against a fixed Metra deadline at non-trivial dock-full probability is, on this back-of-envelope, **a losing or break-even bet** — the upside is the bike time savings (bounded), the downside is missing the train (large).
+
+Three things change the answer:
+
+- **E-bike available.** Free-park inside geofence eliminates the dock-full risk entirely; the calc flips to clearly worth-it.
+- **Off-peak Metra with long headway.** `M` is the same, but `P_dock` at off-peak is usually higher and `P_miss` is lower because the train's still 30+ min away.
+- **Big slack in the plan.** If you leave 20 min before the train rather than 12, `P_miss(R)` collapses; the only cost of dock-full is the recovery time, not the missed train.
+
+UI takeaway — the user shouldn't see `p_dock = 0.55` or this formula. They should see:
+
+- "Walk — 17 min, reliable" as the top option.
+- A subtle "Classic Divvy not worth the risk to Davis right now" annotation if they hover, with the *why* available but not loud.
+- And when the e-bike option lights up, it becomes the lead: "E-Divvy + free-park — 11 min" with confidence implied.
+
+This is exactly the kind of decision the prediction layer should make silently, per the predictions-stay-invisible feedback memory.
 
 ## Open questions
 
@@ -135,5 +187,5 @@ The directional asymmetry is the prediction layer's job. The point-estimate dash
 ## Next deeper-exploration steps
 
 1. Read through `../divvy-observer/src/divvy/{predictor,tile_predictor,dg_nissm,mobility_partitions,inventory_dp}.py` and write a one-page "what's available, what's stable" summary.
-2. Use the **Evanston Metra (Central St) ↔ campus (NU)** corridor as the first hand-constructed worked example, in both directions. The station imbalance is severe enough that the prediction is load-bearing (University Library ~100% full mid-afternoon, Central St Metra ~50–90% full at commute hours — see Worked example above). Build the door-to-door prediction end-to-end for one specific Metra departure and one specific class time, see what data is missing.
+2. Use the **Davis St Metra (Benson & Church) ↔ campus (NU)** corridor as the first hand-constructed worked example, in both directions. The station imbalance is severe enough that the prediction is load-bearing (Benson & Church ~45% dock-full at 7 AM peak, Sheridan & Noyes drains to ≤1 e-bike ~50% of morning moments, University Library 100% full 3–7 PM). Build the door-to-door prediction end-to-end for one specific Metra departure and one specific class time, see what data is missing. The classic-Divvy decision math in the "Decision" section is the kind of output the predictor should land.
 3. Decide the model-shipping question (ONNX bundle vs. precomputed lookup vs. local service).
