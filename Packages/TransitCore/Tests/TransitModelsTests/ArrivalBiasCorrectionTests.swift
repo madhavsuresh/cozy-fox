@@ -65,6 +65,7 @@ struct ArrivalBiasCorrectionTests {
         #expect(correction != nil)
         #expect(correction?.direction == .apiEarly)
         #expect(correction?.magnitudeSeconds == 180)
+        #expect(correction?.stdDevSeconds == 60)
     }
 
     @Test func passesGatesWithNegativeMean() {
@@ -74,6 +75,7 @@ struct ArrivalBiasCorrectionTests {
         #expect(correction != nil)
         #expect(correction?.direction == .apiLate)
         #expect(correction?.magnitudeSeconds == 180)
+        #expect(correction?.stdDevSeconds == 60)
     }
 
     @Test func customThresholdsCanLetWeakerSignalsThrough() {
@@ -117,5 +119,66 @@ struct ArrivalBiasCorrectionTests {
         #expect(early.accessibilityLabel == "Usually 2 minutes later than predicted")
         let late = ArrivalBiasCorrection(direction: .apiLate, magnitudeSeconds: 60)
         #expect(late.accessibilityLabel == "Usually 1 minute earlier than predicted")
+    }
+
+    // MARK: - Uncertainty (stdDev) surface
+
+    @Test func displayTextAnnotatesUncertaintyWhenSignificant() {
+        // stddev = 90s ≈ 2m rounding (1.5 → 2). Annotate.
+        let correction = ArrivalBiasCorrection(
+            direction: .apiEarly,
+            magnitudeSeconds: 180,
+            stdDevSeconds: 90
+        )
+        #expect(correction.displayText == "usually +3m ±2m")
+    }
+
+    @Test func displayTextOmitsUncertaintyWhenBelowMinuteFloor() {
+        // stddev = 29s rounds to 0m → don't annotate (less than the
+        // 30-second surface threshold).
+        let correction = ArrivalBiasCorrection(
+            direction: .apiEarly,
+            magnitudeSeconds: 180,
+            stdDevSeconds: 29
+        )
+        #expect(correction.displayText == "usually +3m")
+    }
+
+    @Test func displayTextOmitsUncertaintyWhenAbsent() {
+        let correction = ArrivalBiasCorrection(
+            direction: .apiEarly,
+            magnitudeSeconds: 180,
+            stdDevSeconds: nil
+        )
+        #expect(correction.displayText == "usually +3m")
+    }
+
+    @Test func accessibilityLabelFoldsInUncertainty() {
+        let early = ArrivalBiasCorrection(
+            direction: .apiEarly,
+            magnitudeSeconds: 120,
+            stdDevSeconds: 60
+        )
+        #expect(early.accessibilityLabel == "Usually 2 minutes later than predicted, give or take 1 minute")
+
+        let late = ArrivalBiasCorrection(
+            direction: .apiLate,
+            magnitudeSeconds: 60,
+            stdDevSeconds: 130
+        )
+        #expect(late.accessibilityLabel == "Usually 1 minute earlier than predicted, give or take 2 minutes")
+    }
+
+    @Test func stdDevMinutesNilWhenStdDevAbsent() {
+        let correction = ArrivalBiasCorrection(direction: .apiEarly, magnitudeSeconds: 120)
+        #expect(correction.stdDevMinutes == nil)
+    }
+
+    @Test func factoryThreadsStdDevThroughFromCell() {
+        let c = cell(count: 36, mean: 180, stddev: 75)
+        let correction = ArrivalBiasCorrection.from(cell: c)
+        #expect(correction?.stdDevSeconds == 75)
+        // 75s rounds to 1m, so the display gets the annotation.
+        #expect(correction?.displayText == "usually +3m ±1m")
     }
 }

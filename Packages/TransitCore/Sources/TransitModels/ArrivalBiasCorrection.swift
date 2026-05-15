@@ -28,9 +28,21 @@ public struct ArrivalBiasCorrection: Sendable, Hashable {
     /// distribution is skewed.
     public let magnitudeSeconds: Double
 
-    public init(direction: Direction, magnitudeSeconds: Double) {
+    /// Sample standard deviation of the underlying cell, in seconds.
+    /// Optional because cells with `count < 2` have undefined variance.
+    /// Surfaced (when it rounds to ≥1 minute) as a `±Nm` annotation so
+    /// users see *how reliable* the bias estimate itself is, not just
+    /// its central tendency.
+    public let stdDevSeconds: Double?
+
+    public init(
+        direction: Direction,
+        magnitudeSeconds: Double,
+        stdDevSeconds: Double? = nil
+    ) {
         self.direction = direction
         self.magnitudeSeconds = magnitudeSeconds
+        self.stdDevSeconds = stdDevSeconds
     }
 
     /// The magnitude rounded to whole minutes. Used for display.
@@ -41,32 +53,50 @@ public struct ArrivalBiasCorrection: Sendable, Hashable {
         Int((magnitudeSeconds / 60).rounded())
     }
 
-    /// e.g. `"usually +2m"` / `"usually −1m"`. The minus sign is a real
-    /// minus (U+2212), not an ASCII hyphen, so it lines up cleanly with
-    /// the plus glyph at small type sizes. The `m` suffix matches the
-    /// rest of the dashboard's terse minute formatting (`BigNumber` uses
-    /// `min` separately as a unit label; this is more compact because it
-    /// rides next to a number that already says "minutes" in context).
+    /// Standard deviation rounded to whole minutes. Returns `nil` when
+    /// no stddev is available or when it rounds to zero — small
+    /// uncertainties don't earn pixels.
+    public var stdDevMinutes: Int? {
+        guard let stdDevSeconds, stdDevSeconds >= 30 else { return nil }
+        return Int((stdDevSeconds / 60).rounded())
+    }
+
+    /// e.g. `"usually +2m ±1m"` when the stddev rounds to ≥ 1 minute,
+    /// else just `"usually +2m"`. The minus sign is a real minus (U+2212),
+    /// not an ASCII hyphen, so it lines up cleanly with the plus glyph at
+    /// small type sizes. The `m` suffix matches the rest of the
+    /// dashboard's terse minute formatting (`BigNumber` uses `min`
+    /// separately as a unit label; this is more compact because it rides
+    /// next to a number that already says "minutes" in context).
     public var displayText: String {
         let prefix: String
         switch direction {
         case .apiEarly: prefix = "+"
         case .apiLate:  prefix = "\u{2212}" // U+2212 MINUS SIGN
         }
-        return "usually \(prefix)\(minutes)m"
+        var base = "usually \(prefix)\(minutes)m"
+        if let stdMinutes = stdDevMinutes, stdMinutes > 0 {
+            base += " ±\(stdMinutes)m"
+        }
+        return base
     }
 
     /// Spelled-out form for VoiceOver. Reads naturally and never
-    /// pluralises "1 minute".
+    /// pluralises "1 minute". When uncertainty is surfacable, it gets
+    /// folded into the sentence so VoiceOver users hear it too.
     public var accessibilityLabel: String {
         let mins = minutes
         let unit = mins == 1 ? "minute" : "minutes"
-        switch direction {
-        case .apiEarly:
-            return "Usually \(mins) \(unit) later than predicted"
-        case .apiLate:
-            return "Usually \(mins) \(unit) earlier than predicted"
+        let direction: String
+        switch self.direction {
+        case .apiEarly: direction = "Usually \(mins) \(unit) later than predicted"
+        case .apiLate:  direction = "Usually \(mins) \(unit) earlier than predicted"
         }
+        if let stdMinutes = stdDevMinutes, stdMinutes > 0 {
+            let stdUnit = stdMinutes == 1 ? "minute" : "minutes"
+            return "\(direction), give or take \(stdMinutes) \(stdUnit)"
+        }
+        return direction
     }
 
     // MARK: - Factory
@@ -97,7 +127,8 @@ public struct ArrivalBiasCorrection: Sendable, Hashable {
         let direction: Direction = cell.mean > 0 ? .apiEarly : .apiLate
         return ArrivalBiasCorrection(
             direction: direction,
-            magnitudeSeconds: abs(cell.mean)
+            magnitudeSeconds: abs(cell.mean),
+            stdDevSeconds: stddev
         )
     }
 }
