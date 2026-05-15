@@ -17,6 +17,10 @@ final class AppViewModel {
     let walkingStore: WalkingDistanceStore
     let walkingResolver: WalkingDistanceResolver
     let arrivalBiasStore: ArrivalBiasStore
+    /// Phase 5b Tier 2 — recorded bike rides. Optional surface ("rides
+    /// recorded: N") in Settings; no consumer in the prediction
+    /// pipeline yet. Hydrated alongside the other learning stores.
+    let bikeRouteStore: BikeRouteStore
 
     var snapshot: TransitSnapshot = .empty
     /// Latest live vehicle positions for whatever the user has pinned — used
@@ -60,7 +64,8 @@ final class AppViewModel {
         location: LocationCoordinator,
         refreshCoordinator: RefreshCoordinator,
         walkingStore: WalkingDistanceStore,
-        arrivalBiasStore: ArrivalBiasStore? = nil
+        arrivalBiasStore: ArrivalBiasStore? = nil,
+        bikeRouteStore: BikeRouteStore? = nil
     ) {
         self.store = store
         self.preferences = preferences
@@ -69,6 +74,7 @@ final class AppViewModel {
         self.walkingStore = walkingStore
         self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
         self.arrivalBiasStore = arrivalBiasStore ?? ArrivalBiasStore()
+        self.bikeRouteStore = bikeRouteStore ?? BikeRouteStore()
         self.isOnboardingComplete = preferences.isOnboardingComplete
 
         location.onContextChanged = { [weak self] context in
@@ -85,6 +91,7 @@ final class AppViewModel {
         location.bootstrap()
         let walkingHydration = Task { await walkingStore.hydrateFromDiskIfNeeded() }
         let arrivalBiasHydration = Task { await arrivalBiasStore.hydrateFromDiskIfNeeded() }
+        let bikeRouteHydration = Task { await bikeRouteStore.hydrateFromDiskIfNeeded() }
         liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
@@ -92,6 +99,7 @@ final class AppViewModel {
         await loadCachedSnapshot()
         await walkingHydration.value
         await arrivalBiasHydration.value
+        await bikeRouteHydration.value
         await refreshIfNeeded()
         reconcileRefreshTicker()
     }

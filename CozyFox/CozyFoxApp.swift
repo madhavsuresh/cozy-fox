@@ -30,12 +30,14 @@ struct CozyFoxApp: App {
         let location = LocationCoordinator(preferences: prefs, anchors: anchors)
         let walkingStore = WalkingDistanceStore()
         let arrivalBiasStore = ArrivalBiasStore()
+        let bikeRouteStore = BikeRouteStore()
         let refreshCoordinator = RefreshCoordinator(
             store: store,
             preferences: prefs,
             location: location,
             walkingStore: walkingStore,
-            arrivalBiasStore: arrivalBiasStore
+            arrivalBiasStore: arrivalBiasStore,
+            bikeRouteStore: bikeRouteStore
         )
         let model = AppViewModel(
             store: store,
@@ -43,7 +45,8 @@ struct CozyFoxApp: App {
             location: location,
             refreshCoordinator: refreshCoordinator,
             walkingStore: walkingStore,
-            arrivalBiasStore: arrivalBiasStore
+            arrivalBiasStore: arrivalBiasStore,
+            bikeRouteStore: bikeRouteStore
         )
         _viewModel = State(initialValue: model)
         RefreshTaskScheduler.register(coordinator: refreshCoordinator)

@@ -463,6 +463,11 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// When enabled, the app may replace stale pins with an on-device commute
     /// prediction. Manual pins block this for a short override window.
     public var autopinEnabled: Bool
+    /// When enabled, the app records coarse GPS samples during cycling
+    /// sessions so it can learn the user's habitual bike routes.
+    /// Default off; iOS Low Power Mode overrides to off regardless of
+    /// this setting. Tier 2 of Phase 5b; samples persist locally only.
+    public var bikeRouteLearningEnabled: Bool
     /// Records whether the current pinned line / bus route came from the user
     /// or the local commute predictor.
     public var pinSource: RoutePinSource
@@ -503,6 +508,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         pinnedIntercampusStopId: String? = nil,
         liveUpdatesEnabled: Bool = true,
         autopinEnabled: Bool = true,
+        bikeRouteLearningEnabled: Bool = false,
         pinSource: RoutePinSource = .manual,
         lastManualPinAt: Date? = nil,
         lastAutoPinAt: Date? = nil,
@@ -534,6 +540,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedIntercampusStopId = pinnedIntercampusStopId
         self.liveUpdatesEnabled = liveUpdatesEnabled
         self.autopinEnabled = autopinEnabled
+        self.bikeRouteLearningEnabled = bikeRouteLearningEnabled
         self.pinSource = pinSource
         self.lastManualPinAt = lastManualPinAt
         self.lastAutoPinAt = lastAutoPinAt
@@ -570,6 +577,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedIntercampusStopId = try? c.decode(String.self, forKey: .pinnedIntercampusStopId)
         self.liveUpdatesEnabled = (try? c.decode(Bool.self, forKey: .liveUpdatesEnabled)) ?? true
         self.autopinEnabled = (try? c.decode(Bool.self, forKey: .autopinEnabled)) ?? true
+        self.bikeRouteLearningEnabled = (try? c.decode(Bool.self, forKey: .bikeRouteLearningEnabled)) ?? false
         self.pinSource = (try? c.decode(RoutePinSource.self, forKey: .pinSource)) ?? .manual
         self.lastManualPinAt = try? c.decode(Date.self, forKey: .lastManualPinAt)
         self.lastAutoPinAt = try? c.decode(Date.self, forKey: .lastAutoPinAt)
