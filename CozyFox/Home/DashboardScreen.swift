@@ -77,6 +77,7 @@ struct DashboardScreen: View {
                         }
                         liveUpdatesBar
                         headHomeCard
+                        pleasantSurpriseCard
                         if shouldShowIntercampusSurface {
                             intercampusCard
                                 .id(DashboardRailDestination.intercampus)
@@ -280,6 +281,145 @@ struct DashboardScreen: View {
                 ChicagoPalette.Surface.elevated,
                 in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
             )
+        }
+    }
+
+    // MARK: - Pleasant-surprise tile
+
+    /// Compute a pleasant-surprise suggestion for the current
+    /// commute moment: when context is `.atHome` or `.atWork` and the
+    /// user has a top route + the opposite anchor set. Returns nil
+    /// otherwise. Result is recomputed each render — pure function of
+    /// observable state, fast (catalog scans are linear in stations/
+    /// routes, both bounded under 150).
+    private func pleasantSurpriseSuggestion() -> PleasantSurpriseSuggester.Suggestion? {
+        let anchors = commuteAnchors
+        let context = model.location.context
+        let origin: (lat: Double, lon: Double)?
+        let destination: (lat: Double, lon: Double)?
+        let currentDirection: CommuteDirection
+        switch context {
+        case .atHome:
+            origin = anchors.home.map { (lat: $0.latitude, lon: $0.longitude) }
+            destination = anchors.work.map { (lat: $0.latitude, lon: $0.longitude) }
+            currentDirection = .toWork
+        case .atWork:
+            origin = anchors.work.map { (lat: $0.latitude, lon: $0.longitude) }
+            destination = anchors.home.map { (lat: $0.latitude, lon: $0.longitude) }
+            currentDirection = .toHome
+        case .elsewhere, .unknown:
+            return nil
+        }
+        guard let origin, let destination else { return nil }
+
+        let profile = model.preferences.loadMobilityProfile()
+        guard let usualPattern = profile.summary.patterns(direction: currentDirection)
+            .sorted(by: { $0.totalCount > $1.totalCount })
+            .first
+        else { return nil }
+
+        let enumerator = AlternativeRouteEnumerator()
+        guard let enumeration = enumerator.enumerate(
+            origin: origin,
+            destination: destination,
+            usualPattern: usualPattern
+        ) else { return nil }
+
+        let geographyIndex = OffCommuteGeographyIndex.build(
+            from: profile.routeObservations,
+            currentCommute: currentDirection
+        )
+
+        let suggester = PleasantSurpriseSuggester()
+        let cutoff = Date().addingTimeInterval(-14 * 86_400)
+        return suggester.suggest(
+            currentContext: context,
+            profile: profile,
+            alternatives: enumeration.alternatives,
+            usualTripSeconds: enumeration.usualTripSeconds,
+            isSuppressed: { key in model.suggestionSuppression.isSuppressed(key) },
+            recentObservationCutoff: cutoff,
+            delightScore: { alt in
+                let waypoints = enumerator.waypoints(
+                    mode: alt.mode,
+                    routeId: alt.routeId,
+                    origin: origin,
+                    destination: destination
+                )
+                return geographyIndex.delightScore(forPolyline: waypoints)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var pleasantSurpriseCard: some View {
+        if let suggestion = pleasantSurpriseSuggestion() {
+            HStack(spacing: ChicagoSpacing.md) {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                    Text("Try something different today?")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    Text(suggestion.prose)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(2)
+                    if suggestion.delight > 0.25 {
+                        Text("Passes places you've been.")
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.Gray.light)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Button("Try it") {
+                    pinPleasantSurprise(suggestion)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(ChicagoPalette.flagBlue)
+                Button {
+                    model.suggestionSuppression.suppress(
+                        suggestion.routeKey,
+                        for: 7 * 86_400
+                    )
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Dismiss this suggestion for a week")
+            }
+            .padding(ChicagoSpacing.md)
+            .background(
+                ChicagoPalette.Surface.elevated,
+                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+            )
+        }
+    }
+
+    /// User accepted the pleasant-surprise — pin the alternative as
+    /// the current route preference. The dashboard's pinned card will
+    /// re-render to reflect the new choice. Also suppresses the same
+    /// suggestion for a week so we don't keep suggesting what they
+    /// already took.
+    private func pinPleasantSurprise(_ suggestion: PleasantSurpriseSuggester.Suggestion) {
+        model.suggestionSuppression.suppress(suggestion.routeKey, for: 7 * 86_400)
+        model.saveManualRoutePreferences { prefs in
+            switch suggestion.mode {
+            case .train:
+                if let line = LineColor(rawValue: suggestion.routeId) {
+                    prefs.pinnedLine = line
+                    prefs.pinnedStationId = nil
+                    prefs.pinnedTrainDestination = nil
+                }
+            case .bus:
+                prefs.pinnedBusRoute = suggestion.routeId
+                prefs.pinnedBusDirection = nil
+                prefs.pinnedBusStopId = nil
+            case .metra:
+                break
+            }
         }
     }
 
