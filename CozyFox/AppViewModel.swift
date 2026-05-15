@@ -21,6 +21,10 @@ final class AppViewModel {
     /// recorded: N") in Settings; no consumer in the prediction
     /// pipeline yet. Hydrated alongside the other learning stores.
     let bikeRouteStore: BikeRouteStore
+    /// Persistent tracker for dashboard-suggestion dismissals. Backs
+    /// the head-home tile (eventually) and the pleasant-surprise
+    /// suggester. Wiped by Settings → "Reset learning".
+    let suggestionSuppression: SuggestionSuppression
 
     var snapshot: TransitSnapshot = .empty
     /// Latest live vehicle positions for whatever the user has pinned — used
@@ -78,7 +82,8 @@ final class AppViewModel {
         refreshCoordinator: RefreshCoordinator,
         walkingStore: WalkingDistanceStore,
         arrivalBiasStore: ArrivalBiasStore? = nil,
-        bikeRouteStore: BikeRouteStore? = nil
+        bikeRouteStore: BikeRouteStore? = nil,
+        suggestionSuppression: SuggestionSuppression? = nil
     ) {
         self.store = store
         self.preferences = preferences
@@ -88,6 +93,7 @@ final class AppViewModel {
         self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
         self.arrivalBiasStore = arrivalBiasStore ?? ArrivalBiasStore()
         self.bikeRouteStore = bikeRouteStore ?? BikeRouteStore()
+        self.suggestionSuppression = suggestionSuppression ?? SuggestionSuppression()
         self.isOnboardingComplete = preferences.isOnboardingComplete
 
         location.onContextChanged = { [weak self] context in
@@ -105,6 +111,7 @@ final class AppViewModel {
         let walkingHydration = Task { await walkingStore.hydrateFromDiskIfNeeded() }
         let arrivalBiasHydration = Task { await arrivalBiasStore.hydrateFromDiskIfNeeded() }
         let bikeRouteHydration = Task { await bikeRouteStore.hydrateFromDiskIfNeeded() }
+        let suppressionHydration = Task { await suggestionSuppression.hydrateFromDiskIfNeeded() }
         liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
@@ -113,6 +120,7 @@ final class AppViewModel {
         await walkingHydration.value
         await arrivalBiasHydration.value
         await bikeRouteHydration.value
+        await suppressionHydration.value
         await refreshIfNeeded()
         reconcileRefreshTicker()
     }
