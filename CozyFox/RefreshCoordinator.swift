@@ -35,6 +35,15 @@ final class RefreshCoordinator {
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let corridorResolver = TransitCorridorResolver()
     private let autopinner = CommuteAutopinner()
+    /// Phase 4: detects "user just boarded a train at a CTA L station"
+    /// from motion + location. Pure / stateless; the coordinator owns
+    /// `previousMotion` and feeds it in.
+    private let boardingDetector = BoardingDetector()
+
+    /// Motion classification from the previous refresh cycle. Seeded as
+    /// `.unknown` at launch so the first cycle never reports a
+    /// transition. Updated at the end of each `applyAutopinIfNeeded()`.
+    private var previousMotion: MotionContext = .unknown
 
     /// Day-stamp of the last walking-cache invalidation so a single 30 s
     /// foreground refresh doesn't repeatedly flush the cache. Re-invalidates
@@ -172,6 +181,24 @@ final class RefreshCoordinator {
             return false
         }
         let motion = await location?.refreshMotion() ?? .unknown
+        // Phase 4: check whether the user just boarded a train at a CTA
+        // L station. Uses the *cached* `lastKnown` location instead of
+        // a one-shot `refreshLocation()` to keep this cheap — stale by
+        // up to a few minutes is acceptable here, the 150m radius
+        // tolerates drift, and false negatives at the boundary are
+        // preferable to extra battery.
+        if let boarding = boardingDetector.detect(
+            previousMotion: previousMotion,
+            currentMotion: motion,
+            currentLocation: location?.lastKnown
+        ) {
+            await arrivalGrader.ingestBoardingEvent(
+                stationId: boarding.stationId,
+                observedAt: boarding.observedAt
+            )
+        }
+        previousMotion = motion
+
         let context = location?.context ?? .unknown
         let result = autopinner.apply(
             preferences: preferences.loadRoutePreferences(),

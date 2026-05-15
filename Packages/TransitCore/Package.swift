@@ -34,7 +34,7 @@ let package = Package(
         ),
         .target(
             name: "TransitDomain",
-            dependencies: ["TransitModels", "TransitCache"]
+            dependencies: ["TransitModels", "TransitCache", "TransitLocation"]
         ),
         .target(
             name: "ChicagoTheme",
