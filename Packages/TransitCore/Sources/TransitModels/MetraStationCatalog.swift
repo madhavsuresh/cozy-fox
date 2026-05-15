@@ -33,6 +33,18 @@ public enum MetraStationCatalog {
             }
     }
 
+    public static func directionId(
+        routeId: String,
+        boardingStationId: String,
+        targetStationId: String
+    ) -> Int? {
+        MetraCatalogStore.shared.directionId(
+            routeId: routeId,
+            boardingStationId: boardingStationId,
+            targetStationId: targetStationId
+        )
+    }
+
     public static func departureGroups(
         routeId: String,
         stationId: String,
@@ -85,6 +97,7 @@ private struct MetraCatalogStore: Sendable {
     let stationById: [String: MetraStation]
     let stationsByRoute: [String: [MetraStation]]
     let scheduleByStationRoute: [String: [MetraScheduleEntry]]
+    let scheduleByTripId: [String: [MetraScheduleEntry]]
     let lastStopSequenceByTrip: [String: Int]
 
     init() {
@@ -117,10 +130,41 @@ private struct MetraCatalogStore: Sendable {
             scheduleBuckets[Self.scheduleKey(stationId: entry.stopId, routeId: entry.routeId), default: []].append(entry)
         }
         self.scheduleByStationRoute = scheduleBuckets
+        self.scheduleByTripId = Dictionary(grouping: schedule, by: \.tripId)
+            .mapValues { entries in
+                entries.sorted { $0.stopSequence < $1.stopSequence }
+            }
     }
 
     func scheduleEntries(stationId: String, routeId: String) -> [MetraScheduleEntry] {
         scheduleByStationRoute[Self.scheduleKey(stationId: stationId, routeId: routeId)] ?? []
+    }
+
+    func directionId(
+        routeId: String,
+        boardingStationId: String,
+        targetStationId: String
+    ) -> Int? {
+        guard boardingStationId != targetStationId else { return nil }
+
+        var counts: [Int: Int] = [:]
+        for entries in scheduleByTripId.values {
+            let routeEntries = entries.filter { $0.routeId == routeId }
+            guard let boarding = routeEntries.first(where: { $0.stopId == boardingStationId }),
+                  let target = routeEntries.first(where: { $0.stopId == targetStationId }),
+                  target.stopSequence > boarding.stopSequence,
+                  let directionId = boarding.directionId ?? target.directionId
+            else { continue }
+
+            counts[directionId, default: 0] += 1
+        }
+
+        return counts.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            return $0.key < $1.key
+        }
+        .first?
+        .key
     }
 
     func departureGroups(

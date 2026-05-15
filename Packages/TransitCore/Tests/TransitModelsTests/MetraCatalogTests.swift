@@ -36,6 +36,22 @@ struct MetraCatalogTests {
         #expect(chicagoUnionStationGroups.map(\.direction) == [.fromChicago])
     }
 
+    @Test func upNorthDirectionLookupUsesTripStopOrder() {
+        let evanstonToChicago = MetraStationCatalog.directionId(
+            routeId: "UP-N",
+            boardingStationId: "EVANSTON",
+            targetStationId: "OTC"
+        )
+        let chicagoToEvanston = MetraStationCatalog.directionId(
+            routeId: "UP-N",
+            boardingStationId: "OTC",
+            targetStationId: "EVANSTON"
+        )
+
+        #expect(evanstonToChicago == 1)
+        #expect(chicagoToEvanston == 0)
+    }
+
     private static let morningCommute = DateComponents(
         calendar: Calendar(identifier: .gregorian),
         timeZone: TimeZone(identifier: "America/Chicago"),

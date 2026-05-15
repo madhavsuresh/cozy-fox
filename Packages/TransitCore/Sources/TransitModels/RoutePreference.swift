@@ -261,6 +261,25 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         }
     }
 
+    public struct IntercampusLeg: Codable, Sendable, Hashable {
+        public let direction: IntercampusDirection
+        public let stopId: String
+        public let stopName: String
+        public let destinationName: String?
+
+        public init(
+            direction: IntercampusDirection,
+            stopId: String,
+            stopName: String,
+            destinationName: String? = nil
+        ) {
+            self.direction = direction
+            self.stopId = stopId
+            self.stopName = stopName
+            self.destinationName = destinationName
+        }
+    }
+
     public let id: UUID
     public let destination: Destination
     public let title: String
@@ -273,10 +292,12 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
     public let trainLegs: [TrainLeg]
     public let busLegs: [BusLeg]
     public let metraLegs: [MetraLeg]
+    public let intercampusLegs: [IntercampusLeg]
 
     public var train: TrainLeg? { trainLegs.first }
     public var bus: BusLeg? { busLegs.first }
     public var metra: MetraLeg? { metraLegs.first }
+    public var intercampus: IntercampusLeg? { intercampusLegs.first }
 
     public init(
         id: UUID = UUID(),
@@ -293,7 +314,8 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         metra: MetraLeg? = nil,
         trainLegs: [TrainLeg]? = nil,
         busLegs: [BusLeg]? = nil,
-        metraLegs: [MetraLeg]? = nil
+        metraLegs: [MetraLeg]? = nil,
+        intercampusLegs: [IntercampusLeg]? = nil
     ) {
         self.id = id
         self.destination = destination
@@ -307,6 +329,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.trainLegs = trainLegs ?? train.map { [$0] } ?? []
         self.busLegs = busLegs ?? bus.map { [$0] } ?? []
         self.metraLegs = metraLegs ?? metra.map { [$0] } ?? []
+        self.intercampusLegs = intercampusLegs ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -325,6 +348,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         case trainLegs
         case busLegs
         case metraLegs
+        case intercampusLegs
     }
 
     public init(from decoder: Decoder) throws {
@@ -345,6 +369,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.trainLegs = (try? c.decode([TrainLeg].self, forKey: .trainLegs)) ?? legacyTrain.map { [$0] } ?? []
         self.busLegs = (try? c.decode([BusLeg].self, forKey: .busLegs)) ?? legacyBus.map { [$0] } ?? []
         self.metraLegs = (try? c.decode([MetraLeg].self, forKey: .metraLegs)) ?? legacyMetra.map { [$0] } ?? []
+        self.intercampusLegs = (try? c.decode([IntercampusLeg].self, forKey: .intercampusLegs)) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -364,6 +389,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         try c.encode(trainLegs, forKey: .trainLegs)
         try c.encode(busLegs, forKey: .busLegs)
         try c.encode(metraLegs, forKey: .metraLegs)
+        try c.encode(intercampusLegs, forKey: .intercampusLegs)
     }
 
     public func withIncludeDivvyInfo(_ includeDivvyInfo: Bool) -> PlannedTripPin {
@@ -382,7 +408,8 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
             metra: metra,
             trainLegs: trainLegs,
             busLegs: busLegs,
-            metraLegs: metraLegs
+            metraLegs: metraLegs,
+            intercampusLegs: intercampusLegs
         )
     }
 
