@@ -2,11 +2,11 @@ import Foundation
 
 public enum MetraStationCatalog {
     public static var all: [MetraStation] { MetraCatalogStore.shared.stations }
-    public static var routes: [MetraLine] { MetraRouteMetadataStore.shared.routes }
-    public static var allRouteIds: [String] { MetraRouteMetadataStore.shared.allRouteIds }
+    public static var routes: [MetraLine] { MetraCatalogStore.shared.routes }
+    public static var allRouteIds: [String] { MetraCatalogStore.shared.allRouteIds }
 
     public static func route(id: String) -> MetraLine? {
-        MetraRouteMetadataStore.shared.routeById[id]
+        MetraCatalogStore.shared.routeById[id]
     }
 
     public static func station(id: String) -> MetraStation? {
@@ -72,61 +72,11 @@ public enum MetraScheduleCatalog {
     }
 }
 
-private struct MetraRouteMetadataStore: Sendable {
-    static let shared = MetraRouteMetadataStore()
-
-    let routes: [MetraLine]
-    let allRouteIds: [String]
-    let routeById: [String: MetraLine]
-
-    init() {
-        self.routes = Self.loadRoutes()
-        self.allRouteIds = routes.map(\.id)
-        self.routeById = Dictionary(uniqueKeysWithValues: routes.map { ($0.id, $0) })
-    }
-
-    private static func loadRoutes() -> [MetraLine] {
-        guard
-            let url = Bundle.module.url(forResource: "MetraCatalog", withExtension: "json"),
-            let data = try? Data(contentsOf: url),
-            let decoded = try? JSONDecoder().decode(MetraRouteMetadataResource.self, from: data)
-        else {
-            return []
-        }
-        return decoded.routes.map(\.model)
-    }
-}
-
-private struct MetraRouteMetadataResource: Decodable {
-    let routes: [RouteRow]
-
-    struct RouteRow: Decodable {
-        let model: MetraLine
-
-        init(from decoder: Decoder) throws {
-            var c = try decoder.unkeyedContainer()
-            let id = try c.decode(String.self)
-            let shortName = try c.decode(String.self)
-            let longName = try c.decode(String.self)
-            let colorHex = try c.decode(String.self)
-            let textColorHex = try c.decode(String.self)
-            let urlString = try c.decode(String.self)
-            model = MetraLine(
-                id: id,
-                shortName: shortName,
-                longName: longName,
-                colorHex: colorHex,
-                textColorHex: textColorHex,
-                url: URL(string: urlString)
-            )
-        }
-    }
-}
-
 private struct MetraCatalogStore: Sendable {
     static let shared = MetraCatalogStore()
 
     let routes: [MetraLine]
+    let allRouteIds: [String]
     let stations: [MetraStation]
     let services: [MetraService]
     let exceptions: [MetraServiceException]
@@ -140,6 +90,7 @@ private struct MetraCatalogStore: Sendable {
     init() {
         let resource = Self.loadResource()
         self.routes = resource.routes.map(\.model)
+        self.allRouteIds = self.routes.map(\.id)
         self.stations = resource.stations.map(\.model)
         self.services = resource.services.map(\.model)
         self.exceptions = resource.exceptions.map(\.model)

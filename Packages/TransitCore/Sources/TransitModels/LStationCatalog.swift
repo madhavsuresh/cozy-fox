@@ -11,6 +11,29 @@ import Foundation
 public enum LStationCatalog {
     public static let all: [LStation] = loadBundled()
 
+    /// O(1) lookup by `map_id` so callers can resolve a pinned/explicit
+    /// station without scanning the catalog.
+    public static let byId: [Int: LStation] = Dictionary(
+        uniqueKeysWithValues: all.map { ($0.id, $0) }
+    )
+
+    /// Stations bucketed by served line. Used by anything filtering "all
+    /// stations on the Blue Line" without re-scanning the full catalog.
+    public static let byLine: [LineColor: [LStation]] = {
+        var buckets: [LineColor: [LStation]] = [:]
+        for station in all {
+            for line in station.servedLines {
+                buckets[line, default: []].append(station)
+            }
+        }
+        return buckets
+    }()
+
+    /// Returns the precomputed station list for `line` (empty if none).
+    public static func stations(onLine line: LineColor) -> [LStation] {
+        byLine[line] ?? []
+    }
+
     private static func loadBundled() -> [LStation] {
         guard
             let url = Bundle.module.url(forResource: "CTAStations", withExtension: "json"),

@@ -50,6 +50,12 @@ struct DashboardScreen: View {
     /// for a flicker before MapKit refines.
     @State private var allowHaversineFallback: Bool = false
     @State private var allowIntercampusHaversineFallback: Bool = false
+    /// Memoized closed-station IDs derived from `model.snapshot.activeAlerts`.
+    /// `ClosedStationsAnalyzer.closedStationIds` is O(alerts × stations × text
+    /// search) and was being recomputed at every read site (currently 4 per
+    /// body re-eval). Cache the result and refresh only when the alerts
+    /// array changes — a body re-eval no longer triggers the scan.
+    @State private var closedStationIdsCache: Set<Int> = []
 
     private let tripPlanner = TripPlanner()
     private let tripDivvyResolver = TripDivvyResolver(radiusMeters: 400)
@@ -60,7 +66,12 @@ struct DashboardScreen: View {
         NavigationStack {
             ScrollViewReader { scrollProxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                    // `LazyVStack` so cards below the fold (typically Metra
+                    // + Divvy + planned-trip when no pin is active) skip
+                    // their body computation until the user scrolls them
+                    // in — keeps the initial layout cheap on a dashboard
+                    // with 10+ heavy cards.
+                    LazyVStack(alignment: .leading, spacing: ChicagoSpacing.md) {
                         if shouldShowAutopinBanner {
                             contextBanner
                         }
@@ -137,13 +148,19 @@ struct DashboardScreen: View {
                 }
                 .tint(ChicagoPalette.flagBlue)
                 .refreshable { await model.refreshIfNeeded(force: true) }
-                .onAppear { reloadPinnedFromPreferences() }
+                .onAppear {
+                    reloadPinnedFromPreferences()
+                    recomputeClosedStationIdsIfNeeded()
+                }
                 .task { await observeDestinationSuggestions() }
                 .onDisappear {
                     destinationDebounceTask?.cancel()
                     destinationResolveTask?.cancel()
                 }
                 .onChange(of: model.pinRevision) { _, _ in reloadPinnedFromPreferences() }
+                .onChange(of: model.snapshot.activeAlerts) { _, _ in
+                    recomputeClosedStationIdsIfNeeded()
+                }
                 .sheet(item: $anchorEntryKind, onDismiss: reloadPinnedFromPreferences) { kind in
                     AnchorAddressEntry(kind: kind)
                         .environment(model)
@@ -3516,7 +3533,16 @@ struct DashboardScreen: View {
     // MARK: - Near You (deduped by line / by route) — small multiples
 
     private var nearYouSection: some View {
-        ChicagoCard(title: "Near you",
+        // Each of `nearbyTrainCorridors` / `nearbyBusCorridors` /
+        // `nearbyMetraRoutes` is a non-trivial scan of the bundled catalog
+        // plus a walking-cache lookup per candidate. Bind each to a `let`
+        // so the section's three sub-views and the divider visibility
+        // check share one computation per body re-eval (down from up to
+        // 3× per render).
+        let trainCorridors = nearbyTrainCorridors
+        let busCorridors = nearbyBusCorridors
+        let metraRoutes = nearbyMetraRoutes
+        return ChicagoCard(title: "Near you",
                     eyebrow: "Discover",
                     ornament: .icon(systemName: "location.fill")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
@@ -3525,30 +3551,30 @@ struct DashboardScreen: View {
                         .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                 } else {
-                    nearbyLLines
-                    if !nearbyTrainCorridors.isEmpty
-                        || !nearbyBusCorridors.isEmpty
-                        || !nearbyMetraRoutes.isEmpty
+                    nearbyLLines(corridors: trainCorridors)
+                    if !trainCorridors.isEmpty
+                        || !busCorridors.isEmpty
+                        || !metraRoutes.isEmpty
                     {
                         Rectangle()
                             .fill(ChicagoPalette.Gray.light.opacity(0.28))
                             .frame(height: ChicagoSpacing.Stroke.hairline)
                     }
-                    nearbyBuses
-                    nearbyMetra
+                    nearbyBuses(corridors: busCorridors)
+                    nearbyMetra(routes: metraRoutes)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private var nearbyLLines: some View {
+    private func nearbyLLines(corridors: [TrainCorridorEntry]) -> some View {
         if !routePreferences.isModeVisible(.trains) {
             EmptyView()
-        } else if !nearbyTrainCorridors.isEmpty {
+        } else if !corridors.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Train corridors nearby")
-                SmallMultiplesRow(nearbyTrainCorridors) { entry in
+                SmallMultiplesRow(corridors) { entry in
                     NearbyTrainCorridorTile(entry: entry, now: .now)
                 }
             }
@@ -3560,13 +3586,13 @@ struct DashboardScreen: View {
     }
 
     @ViewBuilder
-    private var nearbyBuses: some View {
+    private func nearbyBuses(corridors: [BusCorridorEntry]) -> some View {
         if !routePreferences.isModeVisible(.buses) {
             EmptyView()
-        } else if !nearbyBusCorridors.isEmpty {
+        } else if !corridors.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Bus corridors nearby")
-                SmallMultiplesRow(nearbyBusCorridors) { entry in
+                SmallMultiplesRow(corridors) { entry in
                     NearbyBusCorridorTile(entry: entry, now: .now)
                     .onTapGesture { setPinnedBus(entry.stop.route) }
                 }
@@ -3579,13 +3605,13 @@ struct DashboardScreen: View {
     }
 
     @ViewBuilder
-    private var nearbyMetra: some View {
+    private func nearbyMetra(routes: [MetraEntry]) -> some View {
         if !routePreferences.isModeVisible(.metra) {
             EmptyView()
-        } else if !nearbyMetraRoutes.isEmpty {
+        } else if !routes.isEmpty {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Metra nearby")
-                SmallMultiplesRow(nearbyMetraRoutes) { entry in
+                SmallMultiplesRow(routes) { entry in
                     let group = MetraDepartureGrouper.groups(
                         from: metraPredictions(for: entry),
                         limitPerGroup: 3
@@ -3613,8 +3639,15 @@ struct DashboardScreen: View {
         return (loc.latitude, loc.longitude)
     }
 
-    private var closedStationIds: Set<Int> {
-        ClosedStationsAnalyzer.closedStationIds(from: model.snapshot.activeAlerts)
+    private var closedStationIds: Set<Int> { closedStationIdsCache }
+
+    private func recomputeClosedStationIdsIfNeeded() {
+        let next = ClosedStationsAnalyzer.closedStationIds(
+            from: model.snapshot.activeAlerts
+        )
+        if next != closedStationIdsCache {
+            closedStationIdsCache = next
+        }
     }
 
     private var nearbyTrainCorridors: [TrainCorridorEntry] {

@@ -49,7 +49,20 @@ public struct NearestStationResolver: Sendable {
         catalog: [LStation] = LStationCatalog.all,
         excludingStationIds: Set<Int> = []
     ) -> [(station: LStation, distance: Double)] {
-        boundedNearest(
+        // Skip the line-membership predicate when the caller passes the
+        // default catalog — the precomputed by-line index avoids a full
+        // 145-row scan.
+        if catalog.count == LStationCatalog.all.count {
+            return boundedNearest(
+                within: maxDistanceMeters,
+                of: origin,
+                limit: limit,
+                catalog: LStationCatalog.stations(onLine: line),
+                excludingStationIds: excludingStationIds,
+                matches: { _ in true }
+            )
+        }
+        return boundedNearest(
             within: maxDistanceMeters,
             of: origin,
             limit: limit,

@@ -19,6 +19,16 @@ public enum BusStopCatalog {
     /// dashboard's bus-route picker.
     public static let allRoutes: [String] = loadRouteList()
 
+    /// Stops bucketed by route. Lets nearest-stop / corridor resolvers and
+    /// the refresh path skip a full 14k-row scan when they only care about
+    /// one route.
+    public static let byRoute: [String: [BusStop]] = Dictionary(grouping: all, by: \.route)
+
+    /// Returns every stop on `route` (empty if none).
+    public static func stops(onRoute route: String) -> [BusStop] {
+        byRoute[route] ?? []
+    }
+
     private static func loadBundled() -> [BusStop] {
         guard
             let url = Bundle.module.url(forResource: "CTABusStops", withExtension: "json"),
