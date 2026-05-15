@@ -191,6 +191,22 @@ struct SettingsScreen: View {
                 }
             }
 
+            Section {
+                Toggle("Learn bike routes",
+                       isOn: Binding(
+                        get: { prefs.bikeRouteLearningEnabled },
+                        set: { prefs.bikeRouteLearningEnabled = $0; save() }
+                       ))
+                Text("Recorded rides: \(model.bikeRouteStore.routes.count)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Bike routes")
+            } footer: {
+                Text("When on, Cozy Fox records coarse GPS samples during cycling sessions to learn your habitual bike routes. Samples stay on this device. Low Power Mode disables sampling automatically regardless of this toggle.")
+                    .font(.footnote)
+            }
+
             Section("Access routes") {
                 Text("Cozy Fox caches Apple Maps walking and biking routes from your frequent locations to nearby transit stops, so chips reflect practical access time rather than straight-line distance. Entries refresh automatically once a day to catch bridge closures and construction reroutes.")
                     .font(.footnote)
@@ -232,6 +248,7 @@ struct SettingsScreen: View {
                 model.arrivalBiasStore.clearAll()
                 model.walkingStore.clearWalkSpeedEstimate()
                 model.walkingStore.clearCycleSpeedEstimate()
+                model.bikeRouteStore.clearAll()
             }
             Button("Cancel", role: .cancel) {}
         } message: {

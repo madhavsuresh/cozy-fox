@@ -76,12 +76,18 @@ final class RefreshCoordinator {
     /// first successful `refreshBikes`.
     private(set) var latestBikeInventory: BikeInventorySnapshot = .empty
 
+    /// Phase 5b Tier 2: opt-in GPS sampler for cycling sessions.
+    /// Subscribes to CLLocation only while motion is `.cycling` AND
+    /// the user has the setting on AND iOS isn't in Low Power Mode.
+    let bikeRouteSampler: BikeRouteSampler
+
     init(
         store: TransitStore,
         preferences: PreferencesStore,
         location: LocationCoordinator?,
         walkingStore: WalkingDistanceStore,
-        arrivalBiasStore: ArrivalBiasStore? = nil
+        arrivalBiasStore: ArrivalBiasStore? = nil,
+        bikeRouteStore: BikeRouteStore? = nil
     ) {
         self.store = store
         self.preferences = preferences
@@ -91,6 +97,7 @@ final class RefreshCoordinator {
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
         self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
+        self.bikeRouteSampler = BikeRouteSampler(routeStore: bikeRouteStore)
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -266,6 +273,22 @@ final class RefreshCoordinator {
                 at: (lat: loc.latitude, lon: loc.longitude),
                 at: .now
             )
+        }
+
+        // Tier 2 (GPS route sampling) — gated on the user setting AND
+        // iOS Low Power Mode being off. The sampler manages its own
+        // CLLocationManager subscription; we just bracket the lifecycle
+        // on motion transitions so it's only active during a ride.
+        let bikeRouteEnabled = preferences.loadRoutePreferences().bikeRouteLearningEnabled
+            && !ProcessInfo.processInfo.isLowPowerModeEnabled
+        if cyclingStarted, bikeRouteEnabled {
+            bikeRouteSampler.startRide(at: .now)
+        } else if cyclingEnded {
+            // Always stop on end, even if the toggle flipped mid-ride.
+            // The sampler's own state guards: if no ride was started,
+            // stopRide is a no-op that also defensively releases the
+            // CLLocationManager subscription in case the OS held it.
+            bikeRouteSampler.stopRide(at: .now)
         }
 
         previousMotion = motion
