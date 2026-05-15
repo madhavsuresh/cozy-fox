@@ -497,6 +497,12 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// transfer stops that are not near the user yet, so widgets and Live
     /// Activities should prefer it over generic route pins.
     public var plannedTripPin: PlannedTripPin?
+    /// Multi-option route portfolios — each one represents "the known ways
+    /// I take this recurring trip." Coexists with the single-pin fields
+    /// above: users without portfolios see no change; the portfolio
+    /// evaluator runs only when this is non-empty for the current
+    /// commute direction.
+    public var portfolios: [RoutePortfolio]
 
     public init(
         trains: [TrainPreference] = [],
@@ -530,7 +536,8 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         lastManualPinAt: Date? = nil,
         lastAutoPinAt: Date? = nil,
         autoPinnedDirection: CommuteDirection? = nil,
-        plannedTripPin: PlannedTripPin? = nil
+        plannedTripPin: PlannedTripPin? = nil,
+        portfolios: [RoutePortfolio] = []
     ) {
         self.trains = trains
         self.buses = buses
@@ -564,6 +571,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.lastAutoPinAt = lastAutoPinAt
         self.autoPinnedDirection = autoPinnedDirection
         self.plannedTripPin = plannedTripPin
+        self.portfolios = portfolios
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
@@ -621,6 +629,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.lastAutoPinAt = try? c.decode(Date.self, forKey: .lastAutoPinAt)
         self.autoPinnedDirection = try? c.decode(CommuteDirection.self, forKey: .autoPinnedDirection)
         self.plannedTripPin = try? c.decode(PlannedTripPin.self, forKey: .plannedTripPin)
+        self.portfolios = (try? c.decode([RoutePortfolio].self, forKey: .portfolios)) ?? []
     }
 
     public static let empty = UserRoutePreferences()

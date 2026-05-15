@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import ActivityKit
 import TransitCache
+import TransitDomain
 import TransitModels
 
 /// Manages a **single combined Live Activity** that can render either, both,
@@ -16,15 +17,38 @@ actor LiveActivityCoordinator {
 
     // MARK: - Always-on mode
 
-    func ensureRunning(snapshot: TransitSnapshot, prefs: UserRoutePreferences) async {
+    func ensureRunning(
+        snapshot: TransitSnapshot,
+        prefs: UserRoutePreferences,
+        portfolioRecommendations: [UUID: PortfolioRecommendation] = [:]
+    ) async {
         guard prefs.alwaysShowLiveActivity else {
             await endCurrentIfNeeded()
             return
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
-        let trainLeg = makeTrainLeg(prefs: prefs, snapshot: snapshot)
-        let busLeg = makeBusLeg(prefs: prefs, snapshot: snapshot)
+        // Phase 6: portfolio recommendations supersede single-pin /
+        // planned-trip-pin sources when present. When a portfolio
+        // source covers some modes but not others, the un-covered
+        // modes stay empty rather than mixing portfolio + single-pin
+        // — keeps the on-screen surface coherent with what the user
+        // picked.
+        let portfolioSource = resolvePortfolioSource(
+            prefs: prefs,
+            recommendations: portfolioRecommendations,
+            snapshot: snapshot
+        )
+
+        let trainLeg: CommuteAttributes.TrainLeg?
+        let busLeg: CommuteAttributes.BusLeg?
+        if let portfolioSource {
+            trainLeg = portfolioSource.train
+            busLeg = portfolioSource.bus
+        } else {
+            trainLeg = makeTrainLeg(prefs: prefs, snapshot: snapshot)
+            busLeg = makeBusLeg(prefs: prefs, snapshot: snapshot)
+        }
         // Metra Live Activity rendering is temporarily disabled; pinned
         // Metra still appears in the app and widgets.
         let metraLeg: CommuteAttributes.MetraLeg? = nil
@@ -35,7 +59,7 @@ actor LiveActivityCoordinator {
             return
         }
 
-        let identity = makeIdentity(prefs: prefs)
+        let identity = makeIdentity(prefs: prefs, portfolioSource: portfolioSource)
         let state = CommuteAttributes.ContentState(train: trainLeg, bus: busLeg, metra: metraLeg)
         // Stale at the soonest arrival itself (no grace) so iOS marks the
         // activity stale the moment its currently-published next arrival
@@ -58,7 +82,25 @@ actor LiveActivityCoordinator {
 
     // MARK: - Identity & leg builders
 
-    private func makeIdentity(prefs: UserRoutePreferences) -> (train: String?, bus: String?, metra: String?) {
+    private func makeIdentity(
+        prefs: UserRoutePreferences,
+        portfolioSource: PortfolioSource? = nil
+    ) -> (train: String?, bus: String?, metra: String?) {
+        // Portfolio source completely supersedes prefs-based identity —
+        // any leg the portfolio doesn't fill stays nil rather than
+        // falling back to single-pin, so the activity restarts cleanly
+        // when the user transitions from "single pin" to "portfolio
+        // recommendation" and back.
+        if let portfolioSource {
+            let prefix = "portfolio-\(portfolioSource.portfolioID.uuidString)-\(portfolioSource.optionID.uuidString)"
+            let trainId: String? = portfolioSource.train.map {
+                "\(prefix)|train|\($0.lineColorRaw)|\($0.stopName)|\($0.destination)"
+            }
+            let busId: String? = portfolioSource.bus.map {
+                "\(prefix)|bus|\($0.routeLabel)|\($0.stopName)|\($0.directionLabel)"
+            }
+            return (trainId, busId, nil)
+        }
         var trainId: String?
         if let tripPin = prefs.plannedTripPin, !tripPin.trainLegs.isEmpty {
             let pieces = tripPin.trainLegs.map { tripTrain in
@@ -267,6 +309,127 @@ actor LiveActivityCoordinator {
     ) -> Date {
         let dates = [train?.nextArrival, bus?.nextArrival, metra?.nextArrival].compactMap { $0 }
         return dates.min() ?? Date().addingTimeInterval(600)
+    }
+
+    // MARK: - Portfolio source (Phase 6)
+
+    /// What `resolvePortfolioSource` returns: a portfolio + its
+    /// approved option, with already-built train/bus legs sourced from
+    /// the snapshot. `train` and `bus` can both be nil if the option's
+    /// transit legs don't match any current arrivals (e.g. last train
+    /// already left). Caller treats that as "no portfolio source this
+    /// tick" and falls back to single-pin logic.
+    ///
+    /// Non-`private` so the app-target tests can inspect what
+    /// `resolvePortfolioSource` produces without going through the
+    /// `ensureRunning` → ActivityKit path.
+    struct PortfolioSource: Sendable, Hashable {
+        let portfolioID: UUID
+        let optionID: UUID
+        let train: CommuteAttributes.TrainLeg?
+        let bus: CommuteAttributes.BusLeg?
+    }
+
+    /// Picks the first portfolio with an approved recommendation whose
+    /// option has at least one resolvable transit leg, and builds the
+    /// `CommuteAttributes.TrainLeg` / `BusLeg` from its first transit
+    /// leg of each mode. Multi-transit-leg options (transfers) only
+    /// surface their first leg of each mode — `CommuteAttributes`
+    /// holds one of each, so subsequent same-mode legs can't be
+    /// surfaced anyway.
+    ///
+    /// `nonisolated` because the body touches only its parameters; the
+    /// tests need to drive it without entering the actor's executor.
+    nonisolated func resolvePortfolioSource(
+        prefs: UserRoutePreferences,
+        recommendations: [UUID: PortfolioRecommendation],
+        snapshot: TransitSnapshot
+    ) -> PortfolioSource? {
+        for portfolio in prefs.portfolios {
+            guard let recommendation = recommendations[portfolio.id] else { continue }
+            guard let option = portfolio.options.first(where: { $0.id == recommendation.optionID })
+            else { continue }
+
+            var train: CommuteAttributes.TrainLeg?
+            var bus: CommuteAttributes.BusLeg?
+            for leg in option.legs where leg.mode == .transit {
+                switch leg.transit?.resolution {
+                case .line where train == nil:
+                    train = buildPortfolioTrainLeg(fromLeg: leg, snapshot: snapshot)
+                case .bus where bus == nil:
+                    bus = buildPortfolioBusLeg(fromLeg: leg, snapshot: snapshot)
+                default:
+                    continue
+                }
+            }
+            guard train != nil || bus != nil else { continue }
+            return PortfolioSource(
+                portfolioID: portfolio.id,
+                optionID: option.id,
+                train: train,
+                bus: bus
+            )
+        }
+        return nil
+    }
+
+    nonisolated func buildPortfolioTrainLeg(
+        fromLeg leg: RouteOptionLeg,
+        snapshot: TransitSnapshot
+    ) -> CommuteAttributes.TrainLeg? {
+        guard case .line(let line) = leg.transit?.resolution else { return nil }
+        guard let stopRef = leg.fromStopID else { return nil }
+        var arrivals = snapshot.trainArrivals.filter { $0.line == line }
+        switch stopRef {
+        case .lStation(let id):
+            arrivals = arrivals.filter { $0.stationId == id }
+        case .lPlatform(let id):
+            arrivals = arrivals.filter { $0.stopId == id }
+        case .bus, .metra, .intercampus:
+            return nil
+        }
+        let now = Date()
+        let sorted = arrivals
+            .filter { $0.arrivalAt > now }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+        guard let first = sorted.first else { return nil }
+        return CommuteAttributes.TrainLeg(
+            routeLabel: line.displayName,
+            lineColorRaw: line.rawValue,
+            stopName: first.stationName,
+            destination: first.destinationName,
+            nextArrival: first.arrivalAt,
+            followingArrival: sorted.dropFirst().first?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: line, busRoute: nil)
+                .first?.headline,
+            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+        )
+    }
+
+    nonisolated func buildPortfolioBusLeg(
+        fromLeg leg: RouteOptionLeg,
+        snapshot: TransitSnapshot
+    ) -> CommuteAttributes.BusLeg? {
+        guard case .bus(let route) = leg.transit?.resolution else { return nil }
+        guard case .bus(let stopID) = leg.fromStopID else { return nil }
+        let now = Date()
+        let sorted = snapshot.busPredictions
+            .filter { $0.route == route && $0.stopId == stopID && $0.arrivalAt > now }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+        guard let first = sorted.first else { return nil }
+        return CommuteAttributes.BusLeg(
+            routeLabel: "Route \(route)",
+            stopName: first.stopName,
+            directionLabel: first.directionName,
+            destination: first.destinationName,
+            nextArrival: first.arrivalAt,
+            followingArrival: sorted.dropFirst().first?.arrivalAt,
+            alertHeadline: snapshot.activeAlerts
+                .filtered(forLine: nil, busRoute: route)
+                .first?.headline,
+            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+        )
     }
 
     // MARK: - Region-exit start (legacy "auto-start on leaving home/work")

@@ -81,6 +81,33 @@ final class RefreshCoordinator {
     /// the user has the setting on AND iOS isn't in Low Power Mode.
     let bikeRouteSampler: BikeRouteSampler
 
+    // MARK: - Portfolio evaluation (Phase 4)
+
+    /// Strong reference to the bias store so the portfolio evaluator's
+    /// `BiasCorrectionReader` can be re-snapshotted each tick. Optional
+    /// because tests can stand the coordinator up without one.
+    private let biasStore: ArrivalBiasStore?
+    private let portfolioEvaluator: PortfolioEvaluator
+    private let portfolioMissCostCalculator: MissCostCalculator
+    private let portfolioHysteresis = PortfolioHysteresis()
+    /// Per-portfolio hysteresis state, keyed by `RoutePortfolio.id`.
+    /// Survives across refresh ticks; cleared when the user removes a
+    /// portfolio.
+    private var portfolioHysteresisState: [UUID: PortfolioHysteresis.State] = [:]
+    /// Latest per-tick evaluation results, exposed for `AppViewModel`
+    /// to mirror into its observable surface.
+    private(set) var latestPortfolioEvaluations: [UUID: PortfolioEvaluation] = [:]
+    /// Latest hysteresis-approved recommendation per portfolio. May
+    /// differ from `latestPortfolioEvaluations[id].recommendedOptionID`
+    /// when the candidate hasn't beaten the current pick for long
+    /// enough.
+    private(set) var latestPortfolioRecommendations: [UUID: PortfolioRecommendation] = [:]
+    /// Bumped each refresh tick that changed a recommendation (or that
+    /// produced new evaluations after a portfolio was added). Mirrored
+    /// onto `AppViewModel.portfolioRevision` so SwiftUI consumers can
+    /// `.onChange(of:)` for selective invalidation.
+    private(set) var portfolioRevision: Int = 0
+
     init(
         store: TransitStore,
         preferences: PreferencesStore,
@@ -98,6 +125,13 @@ final class RefreshCoordinator {
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
         self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
         self.bikeRouteSampler = BikeRouteSampler(routeStore: bikeRouteStore)
+
+        // Portfolio evaluator + miss-cost share one scorer so their
+        // bias / weight assumptions stay consistent.
+        let portfolioScorer = RouteOptionScorer()
+        self.biasStore = arrivalBiasStore
+        self.portfolioEvaluator = PortfolioEvaluator(scorer: portfolioScorer)
+        self.portfolioMissCostCalculator = MissCostCalculator(scorer: portfolioScorer)
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -173,10 +207,28 @@ final class RefreshCoordinator {
             group.addTask { await self.refreshPositions(prefs: prefs) }
         }
 
-        // Keep the always-on Live Activity (if enabled) in sync with the
-        // freshly-refreshed snapshot.
+        // Phase 4: portfolio evaluation. Runs after the parallel
+        // fetches so the snapshot includes freshly-refreshed arrivals;
+        // before the Live Activity hand-off so future phases can let
+        // the coordinator pick a portfolio recommendation as the LA's
+        // source of truth.
         let snapshot = await store.currentSnapshot()
-        await LiveActivityCoordinator.shared.ensureRunning(snapshot: snapshot, prefs: prefs)
+        evaluatePortfolios(
+            prefs: prefs,
+            transitSnapshot: snapshot,
+            closedStations: closedStations
+        )
+
+        // Keep the always-on Live Activity (if enabled) in sync with the
+        // freshly-refreshed snapshot. Pass the per-portfolio
+        // recommendations so the LA picks a portfolio's approved
+        // option as its source of truth when one exists, falling back
+        // to the single-pin / planned-trip-pin path otherwise.
+        await LiveActivityCoordinator.shared.ensureRunning(
+            snapshot: snapshot,
+            prefs: prefs,
+            portfolioRecommendations: latestPortfolioRecommendations
+        )
 
         WidgetCenter.shared.reloadAllTimelines()
         return expiredTripChanged || autopinChanged
@@ -845,6 +897,108 @@ final class RefreshCoordinator {
         }
         lastWalkingInvalidationDay = today
         walkingStore.invalidateAll()
+    }
+
+    // MARK: - Portfolio evaluation (Phase 4)
+
+    /// Runs the per-portfolio evaluator + hysteresis state machine for
+    /// every portfolio on `prefs.portfolios`. Updates
+    /// `latestPortfolioEvaluations` / `latestPortfolioRecommendations`
+    /// / `portfolioRevision` for `AppViewModel` to observe.
+    ///
+    /// Costs nothing when the user has no portfolios — short-circuits
+    /// before constructing the snapshot adapter. Otherwise builds one
+    /// `PortfolioSnapshot` per refresh tick and reuses it across every
+    /// portfolio (the bias / walk readers freeze their state at
+    /// construction, so concurrent portfolios see a consistent view).
+    ///
+    /// Non-`private` because the app-target tests in `CozyFoxTests`
+    /// drive it directly via `@testable import CozyFox` — `refreshAll`
+    /// is too heavy to integration-test in unit tests.
+    func evaluatePortfolios(
+        prefs: UserRoutePreferences,
+        transitSnapshot: TransitSnapshot,
+        closedStations: Set<Int>
+    ) {
+        // Free path for users without portfolios.
+        guard !prefs.portfolios.isEmpty else {
+            // Clear any stale state — typically empty already, but
+            // covers the case where the user just removed their last
+            // portfolio.
+            if !portfolioHysteresisState.isEmpty
+                || !latestPortfolioEvaluations.isEmpty
+                || !latestPortfolioRecommendations.isEmpty
+            {
+                portfolioHysteresisState.removeAll()
+                latestPortfolioEvaluations.removeAll()
+                latestPortfolioRecommendations.removeAll()
+                portfolioRevision &+= 1
+            }
+            return
+        }
+
+        let now = Date()
+        let userLocation = location?.lastKnown.map {
+            PlannerCoordinate(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        let walker = walkingStore.makeWalkingDistanceReader(now: now)
+        let biasReader: any BiasCorrectionReader = biasStore?.makeBiasCorrectionReader()
+            ?? EmptyBiasCorrectionReader()
+        let snapshot = PortfolioSnapshot(
+            snapshot: transitSnapshot,
+            now: now,
+            userLocation: userLocation,
+            walkingDistance: walker,
+            biasCorrection: biasReader,
+            closedStationIDs: closedStations
+        )
+
+        // Drop state for portfolios the user no longer has.
+        let activeIDs = Set(prefs.portfolios.map(\.id))
+        portfolioHysteresisState = portfolioHysteresisState.filter { activeIDs.contains($0.key) }
+        latestPortfolioEvaluations = latestPortfolioEvaluations.filter { activeIDs.contains($0.key) }
+        latestPortfolioRecommendations = latestPortfolioRecommendations.filter { activeIDs.contains($0.key) }
+
+        var anyChange = false
+        for portfolio in prefs.portfolios {
+            let evaluation = portfolioEvaluator.evaluate(portfolio: portfolio, snapshot: snapshot)
+            latestPortfolioEvaluations[portfolio.id] = evaluation
+
+            let priorState = portfolioHysteresisState[portfolio.id] ?? .initial
+            let outcome = portfolioHysteresis.step(
+                state: priorState,
+                evaluation: evaluation,
+                now: now
+            )
+            portfolioHysteresisState[portfolio.id] = outcome.state
+
+            if let approvedID = outcome.recommendedID,
+               let approvedEval = evaluation.evaluation(for: approvedID)
+            {
+                // Compute miss-cost for the approved option (not the
+                // raw candidate), so the dashboard's annotation lines
+                // up with what's actually surfaced.
+                let missCost = portfolioMissCostCalculator.missCost(
+                    recommended: approvedEval,
+                    portfolio: portfolio,
+                    snapshot: snapshot
+                )
+                latestPortfolioRecommendations[portfolio.id] = PortfolioRecommendation(
+                    optionID: approvedID,
+                    missCost: missCost,
+                    changedAt: outcome.state.lastChangedAt ?? now,
+                    lowConfidence: approvedEval.confidence < 1.0
+                )
+            } else {
+                latestPortfolioRecommendations.removeValue(forKey: portfolio.id)
+            }
+
+            if outcome.didChange { anyChange = true }
+        }
+
+        if anyChange {
+            portfolioRevision &+= 1
+        }
     }
 }
 

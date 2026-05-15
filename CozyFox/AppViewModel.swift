@@ -42,6 +42,17 @@ final class AppViewModel {
     /// Bumped when the persisted route pins change outside dashboard-local
     /// controls, e.g. an automatic commute pin during refresh.
     var pinRevision: Int = 0
+    /// Per-portfolio per-tick evaluation, mirrored from
+    /// `RefreshCoordinator.latestPortfolioEvaluations`. Keyed by
+    /// `RoutePortfolio.id`. Empty when the user has no portfolios.
+    var portfolioEvaluations: [UUID: PortfolioEvaluation] = [:]
+    /// Hysteresis-approved recommendation per portfolio. `changedAt`
+    /// is stable across ticks while the same option holds the slot.
+    var portfolioRecommendations: [UUID: PortfolioRecommendation] = [:]
+    /// Mirror of `RefreshCoordinator.portfolioRevision`. Consumers can
+    /// `.onChange(of: portfolioRevision)` to react to recommendation
+    /// changes without diffing the full map.
+    var portfolioRevision: Int = 0
 
     /// User-controlled toggle for the 30 s ticker. Persisted to prefs.
     /// Observable so the dashboard switch reflects state instantly.
@@ -242,6 +253,9 @@ final class AppViewModel {
             ? snapshot.vehiclePositions
             : refreshCoordinator.latestPositions
         bikeInventory = refreshCoordinator.latestBikeInventory
+        portfolioEvaluations = refreshCoordinator.latestPortfolioEvaluations
+        portfolioRecommendations = refreshCoordinator.latestPortfolioRecommendations
+        portfolioRevision = refreshCoordinator.portfolioRevision
     }
 
     func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {
