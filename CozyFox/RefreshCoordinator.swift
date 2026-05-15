@@ -42,6 +42,14 @@ final class RefreshCoordinator {
     /// from motion + location. Pure / stateless; the coordinator owns
     /// `previousMotion` and feeds it in.
     private let boardingDetector = BoardingDetector()
+    /// Phase 6 consumer: when `NextContextPredictor` is confident the
+    /// user is about to head to a known anchor, this asks for a plan to
+    /// warm the MapKit walking cache for nearby stations.
+    private let predictivePrefetcher = PredictiveStationPrefetcher()
+    /// Thin convenience over `walkingStore` so the predictor's plan can
+    /// trigger MapKit prefetches without re-implementing the resolver's
+    /// inflight / negative-cache bookkeeping.
+    private let walkingResolver: WalkingDistanceResolver
 
     /// Motion classification from the previous refresh cycle. Seeded as
     /// `.unknown` at launch so the first cycle never reports a
@@ -76,6 +84,7 @@ final class RefreshCoordinator {
         self.preferences = preferences
         self.location = location
         self.walkingStore = walkingStore
+        self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
 
@@ -113,6 +122,14 @@ final class RefreshCoordinator {
         let closedStations = ClosedStationsAnalyzer.closedStationIds(
             from: alertsSnapshot.activeAlerts
         )
+
+        // Phase 6 consumer: kick off MapKit prefetch for stations near
+        // the predicted next destination anchor. Runs in parallel with
+        // the Phase 2 fetches below — the predictor lookup is cheap
+        // (in-memory histogram build) and the resolver's own inflight
+        // dedup keeps us from re-querying anything that's already
+        // warming.
+        primePredictedDestinationWalking()
 
         // Phase 2: parallel data fetches.
         await withTaskGroup(of: Void.self) { group in
@@ -249,6 +266,29 @@ final class RefreshCoordinator {
         guard prefs.clearExpiredPlannedTripPin() else { return false }
         preferences.saveRoutePreferences(prefs)
         return true
+    }
+
+    /// Phase 6 consumer. When the next-context predictor is confident
+    /// the user is about to head to a known anchor, ask the
+    /// `WalkingDistanceResolver` to begin warming MapKit walks for the
+    /// nearby stations. Fire-and-forget — the resolver's own inflight
+    /// dedup absorbs the case where those stations are already being
+    /// fetched by the dashboard. Returns immediately; the actual MapKit
+    /// requests run on their own.
+    private func primePredictedDestinationWalking() {
+        let profile = preferences.loadMobilityProfile()
+        let anchors = preferences.loadCommuteAnchors()
+        let currentContext = location?.context ?? .unknown
+        guard currentContext != .unknown else { return }
+        guard let plan = predictivePrefetcher.plan(
+            profile: profile,
+            currentContext: currentContext,
+            anchors: anchors
+        ) else { return }
+        walkingResolver.ensureFresh(
+            origin: (lat: plan.origin.latitude, lon: plan.origin.longitude),
+            stations: plan.stations
+        )
     }
 
     // MARK: - Per-service refreshers
