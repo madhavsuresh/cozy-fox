@@ -1,5 +1,6 @@
 import ChicagoTheme
 import SwiftUI
+import TransitDomain
 
 /// A row of dots laid out on a 0…`window` minute axis, one per upcoming
 /// arrival. The first three dots are labelled with their minute value,
@@ -39,6 +40,14 @@ public struct HeadwayDotStrip: View {
     private let now: Date
     private let style: Style
     private let complications: [Complication?]
+    /// Optional per-arrival "departure urgency" buckets. When present
+    /// and the bucket is non-nil for a dot, the dot picks up a very
+    /// subtle warm overlay (`.approaching` / `.imminent`) or grays out
+    /// (`.missed`). When the array is shorter than the arrival list
+    /// or the value is nil, the dot renders with the legacy neutral
+    /// style. Tints are intentionally faint — passive readout, not a
+    /// nudge.
+    private let urgencies: [DepartureUrgency.Bucket?]
 
     public init(
         arrivals: [Date],
@@ -46,6 +55,7 @@ public struct HeadwayDotStrip: View {
         accent: Color,
         now: Date = .now,
         complications: [Complication?] = [],
+        urgencies: [DepartureUrgency.Bucket?] = [],
         style: Style = .standard
     ) {
         self.arrivals = arrivals
@@ -54,6 +64,7 @@ public struct HeadwayDotStrip: View {
         self.now = now
         self.style = style
         self.complications = complications
+        self.urgencies = urgencies
     }
 
     private var trackColor: Color {
@@ -132,13 +143,20 @@ public struct HeadwayDotStrip: View {
         let opacity: Double
         let minutes: Int
         let complication: Complication?
+        let urgency: DepartureUrgency.Bucket?
     }
 
     @ViewBuilder
     private func dotView(_ dot: Dot) -> some View {
         ZStack(alignment: .topTrailing) {
             Circle()
-                .fill(accent.opacity(dot.opacity))
+                .fill(dotFill(dot))
+                .overlay {
+                    if let urgencyAlpha = urgencyOverlayAlpha(dot.urgency) {
+                        Circle()
+                            .fill(urgencyOverlayColor.opacity(urgencyAlpha))
+                    }
+                }
                 .overlay {
                     if let complication = dot.complication {
                         Circle()
@@ -193,7 +211,8 @@ public struct HeadwayDotStrip: View {
                            diameter: diameter,
                            opacity: opacity,
                            minutes: minutes,
-                           complication: complication(at: index))
+                           complication: complication(at: index),
+                           urgency: urgency(at: index))
             }
             .prefix(6)
             .map { $0 }
@@ -202,6 +221,43 @@ public struct HeadwayDotStrip: View {
     private func complication(at index: Int) -> Complication? {
         guard index < complications.count else { return nil }
         return complications[index]
+    }
+
+    private func urgency(at index: Int) -> DepartureUrgency.Bucket? {
+        guard index < urgencies.count else { return nil }
+        return urgencies[index]
+    }
+
+    /// Base fill for a dot. `.missed` dots desaturate to neutral so
+    /// they read as "this one is gone" without the eye assuming the
+    /// accent color means it's still active.
+    private func dotFill(_ dot: Dot) -> Color {
+        switch dot.urgency {
+        case .missed:
+            switch style {
+            case .standard: return ChicagoPalette.Gray.medium.opacity(dot.opacity * 0.45)
+            case .onDark:   return ChicagoPalette.OnDarkSafe.tertiary.opacity(dot.opacity * 0.55)
+            }
+        case .comfortable, .approaching, .imminent, .none:
+            return accent.opacity(dot.opacity)
+        }
+    }
+
+    /// Faint warm overlay alpha for the approaching/imminent buckets.
+    /// Returns nil for `.comfortable`, `.missed`, and absent urgencies
+    /// — those don't paint anything over the base fill.
+    private func urgencyOverlayAlpha(_ bucket: DepartureUrgency.Bucket?) -> Double? {
+        switch bucket {
+        case .approaching: return 0.14
+        case .imminent:    return 0.28
+        case .comfortable, .missed, .none: return nil
+        }
+    }
+
+    /// Warm overlay color — same hue across both styles, alpha-blended
+    /// onto whatever accent the dot already has.
+    private var urgencyOverlayColor: Color {
+        ChicagoPalette.starRed
     }
 
     private func complicationSymbol(_ complication: Complication) -> String {
