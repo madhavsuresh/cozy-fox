@@ -723,24 +723,26 @@ final class RefreshCoordinator {
         prefs: UserRoutePreferences,
         lastLocation: LastKnownLocation?
     ) async {
-        guard prefs.includeIntercampus,
-              prefs.isModeVisible(.intercampus) || prefs.pinnedIntercampusStopId != nil
-        else {
-            await store.replaceIntercampusArrivals([])
-            return
-        }
-        guard let lastLocation else {
+        let plannedStopIds = Set(
+            (prefs.plannedTripPin?.intercampusLegs.map(\.stopId) ?? [])
+                .filter { IntercampusCatalog.stop(id: $0) != nil }
+        )
+        let shouldFetchNearby = prefs.includeIntercampus && prefs.isModeVisible(.intercampus)
+        guard shouldFetchNearby || prefs.pinnedIntercampusStopId != nil || !plannedStopIds.isEmpty else {
             await store.replaceIntercampusArrivals([])
             return
         }
 
-        let origin = (lastLocation.latitude, lastLocation.longitude)
-        let nearby = intercampusStopResolver.nearestPerDirection(
-            to: origin,
-            limitPerDirection: 12,
-            catalog: IntercampusCatalog.all
-        )
-        var targetStopIds = Set(nearby.map(\.stop.id))
+        var targetStopIds = plannedStopIds
+        if shouldFetchNearby, let lastLocation {
+            let origin = (lastLocation.latitude, lastLocation.longitude)
+            let nearby = intercampusStopResolver.nearestPerDirection(
+                to: origin,
+                limitPerDirection: 12,
+                catalog: IntercampusCatalog.all
+            )
+            targetStopIds.formUnion(nearby.map(\.stop.id))
+        }
         if let selectedStopId = prefs.pinnedIntercampusStopId,
            IntercampusCatalog.stop(id: selectedStopId) != nil
         {
