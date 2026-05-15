@@ -76,6 +76,7 @@ struct DashboardScreen: View {
                             contextBanner
                         }
                         liveUpdatesBar
+                        headHomeCard
                         if shouldShowIntercampusSurface {
                             intercampusCard
                                 .id(DashboardRailDestination.intercampus)
@@ -226,6 +227,60 @@ struct DashboardScreen: View {
 
     private func isMetraRouteDiscoverable(_ routeId: String) -> Bool {
         routePreferences.isMetraRouteVisible(routeId)
+    }
+
+    // MARK: - Head home tile
+
+    /// Surfaces a quiet "head home?" suggestion when the user has been
+    /// `.elsewhere` for a while and it's evening or their typical
+    /// back-home window. Tapping "Plan trip" triggers the same flow
+    /// as picking Home in the destination picker, so the existing
+    /// trip-options UI takes it from there. Dismissable for the
+    /// current session via "Not yet".
+    @ViewBuilder
+    private var headHomeCard: some View {
+        let shouldShow = HomewardSuggester().shouldSurface(
+            context: model.location.context,
+            elsewhereSince: model.preferences.loadElsewhereSince(),
+            anchors: commuteAnchors,
+            profile: model.preferences.loadMobilityProfile(),
+            now: Date(),
+            suppressedUntil: model.homewardSuppressedUntil
+        )
+        if shouldShow {
+            HStack(spacing: ChicagoSpacing.md) {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                    Text("Head home?")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    Text("Plan a route from where you are.")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button("Plan trip") {
+                    planAnchoredTrip(.home)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(ChicagoPalette.flagBlue)
+                Button {
+                    model.suppressHomeward(for: 2 * 60 * 60)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Dismiss head-home suggestion")
+            }
+            .padding(ChicagoSpacing.md)
+            .background(
+                ChicagoPalette.Surface.elevated,
+                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+            )
+        }
     }
 
     // MARK: - Destination pin

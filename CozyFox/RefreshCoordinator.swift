@@ -142,6 +142,12 @@ final class RefreshCoordinator {
         // warming.
         primePredictedDestinationWalking()
 
+        // Track when the user first transitioned into `.elsewhere` so
+        // the head-home tile can reason about outing duration even
+        // across app launches. Cleared when context returns to a
+        // known anchor.
+        updateElsewhereTracking()
+
         // Phase 2: parallel data fetches.
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
@@ -341,6 +347,30 @@ final class RefreshCoordinator {
             origin: (lat: plan.origin.latitude, lon: plan.origin.longitude),
             stations: plan.stations
         )
+    }
+
+    /// Maintain the persisted `elsewhereSince` timestamp so the head-home
+    /// suggester can reason about outing duration across app launches.
+    /// Setting fires once when context first transitions to `.elsewhere`;
+    /// clears immediately when context returns to a known anchor.
+    private func updateElsewhereTracking() {
+        let context = location?.context ?? .unknown
+        switch context {
+        case .elsewhere:
+            // First time we're seeing elsewhere this session — stamp it.
+            // Idempotent: if the persisted value is non-nil, leave it.
+            if preferences.loadElsewhereSince() == nil {
+                preferences.saveElsewhereSince(.now)
+            }
+        case .atHome, .atWork:
+            // Back at a known anchor — clear the stamp.
+            if preferences.loadElsewhereSince() != nil {
+                preferences.saveElsewhereSince(nil)
+            }
+        case .unknown:
+            // Don't change anything — `.unknown` is a transient state.
+            break
+        }
     }
 
     // MARK: - Per-service refreshers
