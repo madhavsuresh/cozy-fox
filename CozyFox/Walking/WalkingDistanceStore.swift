@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SwiftyH3
+import TransitDomain
 
 struct WalkingDistance: Codable, Equatable, Sendable {
     let meters: Double
@@ -66,6 +67,12 @@ struct AccessRouteDistances: Codable, Equatable, Sendable {
 final class WalkingDistanceStore {
     private(set) var distances: [String: AccessRouteDistances] = [:]
 
+    /// Phase 5: per-user multiplicative correction on MapKit's
+    /// `expectedTravelTime`. Welford running mean of observed/expected
+    /// ratios. Persisted alongside `distances`. Below the confidence gate
+    /// (`confidentRatio` returns nil), callers leave MapKit's number alone.
+    private(set) var walkSpeedEstimate: WalkSpeedEstimate = .empty
+
     @ObservationIgnored
     private var inflight: Set<String> = []
 
@@ -76,7 +83,10 @@ final class WalkingDistanceStore {
     private var persistTask: Task<Void, Never>?
 
     @ObservationIgnored
-    private var loadTask: Task<[String: AccessRouteDistances], Never>?
+    private var loadTask: Task<HydratedSnapshot, Never>?
+
+    @ObservationIgnored
+    private var loadedWalkSpeedEstimate: WalkSpeedEstimate?
 
     @ObservationIgnored
     private var hasLoadedFromDisk = false
@@ -104,18 +114,20 @@ final class WalkingDistanceStore {
 
     func hydrateFromDiskIfNeeded() async {
         guard !hasLoadedFromDisk else { return }
-        let task: Task<[String: AccessRouteDistances], Never>
+        let task: Task<HydratedSnapshot, Never>
         if let existing = loadTask {
             task = existing
         } else {
             let url = fileURL
             task = Task.detached(priority: .utility) {
-                Self.loadPersistedDistances(from: url)
+                Self.loadPersistedSnapshot(from: url)
             }
             loadTask = task
         }
 
-        var loaded = await task.value
+        let snapshot = await task.value
+        var loaded = snapshot.distances
+        loadedWalkSpeedEstimate = snapshot.walkSpeedEstimate
         guard !hasLoadedFromDisk else { return }
         loadTask = nil
         hasLoadedFromDisk = true
@@ -125,6 +137,23 @@ final class WalkingDistanceStore {
             loaded = loaded.mapValues { $0.invalidated(at: stamp) }
         }
         distances.merge(loaded) { current, _ in current }
+        walkSpeedEstimate = loadedWalkSpeedEstimate ?? walkSpeedEstimate
+        loadedWalkSpeedEstimate = nil
+    }
+
+    /// Record a fresh walk-speed observation. Updates the running mean
+    /// in-place and persists (debounced).
+    func recordWalkSpeedSample(_ sample: WalkSpeedSample) {
+        walkSpeedEstimate.recordSample(ratio: sample.ratio, at: sample.recordedAt)
+        persistDebounced()
+    }
+
+    /// Reset the per-user correction. Wired into Settings → "Reset
+    /// learning" alongside `ArrivalBiasStore.clearAll()`. Doesn't touch
+    /// the underlying `distances` cache; that's geography, not learning.
+    func clearWalkSpeedEstimate() {
+        walkSpeedEstimate = .empty
+        persistDebounced()
     }
 
     private static func defaultFileURL() -> URL {
@@ -333,6 +362,9 @@ final class WalkingDistanceStore {
     }
 
     /// Wipe the cache. Used by Settings -> "Clear access route cache."
+    /// Leaves `walkSpeedEstimate` alone — that has its own
+    /// `clearWalkSpeedEstimate()` reset path because it's learning data,
+    /// not geography.
     func clearAll() {
         loadTask?.cancel()
         loadTask = nil
@@ -375,9 +407,17 @@ final class WalkingDistanceStore {
 
     // MARK: - Persistence
 
+    private struct HydratedSnapshot: Sendable {
+        let distances: [String: AccessRouteDistances]
+        let walkSpeedEstimate: WalkSpeedEstimate?
+    }
+
     private struct Persisted: Codable, Sendable {
         let version: Int
         let distances: [String: AccessRouteDistances]
+        /// Optional so v2 payloads written before Phase 5 still decode
+        /// cleanly; absent maps to `WalkSpeedEstimate.empty`.
+        let walkSpeedEstimate: WalkSpeedEstimate?
     }
 
     private struct LegacyPersisted: Codable, Sendable {
@@ -385,24 +425,36 @@ final class WalkingDistanceStore {
         let distances: [String: WalkingDistance]
     }
 
-    nonisolated private static func loadPersistedDistances(from fileURL: URL) -> [String: AccessRouteDistances] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
+    nonisolated private static func loadPersistedSnapshot(from fileURL: URL) -> HydratedSnapshot {
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return HydratedSnapshot(distances: [:], walkSpeedEstimate: nil)
+        }
         if let decoded = try? JSONDecoder().decode(Persisted.self, from: data),
            decoded.version == 2 {
-            return decoded.distances
+            return HydratedSnapshot(
+                distances: decoded.distances,
+                walkSpeedEstimate: decoded.walkSpeedEstimate
+            )
         }
         if let legacy = try? JSONDecoder().decode(LegacyPersisted.self, from: data),
            legacy.version == 1 {
-            return legacy.distances.mapValues {
-                AccessRouteDistances(walking: $0, cycling: nil)
-            }
+            return HydratedSnapshot(
+                distances: legacy.distances.mapValues {
+                    AccessRouteDistances(walking: $0, cycling: nil)
+                },
+                walkSpeedEstimate: nil
+            )
         }
-        return [:]
+        return HydratedSnapshot(distances: [:], walkSpeedEstimate: nil)
     }
 
     private func persistDebounced() {
         persistTask?.cancel()
-        let snapshot = Persisted(version: 2, distances: distances)
+        let snapshot = Persisted(
+            version: 2,
+            distances: distances,
+            walkSpeedEstimate: walkSpeedEstimate == .empty ? nil : walkSpeedEstimate
+        )
         let url = fileURL
         persistTask = Task.detached(priority: .utility) {
             // Debounce burst writes during a refresh cycle so we don't

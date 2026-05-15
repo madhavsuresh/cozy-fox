@@ -14,18 +14,35 @@ final class WalkingDistanceResolver {
         self.store = store
     }
 
+    /// Phase 5: applies the per-user `walkSpeedEstimate` to a cached
+    /// `WalkingDistance` if it's past the confidence gate. Walking only —
+    /// cycling speeds vary too much by effort/terrain/equipment for a
+    /// single multiplicative correction to be meaningful. Distance stays
+    /// unmodified (it's geography, not pace).
+    private func corrected(_ raw: WalkingDistance?, mode: AccessTravelMode) -> WalkingDistance? {
+        guard let raw else { return nil }
+        guard mode == .walking else { return raw }
+        guard let ratio = store.walkSpeedEstimate.confidentRatio() else { return raw }
+        return WalkingDistance(
+            meters: raw.meters,
+            expectedTravelTime: raw.expectedTravelTime * ratio,
+            cachedAt: raw.cachedAt
+        )
+    }
+
     /// Fresh cached value or nil. Synchronous — safe to call from SwiftUI
-    /// body.
+    /// body. Phase 5: applies the per-user walk-speed correction to
+    /// `expectedTravelTime` if the estimate is past its confidence gate.
     func cached(
         origin: (lat: Double, lon: Double),
         destinationKey: String,
         mode: AccessTravelMode
     ) -> WalkingDistance? {
-        store.fresh(origin: origin, destinationKey: destinationKey, mode: mode)
+        corrected(store.fresh(origin: origin, destinationKey: destinationKey, mode: mode), mode: mode)
     }
 
     func cached(origin: (lat: Double, lon: Double), stationId: Int) -> WalkingDistance? {
-        store.fresh(origin: origin, stationId: stationId)
+        corrected(store.fresh(origin: origin, stationId: stationId), mode: .walking)
     }
 
     func cached(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) -> WalkingDistance? {
@@ -38,17 +55,18 @@ final class WalkingDistanceResolver {
 
     /// Stale fallback so the chip can render a known walking value while
     /// the daily refresh is in flight, instead of dropping back to
-    /// Haversine and then visibly jumping when MapKit returns.
+    /// Haversine and then visibly jumping when MapKit returns. Phase 5
+    /// correction applies here too.
     func staleFallback(
         origin: (lat: Double, lon: Double),
         destinationKey: String,
         mode: AccessTravelMode
     ) -> WalkingDistance? {
-        store.anyCached(origin: origin, destinationKey: destinationKey, mode: mode)
+        corrected(store.anyCached(origin: origin, destinationKey: destinationKey, mode: mode), mode: mode)
     }
 
     func staleFallback(origin: (lat: Double, lon: Double), stationId: Int) -> WalkingDistance? {
-        store.anyCached(origin: origin, stationId: stationId)
+        corrected(store.anyCached(origin: origin, stationId: stationId), mode: .walking)
     }
 
     func staleFallback(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) -> WalkingDistance? {

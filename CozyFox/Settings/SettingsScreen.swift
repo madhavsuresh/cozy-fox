@@ -230,6 +230,7 @@ struct SettingsScreen: View {
         ) {
             Button("Reset learning", role: .destructive) {
                 model.arrivalBiasStore.clearAll()
+                model.walkingStore.clearWalkSpeedEstimate()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
