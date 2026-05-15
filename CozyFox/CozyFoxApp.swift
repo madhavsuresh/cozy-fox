@@ -13,6 +13,10 @@ struct CozyFoxApp: App {
 
     init() {
         ChicagoTheme.bootstrap()
+        // Schedule the bundled JSON catalogs for parsing on a background
+        // task so the 7 MB Metra + 2 MB bus stop decodes don't stall the
+        // first refresh or scroll interaction.
+        Catalogs.prewarm()
         let store: TransitStore
         do {
             store = try TransitStore.live()

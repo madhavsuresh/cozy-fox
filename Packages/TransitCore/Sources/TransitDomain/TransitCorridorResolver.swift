@@ -126,11 +126,21 @@ public struct TransitCorridorResolver: Sendable {
     ) -> [NearbyBusCorridorCandidate] {
         var bestByRoute: [String: (stop: BusStop, distance: Double)] = [:]
         var stopsByRoute: [String: [BusStop]] = [:]
+        // Track which routes already failed visibility so we don't pay the
+        // closure cost for every stop in a 14k-row catalog.
+        var allowedRoutes: [String: Bool] = [:]
         for stop in catalog {
             if let excludingRoute, stop.route == excludingRoute {
                 continue
             }
-            guard isRouteVisible(stop.route) else { continue }
+            let allowed: Bool
+            if let cached = allowedRoutes[stop.route] {
+                allowed = cached
+            } else {
+                allowed = isRouteVisible(stop.route)
+                allowedRoutes[stop.route] = allowed
+            }
+            guard allowed else { continue }
             stopsByRoute[stop.route, default: []].append(stop)
             let distance = Distance.meters(
                 from: origin,
@@ -177,7 +187,12 @@ public struct TransitCorridorResolver: Sendable {
             return .loop
         }
 
-        let lineStations = catalog.filter { $0.servedLines.contains(line) }
+        // If the caller hasn't filtered the catalog, use the precomputed
+        // by-line index instead of an O(n) filter on every station × line
+        // candidate.
+        let lineStations: [LStation] = catalog.count == LStationCatalog.all.count
+            ? LStationCatalog.stations(onLine: line)
+            : catalog.filter { $0.servedLines.contains(line) }
         let ranked = lineStations
             .map { candidate in
                 (
@@ -204,7 +219,12 @@ public struct TransitCorridorResolver: Sendable {
         near origin: (lat: Double, lon: Double),
         catalog: [BusStop] = BusStopCatalog.all
     ) -> TransitCorridor {
-        busCorridor(forStops: catalog.filter { $0.route == route }, near: origin)
+        // Skip the 14k-row scan if the caller passed the default catalog —
+        // the precomputed `byRoute` index already has stops bucketed.
+        let stops: [BusStop] = catalog.count == BusStopCatalog.all.count
+            ? BusStopCatalog.stops(onRoute: route)
+            : catalog.filter { $0.route == route }
+        return busCorridor(forStops: stops, near: origin)
     }
 
     private func busCorridor(

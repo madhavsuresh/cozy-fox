@@ -185,14 +185,22 @@ final class AppViewModel {
         isRefreshing = true
         defer { isRefreshing = false }
         await location.refreshLocation()
+        var didRefresh = false
         if force || snapshot == .empty || snapshot.isAnythingStale(ttl: 30) {
             let pinsChanged = await refreshCoordinator.refreshAll()
             if pinsChanged {
                 pinRevision += 1
             }
+            didRefresh = true
         }
         await loadCachedSnapshot()
-        WidgetCenter.shared.reloadAllTimelines()
+        // `RefreshCoordinator.refreshAll()` already called
+        // `WidgetCenter.shared.reloadAllTimelines()`. Only re-trigger the
+        // widget when we *didn't* run the coordinator (snapshot was fresh)
+        // so we don't pay the cross-process IPC cost twice per cycle.
+        if !didRefresh {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 
     private func loadCachedSnapshot() async {

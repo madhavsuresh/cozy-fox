@@ -49,8 +49,13 @@ public struct NearestBusStopResolver: Sendable {
         to origin: (lat: Double, lon: Double),
         catalog: [BusStop]
     ) -> BusStop? {
+        // When the caller passes the default 14k-row catalog, fall back to
+        // the precomputed `byRoute` index instead of scanning every stop.
+        let candidates: [BusStop] = catalog.count == BusStopCatalog.all.count
+            ? BusStopCatalog.stops(onRoute: route)
+            : catalog
         var best: (stop: BusStop, distance: Double)?
-        for stop in catalog where stop.route == route {
+        for stop in candidates where stop.route == route {
             let distance = Distance.meters(from: origin, to: (stop.latitude, stop.longitude))
             guard distance <= maxDistanceMeters else { continue }
             if best.map({ distance < $0.distance }) ?? true {
@@ -92,8 +97,13 @@ public struct NearestBusStopResolver: Sendable {
         limitPerDirection: Int = 2,
         catalog: [BusStop]
     ) -> [(stop: BusStop, distance: Double)] {
+        // Same shortcut as `nearest(onRoute:to:catalog:)` — skip the 14k-row
+        // scan when the caller hasn't filtered the catalog.
+        let candidates: [BusStop] = catalog.count == BusStopCatalog.all.count
+            ? BusStopCatalog.stops(onRoute: route)
+            : catalog
         var byDirection: [String: [BusStop]] = [:]
-        for stop in catalog where stop.route == route {
+        for stop in candidates where stop.route == route {
             byDirection[stop.directionLabel, default: []].append(stop)
         }
 

@@ -221,7 +221,12 @@ final class RefreshCoordinator {
     }
 
     private func applyAutopinIfNeeded() async -> Bool {
-        if preferences.loadRoutePreferences().plannedTripPin != nil {
+        // Single load — `loadRoutePreferences` does a UserDefaults read +
+        // JSON decode. The function previously called it twice per
+        // refresh; reuse the same snapshot for the planned-trip gate and
+        // the autopin call.
+        let prefsSnapshot = preferences.loadRoutePreferences()
+        if prefsSnapshot.plannedTripPin != nil {
             return false
         }
         let motion = await location?.refreshMotion() ?? .unknown
@@ -272,7 +277,7 @@ final class RefreshCoordinator {
 
         let context = location?.context ?? .unknown
         let result = autopinner.apply(
-            preferences: preferences.loadRoutePreferences(),
+            preferences: prefsSnapshot,
             anchors: preferences.loadCommuteAnchors(),
             profile: preferences.loadMobilityProfile(),
             location: preferences.loadLastKnownLocation(),
@@ -324,15 +329,24 @@ final class RefreshCoordinator {
     ) async {
         // Build the set of (mapId, stopId?) targets to query the Train Tracker
         // for: tracked stations OR the nearest few + the pinned-line station.
+        // Use a parallel Set of (mapId, stopId) pairs so duplicate-detection
+        // is O(1) instead of an O(n²) `.contains(where:)` over `targets`.
         var targets: [(mapId: Int, stopId: Int?)] = []
+        var seenTargets: Set<TrainTargetKey> = []
+        func appendTarget(mapId: Int, stopId: Int?) {
+            let key = TrainTargetKey(mapId: mapId, stopId: stopId)
+            if seenTargets.insert(key).inserted {
+                targets.append((mapId, stopId))
+            }
+        }
 
         let visibleTrainPrefs = prefs.trains.filter {
             prefs.isTrainLineVisible($0.line) || prefs.pinnedLine == $0.line
         }
-        if !visibleTrainPrefs.isEmpty {
-            // Honor tracked stations even if the alerts feed says they're
-            // closed — the user picked them on purpose, surface the staleness.
-            targets.append(contentsOf: visibleTrainPrefs.map { ($0.mapId, $0.stopId) })
+        // Honor tracked stations even if the alerts feed says they're
+        // closed — the user picked them on purpose, surface the staleness.
+        for pref in visibleTrainPrefs {
+            appendTarget(mapId: pref.mapId, stopId: pref.stopId)
         }
         if prefs.isModeVisible(.trains), let lastLocation {
             let nearest = corridorResolver.nearbyTrainCandidates(
@@ -345,18 +359,13 @@ final class RefreshCoordinator {
                 excludingStationIds: closedStations
             )
             for candidate in nearest {
-                guard !targets.contains(where: {
-                    $0.mapId == candidate.station.id && $0.stopId == nil
-                }) else { continue }
-                targets.append((candidate.station.id, nil))
+                appendTarget(mapId: candidate.station.id, stopId: nil)
             }
         }
 
         for tripTrain in prefs.plannedTripPin?.trainLegs ?? [] {
             guard let stationId = tripTrain.stationId else { continue }
-            if !targets.contains(where: { $0.mapId == stationId }) {
-                targets.append((stationId, nil))
-            }
+            appendTarget(mapId: stationId, stopId: nil)
         }
 
         // Pinned line: include the user's chosen station (or the nearest
@@ -365,9 +374,8 @@ final class RefreshCoordinator {
         if let pinned = prefs.pinnedLine, let lastLocation {
             let stationId: Int? = {
                 if let explicit = prefs.pinnedStationId,
-                   LStationCatalog.all.contains(where: {
-                       $0.id == explicit && $0.servedLines.contains(pinned)
-                   })
+                   let station = LStationCatalog.byId[explicit],
+                   station.servedLines.contains(pinned)
                 {
                     return explicit
                 }
@@ -379,10 +387,8 @@ final class RefreshCoordinator {
                     excludingStationIds: closedStations
                 ).first?.station.id
             }()
-            if let stationId,
-               !targets.contains(where: { $0.mapId == stationId })
-            {
-                targets.append((stationId, nil))
+            if let stationId {
+                appendTarget(mapId: stationId, stopId: nil)
             }
         }
 
@@ -424,12 +430,18 @@ final class RefreshCoordinator {
         lastLocation: LastKnownLocation?
     ) async {
         var targets: [(route: String, stopId: Int)] = []
+        var seenTargets: Set<BusTargetKey> = []
+        func appendTarget(route: String, stopId: Int) {
+            if seenTargets.insert(BusTargetKey(route: route, stopId: stopId)).inserted {
+                targets.append((route, stopId))
+            }
+        }
 
         let visibleBusPrefs = prefs.buses.filter {
             prefs.isBusRouteVisible($0.route) || prefs.pinnedBusRoute == $0.route
         }
-        if !visibleBusPrefs.isEmpty {
-            targets.append(contentsOf: visibleBusPrefs.map { ($0.route, $0.stopId) })
+        for pref in visibleBusPrefs {
+            appendTarget(route: pref.route, stopId: pref.stopId)
         }
         if prefs.isModeVisible(.buses), let lastLocation {
             // Surface predictions for nearby directional coverage (N/S, E/W,
@@ -438,13 +450,10 @@ final class RefreshCoordinator {
                 to: (lastLocation.latitude, lastLocation.longitude),
                 radiusMeters: 1_500,
                 limitPerCorridor: 2,
-                catalog: BusStopCatalog.all.filter { prefs.isBusRouteVisible($0.route) }
+                isRouteVisible: prefs.isBusRouteVisible
             )
             for candidate in nearest {
-                guard !targets.contains(where: {
-                    $0.route == candidate.stop.route && $0.stopId == candidate.stop.id
-                }) else { continue }
-                targets.append((candidate.stop.route, candidate.stop.id))
+                appendTarget(route: candidate.stop.route, stopId: candidate.stop.id)
             }
         }
 
@@ -453,15 +462,13 @@ final class RefreshCoordinator {
         // between stops.
         if let pinnedRoute = prefs.pinnedBusRoute, let lastLocation {
             if let pinnedStopId = prefs.pinnedBusStopId,
-               let explicitStop = BusStopCatalog.all.first(where: {
-                   $0.route == pinnedRoute
-                       && $0.id == pinnedStopId
+               let explicitStop = BusStopCatalog.stops(onRoute: pinnedRoute).first(where: {
+                   $0.id == pinnedStopId
                        && (prefs.pinnedBusDirection == nil
                            || $0.directionLabel == prefs.pinnedBusDirection)
-               }),
-               !targets.contains(where: { $0.route == pinnedRoute && $0.stopId == explicitStop.id })
+               })
             {
-                targets.append((pinnedRoute, explicitStop.id))
+                appendTarget(route: pinnedRoute, stopId: explicitStop.id)
             }
 
             let directionalStops = busStopResolver.nearestStopsPerDirection(
@@ -470,18 +477,14 @@ final class RefreshCoordinator {
                 limitPerDirection: 2,
                 catalog: BusStopCatalog.all
             )
-            for stop in directionalStops where !targets.contains(where: {
-                $0.route == pinnedRoute && $0.stopId == stop.stop.id
-            }) {
-                targets.append((pinnedRoute, stop.stop.id))
+            for stop in directionalStops {
+                appendTarget(route: pinnedRoute, stopId: stop.stop.id)
             }
         }
 
         for tripBus in prefs.plannedTripPin?.busLegs ?? [] {
             guard let stopId = tripBus.stopId else { continue }
-            if !targets.contains(where: { $0.route == tripBus.route && $0.stopId == stopId }) {
-                targets.append((tripBus.route, stopId))
-            }
+            appendTarget(route: tripBus.route, stopId: stopId)
         }
 
         var collected: [BusPrediction] = []
@@ -510,14 +513,20 @@ final class RefreshCoordinator {
         lastLocation: LastKnownLocation?
     ) async {
         var targets: [(routeId: String, stationId: String, directionId: Int?)] = []
+        var seenTargets: Set<MetraTargetKey> = []
+        func appendTarget(routeId: String, stationId: String, directionId: Int?) {
+            if seenTargets.insert(MetraTargetKey(routeId: routeId, stationId: stationId)).inserted {
+                targets.append((routeId, stationId, directionId))
+            }
+        }
 
         let visibleMetraPrefs = prefs.metra.filter {
             prefs.isMetraRouteVisible($0.routeId) || prefs.pinnedMetraRoute == $0.routeId
         }
         if !visibleMetraPrefs.isEmpty {
-            targets.append(contentsOf: visibleMetraPrefs.map {
-                ($0.routeId, $0.stationId, $0.directionId)
-            })
+            for pref in visibleMetraPrefs {
+                appendTarget(routeId: pref.routeId, stationId: pref.stationId, directionId: pref.directionId)
+            }
         } else if prefs.isModeVisible(.metra), let lastLocation {
             let nearest = metraStationResolver.nearestPerRoute(
                 to: (lastLocation.latitude, lastLocation.longitude),
@@ -526,24 +535,26 @@ final class RefreshCoordinator {
                     station.servedRoutes.contains(where: prefs.isMetraRouteVisible)
                 }
             )
-            targets.append(contentsOf: nearest.map { ($0.routeId, $0.station.id, nil) })
+            for entry in nearest {
+                appendTarget(routeId: entry.routeId, stationId: entry.station.id, directionId: nil)
+            }
         }
 
         for tripMetra in prefs.plannedTripPin?.metraLegs ?? [] {
             guard let stationId = tripMetra.stationId else { continue }
-            if !targets.contains(where: { $0.routeId == tripMetra.routeId && $0.stationId == stationId }) {
-                targets.append((tripMetra.routeId, stationId, tripMetra.directionId))
-            }
+            appendTarget(routeId: tripMetra.routeId, stationId: stationId, directionId: tripMetra.directionId)
         }
 
         if let pinnedRoute = prefs.pinnedMetraRoute, let lastLocation {
             if let pinnedStationId = prefs.pinnedMetraStationId,
-               MetraStationCatalog.all.contains(where: {
-                   $0.id == pinnedStationId && $0.servedRoutes.contains(pinnedRoute)
-               }),
-               !targets.contains(where: { $0.routeId == pinnedRoute && $0.stationId == pinnedStationId })
+               let pinnedStation = MetraStationCatalog.station(id: pinnedStationId),
+               pinnedStation.servedRoutes.contains(pinnedRoute)
             {
-                targets.append((pinnedRoute, pinnedStationId, prefs.pinnedMetraDirectionId))
+                appendTarget(
+                    routeId: pinnedRoute,
+                    stationId: pinnedStationId,
+                    directionId: prefs.pinnedMetraDirectionId
+                )
             }
 
             let nearest = metraStationResolver.closestStations(
@@ -552,10 +563,12 @@ final class RefreshCoordinator {
                 limit: 3,
                 catalog: MetraStationCatalog.all
             )
-            for station in nearest where !targets.contains(where: {
-                $0.routeId == pinnedRoute && $0.stationId == station.station.id
-            }) {
-                targets.append((pinnedRoute, station.station.id, prefs.pinnedMetraDirectionId))
+            for station in nearest {
+                appendTarget(
+                    routeId: pinnedRoute,
+                    stationId: station.station.id,
+                    directionId: prefs.pinnedMetraDirectionId
+                )
             }
         }
 
@@ -772,4 +785,23 @@ final class RefreshCoordinator {
         lastWalkingInvalidationDay = today
         walkingStore.invalidateAll()
     }
+}
+
+// MARK: - Target dedup keys
+
+/// Hashable lookup keys used by the per-service refreshers to dedup their
+/// target tuples in O(1) instead of `Array.contains(where:)` scans.
+private struct TrainTargetKey: Hashable {
+    let mapId: Int
+    let stopId: Int?
+}
+
+private struct BusTargetKey: Hashable {
+    let route: String
+    let stopId: Int
+}
+
+private struct MetraTargetKey: Hashable {
+    let routeId: String
+    let stationId: String
 }
