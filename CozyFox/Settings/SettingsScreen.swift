@@ -249,6 +249,7 @@ struct SettingsScreen: View {
                 model.walkingStore.clearWalkSpeedEstimate()
                 model.walkingStore.clearCycleSpeedEstimate()
                 model.bikeRouteStore.clearAll()
+                model.suggestionSuppression.clearAll()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
