@@ -58,7 +58,11 @@ struct SmallDashboardView: View {
                     now: entry.date,
                     complications: displayedArrivals.prefix(8).map {
                         assessments[$0.id]?.headwayComplication
-                    }
+                    },
+                    urgencies: trainUrgencies(
+                        arrivals: displayedArrivals.prefix(8),
+                        stationId: arrival.stationId
+                    )
                 )
             }
             .padding(ChicagoSpacing.sm)
@@ -176,5 +180,29 @@ struct SmallDashboardView: View {
 
     private var displayedMetraGroup: MetraDepartureGroup? {
         MetraDepartureGrouper.groups(from: displayedMetraPredictions, limitPerGroup: 3).first
+    }
+
+    /// Per-arrival urgency for the headway dot strip's color encoding.
+    /// Pulls the walking duration for the displayed station from the
+    /// shared App Group walking cache. Returns `[]` when no fresh
+    /// walking distance is cached for this station, which falls back
+    /// to the strip's neutral rendering.
+    private func trainUrgencies(
+        arrivals: ArraySlice<Arrival>,
+        stationId: Int
+    ) -> [DepartureUrgency.Bucket?] {
+        let distances = SharedWalkingDistances.load()
+        guard let walkSeconds = SharedWalkingDistances.walkingSeconds(
+            stationId: stationId,
+            from: distances,
+            now: entry.date
+        ) else { return [] }
+        return arrivals.map { arrival in
+            DepartureUrgency.from(
+                arrivalAt: arrival.arrivalAt,
+                walkSeconds: walkSeconds,
+                now: entry.date
+            )?.bucket
+        }
     }
 }

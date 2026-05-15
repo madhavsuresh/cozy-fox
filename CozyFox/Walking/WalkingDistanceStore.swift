@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SwiftyH3
+import TransitCache
 import TransitDomain
 
 struct WalkingDistance: Codable, Equatable, Sendable {
@@ -181,10 +182,38 @@ final class WalkingDistanceStore {
     }
 
     private static func defaultFileURL() -> URL {
+        // Prefer the App Group container so the lock-screen / home-screen
+        // widget process can read the same walking distances when
+        // computing departure-urgency overlays. Falls back to per-app
+        // `Caches/` when the App Group isn't available (e.g. unit
+        // tests without entitlements), preserving the legacy path.
+        if let container = AppGroup.containerURL {
+            return container.appendingPathComponent("walking-distances.json")
+        }
         let caches = FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return caches.appendingPathComponent("walking-distances.json")
+    }
+
+    /// One-shot migration helper: if a legacy
+    /// `Caches/walking-distances.json` exists in this process's
+    /// sandbox but the App Group destination doesn't yet, move it.
+    /// Idempotent — safe to call on every app launch; does nothing
+    /// when there's nothing to migrate or when the destination
+    /// already exists.
+    public static func migrateLegacyCacheIfNeeded() {
+        guard let container = AppGroup.containerURL else { return }
+        let destination = container.appendingPathComponent("walking-distances.json")
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return }
+
+        let caches = FileManager.default
+            .urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let legacy = caches.appendingPathComponent("walking-distances.json")
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return }
+
+        try? FileManager.default.moveItem(at: legacy, to: destination)
     }
 
     /// H3 resolution 10 (~66m hex edge) is the right granularity for
