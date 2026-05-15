@@ -401,7 +401,10 @@ final class RefreshCoordinator {
         for pref in visibleTrainPrefs {
             appendTarget(mapId: pref.mapId, stopId: pref.stopId)
         }
-        if prefs.isModeVisible(.trains), let lastLocation {
+        if prefs.isModeVisible(.trains),
+           prefs.nearbyDiscoveryEnabled,
+           let lastLocation
+        {
             let nearest = corridorResolver.nearbyTrainCandidates(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 radiusMeters: 2_000,
@@ -496,7 +499,10 @@ final class RefreshCoordinator {
         for pref in visibleBusPrefs {
             appendTarget(route: pref.route, stopId: pref.stopId)
         }
-        if prefs.isModeVisible(.buses), let lastLocation {
+        if prefs.isModeVisible(.buses),
+           prefs.nearbyDiscoveryEnabled,
+           let lastLocation
+        {
             // Surface predictions for nearby directional coverage (N/S, E/W,
             // diagonal), not just the closest few routes.
             let nearest = corridorResolver.nearbyBusCandidates(
@@ -580,7 +586,9 @@ final class RefreshCoordinator {
             for pref in visibleMetraPrefs {
                 appendTarget(routeId: pref.routeId, stationId: pref.stationId, directionId: pref.directionId)
             }
-        } else if prefs.isModeVisible(.metra), let lastLocation {
+        } else if prefs.isModeVisible(.metra),
+                  prefs.nearbyDiscoveryEnabled,
+                  let lastLocation {
             let nearest = metraStationResolver.nearestPerRoute(
                 to: (lastLocation.latitude, lastLocation.longitude),
                 limit: 5,

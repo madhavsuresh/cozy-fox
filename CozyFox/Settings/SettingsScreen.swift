@@ -132,8 +132,15 @@ struct SettingsScreen: View {
                         set: { prefs.autoStartLiveActivity = $0; save() }
                        ))
                 .disabled(prefs.alwaysShowLiveActivity)
+                Toggle("Show nearby trains and buses",
+                       isOn: Binding(
+                        get: { prefs.nearbyDiscoveryEnabled },
+                        set: { prefs.nearbyDiscoveryEnabled = $0; save(refresh: true) }
+                       ))
             } header: {
                 Text("Behavior")
+            } footer: {
+                Text("When off, the dashboard only fetches your pinned routes — tap “Show nearby” on the home screen to query nearby trains and buses on demand.")
             }
 
             Section("Tracked trains") {
