@@ -108,6 +108,10 @@ final class AppViewModel {
 
     func bootstrap() async {
         location.bootstrap()
+        // One-shot: walk distances used to live in per-app Caches; the
+        // widget now reads the same file from the App Group container.
+        // Move any existing cache so users don't lose their warm data.
+        WalkingDistanceStore.migrateLegacyCacheIfNeeded()
         let walkingHydration = Task { await walkingStore.hydrateFromDiskIfNeeded() }
         let arrivalBiasHydration = Task { await arrivalBiasStore.hydrateFromDiskIfNeeded() }
         let bikeRouteHydration = Task { await bikeRouteStore.hydrateFromDiskIfNeeded() }
