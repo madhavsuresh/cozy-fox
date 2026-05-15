@@ -214,6 +214,62 @@ struct PleasantSurpriseSuggesterTests {
         #expect(result?.extraMinutes == 2)
     }
 
+    @Test func delightOverridesTimePenalty() {
+        // 22 bus is +2 min (closer to usual), red is +4 min — but
+        // red has delight 0.8, bus has 0. Delight ranking flips
+        // them: red wins.
+        let p = profile(topRoute: (.train, "brown", 50))
+        let red = alt(mode: .train, routeId: "red", minutes: 34)
+        let bus = alt(mode: .bus, routeId: "22", minutes: 32)
+        let result = suggester.suggest(
+            currentContext: .atHome,
+            profile: p,
+            alternatives: [red, bus],
+            usualTripSeconds: 30 * 60,
+            isSuppressed: { _ in false },
+            recentObservationCutoff: Self.now.addingTimeInterval(-14 * 86_400),
+            delightScore: { alt in alt.routeId == "red" ? 0.8 : 0.0 }
+        )
+        #expect(result?.routeId == "red")
+        #expect(result?.delight == 0.8)
+    }
+
+    @Test func equalDelightFallsBackToPenaltyRanking() {
+        // Both alternatives have delight 0.5 — penalty tiebreaker wins.
+        let p = profile(topRoute: (.train, "brown", 50))
+        let red = alt(mode: .train, routeId: "red", minutes: 34)
+        let bus = alt(mode: .bus, routeId: "22", minutes: 32)
+        let result = suggester.suggest(
+            currentContext: .atHome,
+            profile: p,
+            alternatives: [red, bus],
+            usualTripSeconds: 30 * 60,
+            isSuppressed: { _ in false },
+            recentObservationCutoff: Self.now.addingTimeInterval(-14 * 86_400),
+            delightScore: { _ in 0.5 }
+        )
+        #expect(result?.routeId == "22")
+    }
+
+    @Test func defaultDelightZeroPreservesPenaltyRanking() {
+        // Same as picksLowestTimePenaltyFirst — confirms the optional
+        // delight parameter doesn't change pre-delight behavior.
+        let p = profile(topRoute: (.train, "brown", 50))
+        let result = suggester.suggest(
+            currentContext: .atHome,
+            profile: p,
+            alternatives: [
+                alt(mode: .train, routeId: "red", minutes: 34),
+                alt(mode: .bus, routeId: "22", minutes: 32)
+            ],
+            usualTripSeconds: 30 * 60,
+            isSuppressed: { _ in false },
+            recentObservationCutoff: Self.now.addingTimeInterval(-14 * 86_400)
+        )
+        #expect(result?.routeId == "22")
+        #expect(result?.delight == 0.0)
+    }
+
     @Test func proseFormat() {
         let suggestion = PleasantSurpriseSuggester.Suggestion(
             routeKey: "pleasantSurprise:bus:22",
