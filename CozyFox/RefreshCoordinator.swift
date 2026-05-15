@@ -20,6 +20,9 @@ final class RefreshCoordinator {
     /// the grader. In-memory state (the pending-grade table and the
     /// previous-snapshot map) is reset every app launch by construction.
     let arrivalGrader: ArrivalGrader
+    /// Phase 5: stopwatch that pairs region-exit timestamps with Phase 4
+    /// boarding events to feed a per-user MapKit walk-speed correction.
+    let walkSpeedTracker: WalkSpeedTracker
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -68,6 +71,7 @@ final class RefreshCoordinator {
         self.location = location
         self.walkingStore = walkingStore
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
+        self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -144,8 +148,21 @@ final class RefreshCoordinator {
     }
 
     /// Called on region exit (leaving home/work) — auto-start a Live Activity
-    /// for the relevant direction if the user has it enabled.
+    /// for the relevant direction if the user has it enabled. Also marks
+    /// the Phase 5 walk-speed tracker so a later boarding event can be
+    /// timed against this exit.
     func handleRegionExit(direction: CommuteDirection) async {
+        let anchors = preferences.loadCommuteAnchors()
+        let anchor: CommuteAnchors.Anchor? = {
+            switch direction {
+            case .toWork: return anchors.home
+            case .toHome: return anchors.work
+            case .anytime: return nil
+            }
+        }()
+        if let anchor {
+            walkSpeedTracker.recordRegionExit(direction: direction, anchor: anchor, at: .now)
+        }
         let prefs = preferences.loadRoutePreferences()
         guard prefs.autoStartLiveActivity else { return }
         guard let pref = prefs.trains.first(where: {
@@ -195,6 +212,13 @@ final class RefreshCoordinator {
             await arrivalGrader.ingestBoardingEvent(
                 stationId: boarding.stationId,
                 observedAt: boarding.observedAt
+            )
+            // Phase 5: this boarding moment also closes out any pending
+            // walk segment started by a prior region exit, feeding the
+            // per-user walk-speed correction.
+            walkSpeedTracker.recordBoarding(
+                stationId: boarding.stationId,
+                at: boarding.observedAt
             )
         }
         previousMotion = motion
