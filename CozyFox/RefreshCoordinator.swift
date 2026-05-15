@@ -229,11 +229,15 @@ final class RefreshCoordinator {
         // freshly-refreshed snapshot. Pass the per-portfolio
         // recommendations so the LA picks a portfolio's approved
         // option as its source of truth when one exists, falling back
-        // to the single-pin / planned-trip-pin path otherwise.
+        // to the single-pin / planned-trip-pin path otherwise. Also
+        // snapshot the bias cells so the LA can vary dot weight /
+        // opacity per-arrival via `ArrivalConfidenceMarker`.
+        let biasCellsSnapshot = biasStore?.cells ?? [:]
         await LiveActivityCoordinator.shared.ensureRunning(
             snapshot: snapshot,
             prefs: prefs,
-            portfolioRecommendations: latestPortfolioRecommendations
+            portfolioRecommendations: latestPortfolioRecommendations,
+            biasCells: biasCellsSnapshot
         )
 
         WidgetCenter.shared.reloadAllTimelines()

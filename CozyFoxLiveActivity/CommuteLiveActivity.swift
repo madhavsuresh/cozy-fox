@@ -311,6 +311,7 @@ private struct LockScreenView: View {
                     nextArrival: train.nextArrival,
                     followingArrival: train.followingArrival,
                     upcomingArrivals: train.upcomingArrivals,
+                    confidenceMarks: train.confidenceMarks,
                     alert: train.alertHeadline
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -327,6 +328,7 @@ private struct LockScreenView: View {
                     nextArrival: bus.nextArrival,
                     followingArrival: bus.followingArrival,
                     upcomingArrivals: bus.upcomingArrivals,
+                    confidenceMarks: bus.confidenceMarks,
                     alert: bus.alertHeadline
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -341,6 +343,7 @@ private struct LockScreenView: View {
                 nextArrival: train.nextArrival,
                 followingArrival: train.followingArrival,
                 upcomingArrivals: train.upcomingArrivals,
+                confidenceMarks: train.confidenceMarks,
                 alert: train.alertHeadline
             )
         } else if let bus = state.bus {
@@ -352,6 +355,7 @@ private struct LockScreenView: View {
                 nextArrival: bus.nextArrival,
                 followingArrival: bus.followingArrival,
                 upcomingArrivals: bus.upcomingArrivals,
+                confidenceMarks: bus.confidenceMarks,
                 alert: bus.alertHeadline
             )
         }
@@ -367,6 +371,7 @@ private struct LegRow: View {
     let nextArrival: Date
     let followingArrival: Date?
     let upcomingArrivals: [Date]
+    let confidenceMarks: [ArrivalConfidenceMark]
     let alert: String?
 
     var body: some View {
@@ -412,6 +417,7 @@ private struct LegRow: View {
                         arrivals: dotStripArrivals,
                         accent: accentColor,
                         now: timeline.date,
+                        confidenceTones: confidenceTones,
                         style: .onDark
                     )
                     .padding(.leading, 4 + ChicagoSpacing.sm)  // align with the text column
@@ -425,6 +431,16 @@ private struct LegRow: View {
     private var dotStripArrivals: [Date] {
         if !upcomingArrivals.isEmpty { return upcomingArrivals }
         return [nextArrival, followingArrival].compactMap { $0 }
+    }
+
+    /// Tones aligned to `dotStripArrivals` by index. Empty array (or any
+    /// trailing nils when the leg has more arrivals than marks) leaves
+    /// the dot strip at its baseline opacity.
+    private var confidenceTones: [ArrivalConfidenceMark.Tone?] {
+        guard !confidenceMarks.isEmpty else { return [] }
+        return dotStripArrivals.map { date in
+            confidenceMarks.first { $0.arrivalAt == date }?.tone
+        }
     }
 }
 
@@ -440,6 +456,7 @@ private struct LegColumn: View {
     let nextArrival: Date
     let followingArrival: Date?
     let upcomingArrivals: [Date]
+    let confidenceMarks: [ArrivalConfidenceMark]
     let alert: String?
 
     var body: some View {
@@ -466,6 +483,7 @@ private struct LegColumn: View {
                             arrivals: dotStripArrivals,
                             accent: accentColor,
                             now: timeline.date,
+                            confidenceTones: confidenceTones,
                             style: .onDark
                         )
                     }
@@ -484,5 +502,12 @@ private struct LegColumn: View {
     private var dotStripArrivals: [Date] {
         if !upcomingArrivals.isEmpty { return upcomingArrivals }
         return [nextArrival, followingArrival].compactMap { $0 }
+    }
+
+    private var confidenceTones: [ArrivalConfidenceMark.Tone?] {
+        guard !confidenceMarks.isEmpty else { return [] }
+        return dotStripArrivals.map { date in
+            confidenceMarks.first { $0.arrivalAt == date }?.tone
+        }
     }
 }
