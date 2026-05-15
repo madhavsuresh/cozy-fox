@@ -71,9 +71,15 @@ actor LiveActivityCoordinator {
             trainId = ([tripPin.id.uuidString] + pieces).joined(separator: "|")
         } else if prefs.pinnedLine != nil {
             // Use mapId + destination if we know them, else just "<line>"
+            // For the Live Activity's stable identity string, fold a
+            // multi-destination pin into a single canonical token
+            // (sorted + joined) so the same set always produces the
+            // same id regardless of selection order.
+            let destinationsToken = prefs.pinnedTrainDestinations
+                .map { $0.sorted().joined(separator: ",") }
             let parts: [String] = [
                 prefs.pinnedStationId.map { "\($0)" },
-                prefs.pinnedTrainDestination,
+                destinationsToken,
                 prefs.pinnedLine?.rawValue
             ].compactMap { $0 }
             trainId = parts.joined(separator: "-")
@@ -130,8 +136,8 @@ actor LiveActivityCoordinator {
         if let stationId = prefs.pinnedStationId {
             arrivals = arrivals.filter { $0.stationId == stationId }
         }
-        if let destination = prefs.pinnedTrainDestination {
-            arrivals = arrivals.filter { $0.destinationName == destination }
+        if let destinations = prefs.pinnedTrainDestinations {
+            arrivals = arrivals.filter { destinations.contains($0.destinationName) }
         }
         // Drop already-departed predictions so the published `nextArrival`
         // and `upcomingArrivals` are all in the future — keeps the Live

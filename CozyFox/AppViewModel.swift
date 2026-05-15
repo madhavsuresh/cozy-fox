@@ -375,7 +375,12 @@ final class AppViewModel {
             record(
                 line: prefs.pinnedLine,
                 stationId: prefs.pinnedStationId,
-                trainDestination: prefs.pinnedTrainDestination,
+                // For mobility-profile recording purposes, treat the
+                // multi-destination pin as the first destination —
+                // the observation is a heuristic, not a precise
+                // ledger; recording one canonical choice keeps
+                // downstream pattern aggregation stable.
+                trainDestination: prefs.pinnedTrainDestinations?.first,
                 busRoute: prefs.pinnedBusRoute,
                 busDirection: prefs.pinnedBusDirection,
                 metraRoute: prefs.pinnedMetraRoute,

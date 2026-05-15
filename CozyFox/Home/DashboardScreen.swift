@@ -11,7 +11,7 @@ struct DashboardScreen: View {
     @Environment(AppViewModel.self) private var model
     @State private var pinnedLine: LineColor?
     @State private var pinnedStationId: Int?
-    @State private var pinnedTrainDestination: String?
+    @State private var pinnedTrainDestinations: [String]?
     @State private var pinnedBusRoute: String?
     @State private var pinnedBusDirection: String?
     @State private var pinnedBusStopId: Int?
@@ -177,7 +177,7 @@ struct DashboardScreen: View {
         routePreferences = prefs
         pinnedLine = prefs.pinnedLine
         pinnedStationId = prefs.pinnedStationId
-        pinnedTrainDestination = prefs.pinnedTrainDestination
+        pinnedTrainDestinations = prefs.pinnedTrainDestinations
         pinnedBusRoute = prefs.pinnedBusRoute
         pinnedBusDirection = prefs.pinnedBusDirection
         pinnedBusStopId = prefs.pinnedBusStopId
@@ -441,7 +441,7 @@ struct DashboardScreen: View {
                 if let line = LineColor(rawValue: suggestion.routeId) {
                     prefs.pinnedLine = line
                     prefs.pinnedStationId = nil
-                    prefs.pinnedTrainDestination = nil
+                    prefs.pinnedTrainDestinations = nil
                 }
             case .bus:
                 prefs.pinnedBusRoute = suggestion.routeId
@@ -2440,7 +2440,8 @@ struct DashboardScreen: View {
                     }
                     if hasWalkingData || allowHaversineFallback {
                         if let chosen = stations.first(where: { $0.station.id == chosenId }) {
-                            let destinationChoices = trainDestinationChoices(at: chosen.station, line: line)
+                            let destinationChoices = trainDestinationGroups(at: chosen.station, line: line)
+                                .flatMap(\.destinations)
                             Group {
                                 arrivalsHeadline(at: chosen.station, line: line)
                                 directionPickerForTrain(at: chosen.station, line: line)
@@ -2627,19 +2628,29 @@ struct DashboardScreen: View {
 
     @ViewBuilder
     private func directionPickerForTrain(at station: LStation, line: LineColor) -> some View {
-        let destinations = trainDestinationChoices(at: station, line: line)
-        if destinations.count > 1 {
+        let groups = trainDestinationGroups(at: station, line: line)
+        // Always show the picker when there's more than one destination
+        // anywhere at the station, even if those destinations sit in the
+        // same direction group. The multi-select grouping IS the feature:
+        // the user can keep Forest Park + UIC-Halsted both lit, or drop
+        // one.
+        let allDestinations = groups.flatMap(\.destinations)
+        if allDestinations.count > 1 {
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 sectionLabel("Pick a direction")
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: ChicagoSpacing.xs) {
-                        ForEach(destinations, id: \.self) { dest in
-                            DirectionChip(
-                                label: "→ \(dest)",
-                                isSelected: pinnedTrainDestination == dest,
-                                accent: line.swiftUIColor,
-                                action: { togglePinnedTrainDestination(dest) }
-                            )
+                    HStack(spacing: ChicagoSpacing.md) {
+                        ForEach(groups, id: \.directionCode) { group in
+                            HStack(spacing: ChicagoSpacing.xs) {
+                                ForEach(group.destinations, id: \.self) { dest in
+                                    DirectionChip(
+                                        label: "→ \(dest)",
+                                        isSelected: isPinnedDestinationSelected(dest),
+                                        accent: line.swiftUIColor,
+                                        action: { togglePinnedTrainDestination(dest) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -2647,17 +2658,51 @@ struct DashboardScreen: View {
         }
     }
 
-    private func trainDestinationChoices(at station: LStation, line: LineColor) -> [String] {
-        Dictionary(
-            grouping: model.snapshot.trainArrivals
-                .filter { $0.line == line && $0.stationId == station.id },
-            by: \.destinationName
-        )
-        .sorted {
-            ($0.value.map(\.arrivalAt).min() ?? .distantFuture)
-                < ($1.value.map(\.arrivalAt).min() ?? .distantFuture)
+    /// Destinations bucketed by `Arrival.directionCode` — the natural
+    /// "same physical direction" key. CTA gives Forest Park and
+    /// UIC-Halsted the same directionCode because they share the
+    /// southwest branch of the Blue Line; Howard and 95th/Dan Ryan get
+    /// different codes because they're physically opposite directions
+    /// on the Red Line. The UI renders chips inside a group side-by-side
+    /// with breathing room between groups so the visual structure
+    /// matches the physical structure.
+    private func trainDestinationGroups(
+        at station: LStation,
+        line: LineColor
+    ) -> [(directionCode: String, destinations: [String])] {
+        let arrivalsAtStation = model.snapshot.trainArrivals
+            .filter { $0.line == line && $0.stationId == station.id }
+        // Build directionCode → ordered unique destinations, where the
+        // order within a group reflects soonest-next-arrival (so the
+        // most relevant destination in each direction sorts left).
+        var groups: [(code: String, soonest: Date, destinations: [String])] = []
+        let byCode = Dictionary(grouping: arrivalsAtStation, by: \.directionCode)
+        for (code, arrivalsInCode) in byCode {
+            let destinationsByName = Dictionary(grouping: arrivalsInCode, by: \.destinationName)
+            let destinations = destinationsByName
+                .sorted { lhs, rhs in
+                    let l = lhs.value.map(\.arrivalAt).min() ?? .distantFuture
+                    let r = rhs.value.map(\.arrivalAt).min() ?? .distantFuture
+                    return l < r
+                }
+                .map(\.key)
+            let soonest = arrivalsInCode.map(\.arrivalAt).min() ?? .distantFuture
+            groups.append((code: code, soonest: soonest, destinations: destinations))
         }
-        .map(\.key)
+        // Order the groups by soonest arrival in each — the direction
+        // with imminent service sorts first.
+        return groups
+            .sorted { $0.soonest < $1.soonest }
+            .map { (directionCode: $0.code, destinations: $0.destinations) }
+    }
+
+    /// Selection state for a destination chip. `pinnedTrainDestinations`
+    /// nil ⇒ no filter applied ⇒ ALL destinations are visually
+    /// "unselected" (the strip shows everything, but the chips
+    /// themselves are outlined). Non-nil ⇒ `contains` test.
+    private func isPinnedDestinationSelected(_ destination: String) -> Bool {
+        guard let set = pinnedTrainDestinations else { return false }
+        return set.contains(destination)
     }
 
     private func trainDirectionDefaultTaskKey(
@@ -2668,7 +2713,7 @@ struct DashboardScreen: View {
         [
             line.rawValue,
             String(stationId),
-            pinnedTrainDestination ?? "none",
+            pinnedTrainDestinations?.sorted().joined(separator: "+") ?? "none",
             destinations.joined(separator: "|")
         ].joined(separator: ":")
     }
@@ -2680,17 +2725,38 @@ struct DashboardScreen: View {
     ) {
         guard pinSource == .manual,
               pinnedLine == line,
-              pinnedTrainDestination == nil,
+              pinnedTrainDestinations == nil,
               availableDestinations.count > 1,
-              let destination = defaultTrainDestination(
+              let primary = defaultTrainDestination(
                   line: line,
                   availableDestinations: availableDestinations
               )
         else { return }
 
-        pinnedTrainDestination = destination
+        // Default: pre-select every destination that shares the
+        // primary destination's directionCode. So if the resolver
+        // picks "Forest Park" as the user's commute-bound choice
+        // and UIC-Halsted shares the same direction, both light up
+        // by default. The user can deselect either to narrow.
+        let stationId = pinnedStationId
+        let destinations: [String] = {
+            guard let stationId else { return [primary] }
+            let arrivalsAtStation = model.snapshot.trainArrivals
+                .filter { $0.line == line && $0.stationId == stationId }
+            guard let primaryArrival = arrivalsAtStation.first(where: {
+                $0.destinationName == primary
+            }) else { return [primary] }
+            let sameDirection = arrivalsAtStation
+                .filter { $0.directionCode == primaryArrival.directionCode }
+                .map(\.destinationName)
+            // De-dupe preserving deterministic order.
+            var seen: Set<String> = []
+            return sameDirection.filter { seen.insert($0).inserted }
+        }()
+
+        pinnedTrainDestinations = destinations
         model.saveManualRoutePreferences {
-            $0.pinnedTrainDestination = destination
+            $0.pinnedTrainDestinations = destinations
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
@@ -2722,7 +2788,7 @@ struct DashboardScreen: View {
                 .first?
                 .station
         else { return [] }
-        return trainDestinationChoices(at: station, line: line)
+        return trainDestinationGroups(at: station, line: line).flatMap(\.destinations)
     }
 
 
@@ -2736,8 +2802,8 @@ struct DashboardScreen: View {
             let base = model.snapshot.trainArrivals
                 .filter { $0.line == line && $0.stationId == station.id }
                 .sorted { $0.arrivalAt < $1.arrivalAt }
-            if let pinned = pinnedTrainDestination {
-                return base.filter { $0.destinationName == pinned }
+            if let pinned = pinnedTrainDestinations {
+                return base.filter { pinned.contains($0.destinationName) }
             }
             return base
         }()
@@ -2835,21 +2901,25 @@ struct DashboardScreen: View {
         } ?? nil
         pinnedLine = newValue
         pinnedStationId = nil
-        pinnedTrainDestination = defaultDestination
+        // Defer to applyDefaultPinnedTrainDestinationIfNeeded once the
+        // station is set — that's the only point where we know which
+        // direction code to default into. Until then, leave it nil.
+        let defaultDestinations: [String]? = defaultDestination.map { [$0] }
+        pinnedTrainDestinations = defaultDestinations
         model.saveManualRoutePreferences {
             $0.pinnedLine = newValue
             $0.pinnedStationId = nil
-            $0.pinnedTrainDestination = defaultDestination
+            $0.pinnedTrainDestinations = defaultDestinations
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
 
     private func setPinnedStation(_ id: Int) {
         pinnedStationId = id
-        pinnedTrainDestination = nil
+        pinnedTrainDestinations = nil
         model.saveManualRoutePreferences {
             $0.pinnedStationId = id
-            $0.pinnedTrainDestination = nil
+            $0.pinnedTrainDestinations = nil
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
@@ -2863,7 +2933,7 @@ struct DashboardScreen: View {
         let stationArrivals = model.snapshot.trainArrivals
             .filter { $0.line == line && $0.stationId == station.id }
         let pinnedArrival = stationArrivals
-            .filter { pinnedTrainDestination == nil || $0.destinationName == pinnedTrainDestination }
+            .filter { pinnedTrainDestinations?.contains($0.destinationName) ?? true }
             .min(by: { $0.arrivalAt < $1.arrivalAt })
         let arrivingDestinations = Set(stationArrivals.map(\.destinationName))
 
@@ -2878,7 +2948,7 @@ struct DashboardScreen: View {
                 .filter { $0.mode == .train && $0.route == line.rawValue }
                 .filter { vehicle in
                     let constraint: Set<String> = {
-                        if let pinned = pinnedTrainDestination { return [pinned] }
+                        if let pinned = pinnedTrainDestinations { return Set(pinned) }
                         return arrivingDestinations
                     }()
                     guard !constraint.isEmpty else { return true }
@@ -2999,11 +3069,30 @@ struct DashboardScreen: View {
         return sorted
     }
 
+    /// Toggle a single destination in the pinned-destinations set.
+    /// Three transitions:
+    /// - nil (show-all) → tapping a chip starts a new explicit
+    ///   filter set containing just that destination.
+    /// - non-nil, chip not in set → add it.
+    /// - non-nil, chip already in set → remove it. If the set
+    ///   becomes empty, drop back to nil so the dashboard's filter
+    ///   reverts to "show all" rather than "show nothing."
     private func togglePinnedTrainDestination(_ destination: String) {
-        let newValue: String? = (pinnedTrainDestination == destination) ? nil : destination
-        pinnedTrainDestination = newValue
+        var newValue: [String]?
+        if var current = pinnedTrainDestinations {
+            if current.contains(destination) {
+                current.removeAll(where: { $0 == destination })
+                newValue = current.isEmpty ? nil : current
+            } else {
+                current.append(destination)
+                newValue = current
+            }
+        } else {
+            newValue = [destination]
+        }
+        pinnedTrainDestinations = newValue
         model.saveManualRoutePreferences {
-            $0.pinnedTrainDestination = newValue
+            $0.pinnedTrainDestinations = newValue
         }
         Task { await model.refreshIfNeeded(force: true) }
     }

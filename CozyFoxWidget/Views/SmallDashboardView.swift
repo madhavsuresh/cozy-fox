@@ -134,9 +134,9 @@ struct SmallDashboardView: View {
                     entry.preferences.pinnedStationId == nil
                         || $0.stationId == entry.preferences.pinnedStationId
                 }
-                .filter {
-                    entry.preferences.pinnedTrainDestination == nil
-                        || $0.destinationName == entry.preferences.pinnedTrainDestination
+                .filter { arrival in
+                    entry.preferences.pinnedTrainDestinations?
+                        .contains(arrival.destinationName) ?? true
                 }
         }
         guard entry.preferences.isModeVisible(.trains),

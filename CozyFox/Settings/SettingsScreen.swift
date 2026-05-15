@@ -540,7 +540,7 @@ struct SettingsScreen: View {
         if !enabled, prefs.pinSource == .automatic {
             prefs.pinnedLine = nil
             prefs.pinnedStationId = nil
-            prefs.pinnedTrainDestination = nil
+            prefs.pinnedTrainDestinations = nil
             prefs.pinnedBusRoute = nil
             prefs.pinnedBusDirection = nil
             prefs.pinnedBusStopId = nil
