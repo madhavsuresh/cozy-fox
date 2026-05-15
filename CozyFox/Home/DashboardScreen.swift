@@ -2815,20 +2815,41 @@ struct DashboardScreen: View {
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         } else {
-            let grouped = Dictionary(grouping: arrivals, by: \.destinationName)
+            // Collapse arrivals into one headline per direction-of-travel.
+            // CTA gives Forest Park and UIC-Halsted the same
+            // `directionCode` because they share the Blue Line's
+            // southwest branch — when the user has both selected (the
+            // default), the dashboard shows ONE headline for the
+            // group with a combined next-arrival number, a single
+            // bias-corrected dot strip, and the destination label
+            // listing both names ("→ Forest Park / UIC-Halsted"). If
+            // they've narrowed to one, the label degrades cleanly to
+            // just that destination.
+            let grouped = Dictionary(grouping: arrivals, by: \.directionCode)
                 .sorted { ($0.value.first?.arrivalAt ?? .distantFuture)
                           < ($1.value.first?.arrivalAt ?? .distantFuture) }
             VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
-                ForEach(grouped, id: \.key) { dest, times in
-                    let first = times.first!
+                ForEach(grouped, id: \.key) { _, times in
+                    let sortedTimes = times.sorted(by: { $0.arrivalAt < $1.arrivalAt })
+                    let first = sortedTimes.first!
                     let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
-                    let assessments = ghostAssessments(for: times)
+                    let assessments = ghostAssessments(for: sortedTimes)
                     let firstAssessment = assessments[first.id]
                     let isGhostLikely = firstAssessment?.isGhostLikely == true
-                    let biasCorrection = headlineBiasCorrection(for: times)
-                    let bunching = bunchingHint(for: times)
+                    let biasCorrection = headlineBiasCorrection(for: sortedTimes)
+                    let bunching = bunchingHint(for: sortedTimes)
+                    // Destination label: every unique destination in
+                    // this direction, ordered by soonest arrival, joined
+                    // with " / ".
+                    let destinationsInOrder: [String] = {
+                        var seen: Set<String> = []
+                        return sortedTimes.map(\.destinationName).filter {
+                            seen.insert($0).inserted
+                        }
+                    }()
+                    let destinationLabel = destinationsInOrder.joined(separator: " / ")
                     VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                        Text("→ \(dest)")
+                        Text("→ \(destinationLabel)")
                             .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                             .foregroundStyle(ChicagoPalette.bahama)
                         HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
@@ -2837,7 +2858,7 @@ struct DashboardScreen: View {
                                 unit: "min",
                                 size: .lg,
                                 tone: first.isDelayed || isGhostLikely ? .alert : .primary,
-                                accessibilityLabel: "\(minutes) minutes to next \(dest) train"
+                                accessibilityLabel: "\(minutes) minutes to next \(destinationLabel) train"
                             )
                             if first.isDelayed || isGhostLikely {
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -2860,18 +2881,18 @@ struct DashboardScreen: View {
                                 .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                                 .foregroundStyle(ChicagoPalette.Gray.medium)
                                 .lineLimit(1)
-                                .accessibilityLabel("Another \(dest) train in \(bunching.minutes) minutes")
+                                .accessibilityLabel("Another \(destinationLabel) train in \(bunching.minutes) minutes")
                         }
                         HeadwayDotStrip(
-                            arrivals: times.prefix(8).map(\.arrivalAt),
+                            arrivals: sortedTimes.prefix(8).map(\.arrivalAt),
                             accent: line.swiftUIColor,
                             complications: ghostComplications(
-                                for: times.prefix(8),
+                                for: sortedTimes.prefix(8),
                                 assessments: assessments
                             ),
                             urgencies: departureUrgencies(
                                 forStationId: first.stationId,
-                                arrivals: times.prefix(8)
+                                arrivals: sortedTimes.prefix(8)
                             )
                         )
                     }
@@ -4092,14 +4113,20 @@ struct DashboardScreen: View {
     }
 
     private func trainDirectionGroups(from arrivals: [Arrival]) -> [NearbyTrainDirectionGroup] {
-        Dictionary(grouping: arrivals, by: \.destinationName)
-            .map { destination, grouped in
-                NearbyTrainDirectionGroup(
-                    destinationName: destination,
-                    arrivals: grouped
-                        .sorted { $0.arrivalAt < $1.arrivalAt }
-                        .prefix(2)
-                        .map(\.arrivalAt)
+        Dictionary(grouping: arrivals, by: \.directionCode)
+            .map { _, grouped -> NearbyTrainDirectionGroup in
+                let sortedArrivals = grouped.sorted { $0.arrivalAt < $1.arrivalAt }
+                // Join the unique destinations in this direction (in
+                // order-of-soonest-arrival) so the discovery surface
+                // reads "→ Forest Park / UIC-Halsted" as one row.
+                var seen: Set<String> = []
+                let destinationLabel = sortedArrivals
+                    .map(\.destinationName)
+                    .filter { seen.insert($0).inserted }
+                    .joined(separator: " / ")
+                return NearbyTrainDirectionGroup(
+                    destinationName: destinationLabel,
+                    arrivals: sortedArrivals.prefix(2).map(\.arrivalAt)
                 )
             }
             .sorted { lhs, rhs in
@@ -5249,6 +5276,8 @@ private struct TrainCorridorEntry: Identifiable {
 }
 
 private struct NearbyTrainDirectionGroup: Identifiable, Hashable {
+    /// Destinations sharing the same `Arrival.directionCode`, joined
+    /// with " / " for display. E.g. "Forest Park / UIC-Halsted".
     let destinationName: String
     let arrivals: [Date]
 
