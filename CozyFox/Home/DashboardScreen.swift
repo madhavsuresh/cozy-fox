@@ -118,6 +118,8 @@ struct DashboardScreen: View {
                         }
                         if shouldShowDiscovery {
                             nearYouSection
+                        } else if canOfferNearbyDiscovery {
+                            showNearbyButton
                         }
                     }
                     .padding(ChicagoSpacing.md)
@@ -213,6 +215,17 @@ struct DashboardScreen: View {
     }
 
     private var shouldShowDiscovery: Bool {
+        guard routePreferences.nearbyDiscoveryEnabled else { return false }
+        return routePreferences.isModeVisible(.trains)
+            || routePreferences.isModeVisible(.buses)
+            || routePreferences.isModeVisible(.metra)
+    }
+
+    /// `true` when at least one transit mode is visible — i.e. nearby
+    /// discovery would have something to show if the user enabled it.
+    /// Used to hide the inline "Show nearby" button entirely when all
+    /// modes are off (no point offering it).
+    private var canOfferNearbyDiscovery: Bool {
         routePreferences.isModeVisible(.trains)
             || routePreferences.isModeVisible(.buses)
             || routePreferences.isModeVisible(.metra)
@@ -3891,6 +3904,41 @@ struct DashboardScreen: View {
 
     // MARK: - Near You (deduped by line / by route) — small multiples
 
+    /// Inline affordance shown in place of the nearby discovery
+    /// section when the user has it disabled. Tapping flips the
+    /// preference on, which makes the refresh path start fetching
+    /// nearby routes and the dashboard reveals the full section on
+    /// the next render. The button is small and unobtrusive — the
+    /// nearby surface is opt-in to save background work.
+    private var showNearbyButton: some View {
+        Button {
+            setNearbyDiscoveryEnabled(true)
+        } label: {
+            HStack(spacing: ChicagoSpacing.xs) {
+                Image(systemName: "location.magnifyingglass")
+                Text("Show nearby trains and buses")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+            }
+            .padding(.horizontal, ChicagoSpacing.md)
+            .padding(.vertical, ChicagoSpacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .tint(ChicagoPalette.flagBlue)
+        .accessibilityLabel("Show nearby trains and buses")
+        .accessibilityHint("Reveals the discovery section and starts fetching nearby routes.")
+    }
+
+    private func setNearbyDiscoveryEnabled(_ enabled: Bool) {
+        var prefs = model.preferences.loadRoutePreferences()
+        guard prefs.nearbyDiscoveryEnabled != enabled else { return }
+        prefs.nearbyDiscoveryEnabled = enabled
+        model.preferences.saveRoutePreferences(prefs)
+        model.pinRevision += 1
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
     private var nearYouSection: some View {
         // Each of `nearbyTrainCorridors` / `nearbyBusCorridors` /
         // `nearbyMetraRoutes` is a non-trivial scan of the bundled catalog
@@ -3921,6 +3969,20 @@ struct DashboardScreen: View {
                     }
                     nearbyBuses(corridors: busCorridors)
                     nearbyMetra(routes: metraRoutes)
+                    // Inline "hide" affordance so the user can collapse
+                    // the section without opening Settings. Tucked at
+                    // the bottom — discoverable when they're done
+                    // exploring, invisible the rest of the time.
+                    Button {
+                        setNearbyDiscoveryEnabled(false)
+                    } label: {
+                        Label("Hide nearby", systemImage: "eye.slash")
+                            .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(ChicagoPalette.Gray.medium)
+                    .accessibilityHint("Collapses the discovery section and stops fetching nearby routes.")
                 }
             }
         }

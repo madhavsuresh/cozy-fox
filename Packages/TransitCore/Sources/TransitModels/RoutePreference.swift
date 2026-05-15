@@ -476,6 +476,14 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// Default off; iOS Low Power Mode overrides to off regardless of
     /// this setting. Tier 2 of Phase 5b; samples persist locally only.
     public var bikeRouteLearningEnabled: Bool
+    /// When enabled, the dashboard shows the "Near you" discovery
+    /// surface AND the refresh path queries nearby trains / buses /
+    /// Metra in addition to the user's pinned routes. Default off so
+    /// new installs (and existing users on first encounter with this
+    /// release) don't pay the discovery-fetch cost until they ask for
+    /// it. Toggleable from Settings or via the inline "Show nearby"
+    /// button on the dashboard.
+    public var nearbyDiscoveryEnabled: Bool
     /// Records whether the current pinned line / bus route came from the user
     /// or the local commute predictor.
     public var pinSource: RoutePinSource
@@ -517,6 +525,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         liveUpdatesEnabled: Bool = true,
         autopinEnabled: Bool = true,
         bikeRouteLearningEnabled: Bool = false,
+        nearbyDiscoveryEnabled: Bool = false,
         pinSource: RoutePinSource = .manual,
         lastManualPinAt: Date? = nil,
         lastAutoPinAt: Date? = nil,
@@ -549,6 +558,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.liveUpdatesEnabled = liveUpdatesEnabled
         self.autopinEnabled = autopinEnabled
         self.bikeRouteLearningEnabled = bikeRouteLearningEnabled
+        self.nearbyDiscoveryEnabled = nearbyDiscoveryEnabled
         self.pinSource = pinSource
         self.lastManualPinAt = lastManualPinAt
         self.lastAutoPinAt = lastAutoPinAt
@@ -605,6 +615,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.liveUpdatesEnabled = (try? c.decode(Bool.self, forKey: .liveUpdatesEnabled)) ?? true
         self.autopinEnabled = (try? c.decode(Bool.self, forKey: .autopinEnabled)) ?? true
         self.bikeRouteLearningEnabled = (try? c.decode(Bool.self, forKey: .bikeRouteLearningEnabled)) ?? false
+        self.nearbyDiscoveryEnabled = (try? c.decode(Bool.self, forKey: .nearbyDiscoveryEnabled)) ?? false
         self.pinSource = (try? c.decode(RoutePinSource.self, forKey: .pinSource)) ?? .manual
         self.lastManualPinAt = try? c.decode(Date.self, forKey: .lastManualPinAt)
         self.lastAutoPinAt = try? c.decode(Date.self, forKey: .lastAutoPinAt)
