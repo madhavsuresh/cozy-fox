@@ -41,6 +41,7 @@ struct DashboardScreen: View {
     @State private var selectedTrainChoiceIds: Set<String> = []
     @State private var selectedBusChoiceIds: Set<String> = []
     @State private var selectedMetraChoiceIds: Set<String> = []
+    @State private var includeDivvyInfoForTripPin: Bool = true
     @FocusState private var isDestinationSearchFocused: Bool
     /// Flipped to `true` 300ms after the pinned-line card mounts (or
     /// re-mounts at a new origin/line) if MapKit hasn't produced any
@@ -51,6 +52,7 @@ struct DashboardScreen: View {
     @State private var allowIntercampusHaversineFallback: Bool = false
 
     private let tripPlanner = TripPlanner()
+    private let tripDivvyResolver = TripDivvyResolver(radiusMeters: 400)
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let corridorResolver = TransitCorridorResolver()
 
@@ -443,6 +445,7 @@ struct DashboardScreen: View {
         selectedTrainChoiceIds = []
         selectedBusChoiceIds = []
         selectedMetraChoiceIds = []
+        includeDivvyInfoForTripPin = true
 
         let origin = PlannerCoordinate(latitude: current.latitude, longitude: current.longitude)
         let destination = PlannerCoordinate(latitude: latitude, longitude: longitude)
@@ -485,6 +488,17 @@ struct DashboardScreen: View {
                     ornament: .icon(systemName: "point.topleft.down.curvedto.point.bottomright.up")) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
                 homeTripPinControls
+
+                Toggle(isOn: $includeDivvyInfoForTripPin) {
+                    Label("Include Divvy", systemImage: "bicycle")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                }
+                .tint(ChicagoPalette.Mode.divvy)
+
+                if includeDivvyInfoForTripPin {
+                    tripDivvyContextRow(destination: selectedTripDestination)
+                }
 
                 Button {
                     pinSelectedHomeTrip()
@@ -646,6 +660,20 @@ struct DashboardScreen: View {
                     .controlSize(.small)
                 }
 
+                Toggle(isOn: Binding(
+                    get: { plannedTripPin?.includeDivvyInfo ?? pin.includeDivvyInfo },
+                    set: { setPlannedTripDivvyInfo($0, for: pin) }
+                )) {
+                    Label("Include Divvy", systemImage: "bicycle")
+                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                }
+                .tint(ChicagoPalette.Mode.divvy)
+
+                if plannedTripPin?.includeDivvyInfo ?? pin.includeDivvyInfo {
+                    tripDivvyContextRow(destination: pin.destination)
+                }
+
                 ForEach(pin.trainLegs, id: \.self) { train in
                     tripTrainRow(train)
                 }
@@ -657,6 +685,45 @@ struct DashboardScreen: View {
                 }
             }
         }
+    }
+
+    private func setPlannedTripDivvyInfo(_ includeDivvyInfo: Bool, for pin: PlannedTripPin) {
+        let updated = (plannedTripPin ?? pin).withIncludeDivvyInfo(includeDivvyInfo)
+        plannedTripPin = updated
+        model.updatePlannedTripPin(updated)
+    }
+
+    private func tripDivvyContextRow(destination: PlannedTripPin.Destination?) -> some View {
+        TripDivvyContextRow(
+            originStations: tripDivvyOriginStationPicks(),
+            freeFloatingBikeCount: routePreferences.includeFreeFloatingBikes
+                ? model.snapshot.tripFreeFloatingBikeCount
+                : nil,
+            destinationDockStations: tripDivvyDestinationDockPicks(destination)
+        )
+    }
+
+    private func tripDivvyOriginStationPicks() -> [TripDivvyStationPick] {
+        guard let origin = model.location.lastKnown else { return [] }
+        return tripDivvyResolver.originStations(
+            near: (origin.latitude, origin.longitude),
+            stations: model.snapshot.bikeStations,
+            limit: 2
+        )
+    }
+
+    private func tripDivvyDestinationDockPicks(
+        _ destination: PlannedTripPin.Destination?
+    ) -> [TripDivvyStationPick] {
+        guard let latitude = destination?.latitude,
+              let longitude = destination?.longitude
+        else { return [] }
+
+        return tripDivvyResolver.destinationDockStations(
+            near: (latitude, longitude),
+            stations: model.snapshot.bikeStations,
+            limit: 2
+        )
     }
 
     private func tripTrainRow(_ train: PlannedTripPin.TrainLeg) -> some View {
@@ -980,6 +1047,7 @@ struct DashboardScreen: View {
             expectedArrivalAt: option.map { Date().addingTimeInterval($0.expectedTravelTime) },
             expectedTravelTime: option?.expectedTravelTime ?? 0,
             allowMultimodal: true,
+            includeDivvyInfo: includeDivvyInfoForTripPin,
             train: trains.first,
             bus: buses.first,
             metra: metras.first,
@@ -5420,6 +5488,144 @@ private enum AccessTimeFormatter {
 
     private static func minuteText(_ minutes: Int) -> String {
         minutes == 1 ? "1 minute" : "\(minutes) minutes"
+    }
+}
+
+// MARK: - Trip Divvy row
+
+private struct TripDivvyContextRow: View {
+    let originStations: [TripDivvyStationPick]
+    let freeFloatingBikeCount: Int?
+    let destinationDockStations: [TripDivvyStationPick]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: ChicagoSpacing.xs) {
+                if originStations.isEmpty {
+                    TripDivvyContextChip(
+                        systemImage: "bicycle",
+                        count: 0,
+                        unit: "e-bikes",
+                        title: "Start",
+                        detail: "none within 400 m",
+                        isMuted: true
+                    )
+                } else {
+                    ForEach(originStations) { pick in
+                        TripDivvyContextChip(
+                            systemImage: "bicycle",
+                            count: pick.station.eBikesAvailable,
+                            unit: pick.station.eBikesAvailable == 1 ? "e-bike" : "e-bikes",
+                            title: pick.station.name,
+                            detail: "\(pick.walkingMinutes) min walk",
+                            isMuted: false
+                        )
+                    }
+                }
+
+                if let freeFloatingBikeCount {
+                    TripDivvyContextChip(
+                        systemImage: "bicycle.circle",
+                        count: freeFloatingBikeCount,
+                        unit: "free",
+                        title: "Nearby",
+                        detail: freeFloatingBikeCount == 1 ? "curb e-bike" : "curb e-bikes",
+                        isMuted: freeFloatingBikeCount == 0
+                    )
+                }
+
+                if destinationDockStations.isEmpty {
+                    TripDivvyContextChip(
+                        systemImage: "parkingsign.circle",
+                        count: 0,
+                        unit: "docks",
+                        title: "Destination",
+                        detail: "none within 400 m",
+                        isMuted: true
+                    )
+                } else {
+                    ForEach(destinationDockStations) { pick in
+                        TripDivvyContextChip(
+                            systemImage: "parkingsign.circle",
+                            count: pick.station.docksAvailable,
+                            unit: pick.station.docksAvailable == 1 ? "dock" : "docks",
+                            title: pick.station.name,
+                            detail: "\(pick.walkingMinutes) min walk",
+                            isMuted: false
+                        )
+                    }
+                }
+            }
+            .padding(.vertical, 1)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct TripDivvyContextChip: View {
+    let systemImage: String
+    let count: Int
+    let unit: String
+    let title: String
+    let detail: String
+    let isMuted: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: ChicagoSpacing.xs) {
+                Image(systemName: systemImage)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(iconColor)
+                Text("\(count)")
+                    .font(ChicagoTypography.displayMD(relativeTo: .title3))
+                    .monospacedDigit()
+                    .foregroundStyle(numberColor)
+                Text(unit)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            Text(title)
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+            Text(detail)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .padding(.horizontal, ChicagoSpacing.sm)
+        .padding(.vertical, ChicagoSpacing.xs)
+        .frame(width: 150, height: 74, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm)
+                .fill(isMuted ? ChicagoPalette.Surface.elevated : ChicagoPalette.Mode.divvy.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.sm)
+                .strokeBorder(borderColor, lineWidth: ChicagoSpacing.Stroke.thin)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(count) \(unit), \(title), \(detail)")
+    }
+
+    private var iconColor: Color {
+        isMuted ? ChicagoPalette.Gray.medium : ChicagoPalette.Mode.divvy
+    }
+
+    private var numberColor: Color {
+        isMuted ? ChicagoPalette.Gray.medium : ChicagoPalette.Gray.darkest
+    }
+
+    private var textColor: Color {
+        isMuted ? ChicagoPalette.Gray.medium : ChicagoPalette.Gray.darkest
+    }
+
+    private var borderColor: Color {
+        isMuted ? ChicagoPalette.Gray.light.opacity(0.34) : ChicagoPalette.Mode.divvy.opacity(0.35)
     }
 }
 

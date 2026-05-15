@@ -14,6 +14,7 @@ public extension ModelContainer {
             CachedEBikeStation.self,
             CachedNearestBike.self,
             CachedNearestFreeBike.self,
+            CachedTripBikeSummary.self,
             CachedAlert.self,
         ])
         let groupURL = AppGroup.containerURL
@@ -38,6 +39,7 @@ public extension ModelContainer {
             CachedEBikeStation.self,
             CachedNearestBike.self,
             CachedNearestFreeBike.self,
+            CachedTripBikeSummary.self,
             CachedAlert.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)

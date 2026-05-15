@@ -32,6 +32,7 @@ final class RefreshCoordinator {
     private let divvyClient: DivvyGBFSClient
 
     private let resolver = NearestBikeResolver()
+    private let tripDivvyResolver = TripDivvyResolver()
     private let stationResolver = NearestStationResolver()
     private let busStopResolver = NearestBusStopResolver()
     private let metraStationResolver = NearestMetraStationResolver()
@@ -665,6 +666,11 @@ final class RefreshCoordinator {
                 await store.replaceNearbyBikePicks([])
                 return
             }
+            let tripFreeFloatingBikeCount = tripDivvyResolver.freeFloatingEBikeCount(
+                near: (origin.latitude, origin.longitude),
+                eBikes: ebikes,
+                includeFreeFloating: includeFreeFloating
+            )
             let picks = resolver.nearby(
                 topStations: 3,
                 topFreeFloating: 3,
@@ -675,7 +681,8 @@ final class RefreshCoordinator {
             )
             await store.replaceNearbyBikePicks(
                 picks.stationPicks,
-                freeFloatingPicks: picks.freeFloatingPicks
+                freeFloatingPicks: picks.freeFloatingPicks,
+                tripFreeFloatingBikeCount: tripFreeFloatingBikeCount
             )
         } catch {
             // leave previous nearest bike in place

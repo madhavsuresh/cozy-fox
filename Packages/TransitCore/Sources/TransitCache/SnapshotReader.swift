@@ -26,6 +26,12 @@ public struct SnapshotReader: Sendable {
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
         let nearestFreeBikes = (try? context.fetch(FetchDescriptor<CachedNearestFreeBike>())) ?? []
+        let tripBikeSummaries = (try? context.fetch(FetchDescriptor<CachedTripBikeSummary>())) ?? []
+        let bikeStationRows = (
+            try? context.fetch(FetchDescriptor<CachedEBikeStation>(
+                sortBy: [SortDescriptor(\.snappedAt, order: .reverse)]
+            ))
+        ) ?? []
 
         let arrivals = trainArrivals.compactMap(\.asModel)
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
@@ -83,6 +89,11 @@ public struct SnapshotReader: Sendable {
             .sorted { $0.rank < $1.rank }
             .map(\.asModel)
 
+        let latestBikeStations = Self.latestStations(from: bikeStationRows)
+        let tripBikeSummary = tripBikeSummaries
+            .sorted { $0.computedAt > $1.computedAt }
+            .first
+
         return TransitSnapshot(
             // 50 / 50 is enough headroom for: 3 nearest stations × ~5 trains
             // each + the pinned-line station + a couple of tracked stations,
@@ -97,14 +108,26 @@ public struct SnapshotReader: Sendable {
             nearestBike: nearbyPicks.first,
             nearbyBikePicks: nearbyPicks,
             nearbyFreeBikePicks: nearbyFreePicks,
+            bikeStations: latestBikeStations,
+            tripFreeFloatingBikeCount: tripBikeSummary?.freeFloatingBikeCount ?? 0,
             activeAlerts: activeAlerts,
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
             metraFetchedAt: metraPredictions.first?.fetchedAt,
             intercampusFetchedAt: intercampusArrivals.first?.fetchedAt,
-            bikesFetchedAt: nearbyPicks.first?.computedAt ?? nearbyFreePicks.first?.computedAt,
+            bikesFetchedAt: nearbyPicks.first?.computedAt
+                ?? nearbyFreePicks.first?.computedAt
+                ?? tripBikeSummary?.computedAt,
             alertsFetchedAt: alerts.first?.fetchedAt
         )
+    }
+
+    private static func latestStations(from rows: [CachedEBikeStation]) -> [BikeStation] {
+        var seen: Set<String> = []
+        return rows.compactMap { row in
+            guard seen.insert(row.stationId).inserted else { return nil }
+            return row.asModel
+        }
     }
 
     private static func decodeBikes(from json: String?) -> [EBike] {

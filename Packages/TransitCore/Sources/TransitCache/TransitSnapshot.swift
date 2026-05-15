@@ -12,6 +12,8 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var nearestBike: NearestBikePick?
     public var nearbyBikePicks: [NearestBikePick]
     public var nearbyFreeBikePicks: [NearestFreeBikePick]
+    public var bikeStations: [BikeStation]
+    public var tripFreeFloatingBikeCount: Int
     public var activeAlerts: [ServiceAlert]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
@@ -29,6 +31,8 @@ public struct TransitSnapshot: Sendable, Hashable {
         nearestBike: NearestBikePick? = nil,
         nearbyBikePicks: [NearestBikePick] = [],
         nearbyFreeBikePicks: [NearestFreeBikePick] = [],
+        bikeStations: [BikeStation] = [],
+        tripFreeFloatingBikeCount: Int = 0,
         activeAlerts: [ServiceAlert] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
@@ -45,6 +49,8 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.nearestBike = nearestBike
         self.nearbyBikePicks = nearbyBikePicks
         self.nearbyFreeBikePicks = nearbyFreeBikePicks
+        self.bikeStations = bikeStations
+        self.tripFreeFloatingBikeCount = tripFreeFloatingBikeCount
         self.activeAlerts = activeAlerts
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt

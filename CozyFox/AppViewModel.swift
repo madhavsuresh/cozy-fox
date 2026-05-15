@@ -221,6 +221,14 @@ final class AppViewModel {
         Task { await refreshIfNeeded(force: true) }
     }
 
+    func updatePlannedTripPin(_ pin: PlannedTripPin) {
+        var prefs = preferences.loadRoutePreferences()
+        guard prefs.plannedTripPin?.id == pin.id else { return }
+        prefs.plannedTripPin = pin
+        preferences.saveRoutePreferences(prefs)
+        pinRevision += 1
+    }
+
     func clearPlannedTripPin() {
         var prefs = preferences.loadRoutePreferences()
         guard prefs.plannedTripPin != nil else { return }

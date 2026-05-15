@@ -269,6 +269,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
     public let expectedArrivalAt: Date?
     public let expectedTravelTime: TimeInterval
     public let allowMultimodal: Bool
+    public let includeDivvyInfo: Bool
     public let trainLegs: [TrainLeg]
     public let busLegs: [BusLeg]
     public let metraLegs: [MetraLeg]
@@ -286,6 +287,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         expectedArrivalAt: Date?,
         expectedTravelTime: TimeInterval,
         allowMultimodal: Bool,
+        includeDivvyInfo: Bool = true,
         train: TrainLeg?,
         bus: BusLeg?,
         metra: MetraLeg? = nil,
@@ -301,6 +303,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.expectedArrivalAt = expectedArrivalAt
         self.expectedTravelTime = expectedTravelTime
         self.allowMultimodal = allowMultimodal
+        self.includeDivvyInfo = includeDivvyInfo
         self.trainLegs = trainLegs ?? train.map { [$0] } ?? []
         self.busLegs = busLegs ?? bus.map { [$0] } ?? []
         self.metraLegs = metraLegs ?? metra.map { [$0] } ?? []
@@ -315,6 +318,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         case expectedArrivalAt
         case expectedTravelTime
         case allowMultimodal
+        case includeDivvyInfo
         case train
         case bus
         case metra
@@ -333,6 +337,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.expectedArrivalAt = try? c.decode(Date.self, forKey: .expectedArrivalAt)
         self.expectedTravelTime = (try? c.decode(TimeInterval.self, forKey: .expectedTravelTime)) ?? 0
         self.allowMultimodal = (try? c.decode(Bool.self, forKey: .allowMultimodal)) ?? true
+        self.includeDivvyInfo = (try? c.decode(Bool.self, forKey: .includeDivvyInfo)) ?? true
 
         let legacyTrain = try? c.decode(TrainLeg.self, forKey: .train)
         let legacyBus = try? c.decode(BusLeg.self, forKey: .bus)
@@ -352,12 +357,33 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         try c.encodeIfPresent(expectedArrivalAt, forKey: .expectedArrivalAt)
         try c.encode(expectedTravelTime, forKey: .expectedTravelTime)
         try c.encode(allowMultimodal, forKey: .allowMultimodal)
+        try c.encode(includeDivvyInfo, forKey: .includeDivvyInfo)
         try c.encodeIfPresent(train, forKey: .train)
         try c.encodeIfPresent(bus, forKey: .bus)
         try c.encodeIfPresent(metra, forKey: .metra)
         try c.encode(trainLegs, forKey: .trainLegs)
         try c.encode(busLegs, forKey: .busLegs)
         try c.encode(metraLegs, forKey: .metraLegs)
+    }
+
+    public func withIncludeDivvyInfo(_ includeDivvyInfo: Bool) -> PlannedTripPin {
+        PlannedTripPin(
+            id: id,
+            destination: destination,
+            title: title,
+            summary: summary,
+            createdAt: createdAt,
+            expectedArrivalAt: expectedArrivalAt,
+            expectedTravelTime: expectedTravelTime,
+            allowMultimodal: allowMultimodal,
+            includeDivvyInfo: includeDivvyInfo,
+            train: train,
+            bus: bus,
+            metra: metra,
+            trainLegs: trainLegs,
+            busLegs: busLegs,
+            metraLegs: metraLegs
+        )
     }
 
     public func isExpired(now: Date = .now) -> Bool {

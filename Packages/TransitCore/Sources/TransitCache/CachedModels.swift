@@ -410,6 +410,19 @@ public final class CachedNearestFreeBike {
 }
 
 @Model
+public final class CachedTripBikeSummary {
+    @Attribute(.unique) public var key: String
+    public var freeFloatingBikeCount: Int
+    public var computedAt: Date
+
+    public init(freeFloatingBikeCount: Int, computedAt: Date) {
+        self.key = "trip-bike-summary"
+        self.freeFloatingBikeCount = freeFloatingBikeCount
+        self.computedAt = computedAt
+    }
+}
+
+@Model
 public final class CachedAlert {
     @Attribute(.unique) public var id: String
     public var headline: String
