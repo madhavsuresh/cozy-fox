@@ -1575,7 +1575,7 @@ struct DashboardScreen: View {
             origin: origin,
             destination: destination
         ))
-        plans.compactMap { plan -> HomeTripOption? in
+        return plans.compactMap { plan -> HomeTripOption? in
             let transitLegs = plan.legs.enumerated().filter { $0.element.mode == .transit }
             guard !transitLegs.isEmpty else { return nil }
 
@@ -1952,7 +1952,7 @@ struct DashboardScreen: View {
                 boardingStation: entry.station,
                 leg: leg
             )
-            HomeTripMetraChoice(
+            return HomeTripMetraChoice(
                 routeId: route,
                 stationId: entry.station.id,
                 stationName: entry.station.name,
