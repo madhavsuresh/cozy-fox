@@ -73,6 +73,11 @@ final class WalkingDistanceStore {
     /// (`confidentRatio` returns nil), callers leave MapKit's number alone.
     private(set) var walkSpeedEstimate: WalkSpeedEstimate = .empty
 
+    /// Phase 5b: same shape for cycling. Independent estimate because
+    /// bike pace ratios don't track walking ratios — terrain, equipment,
+    /// effort all differ. Same confidence gate (`confidentRatio`).
+    private(set) var cycleSpeedEstimate: WalkSpeedEstimate = .empty
+
     @ObservationIgnored
     private var inflight: Set<String> = []
 
@@ -87,6 +92,9 @@ final class WalkingDistanceStore {
 
     @ObservationIgnored
     private var loadedWalkSpeedEstimate: WalkSpeedEstimate?
+
+    @ObservationIgnored
+    private var loadedCycleSpeedEstimate: WalkSpeedEstimate?
 
     @ObservationIgnored
     private var hasLoadedFromDisk = false
@@ -128,6 +136,7 @@ final class WalkingDistanceStore {
         let snapshot = await task.value
         var loaded = snapshot.distances
         loadedWalkSpeedEstimate = snapshot.walkSpeedEstimate
+        loadedCycleSpeedEstimate = snapshot.cycleSpeedEstimate
         guard !hasLoadedFromDisk else { return }
         loadTask = nil
         hasLoadedFromDisk = true
@@ -138,7 +147,9 @@ final class WalkingDistanceStore {
         }
         distances.merge(loaded) { current, _ in current }
         walkSpeedEstimate = loadedWalkSpeedEstimate ?? walkSpeedEstimate
+        cycleSpeedEstimate = loadedCycleSpeedEstimate ?? cycleSpeedEstimate
         loadedWalkSpeedEstimate = nil
+        loadedCycleSpeedEstimate = nil
     }
 
     /// Record a fresh walk-speed observation. Updates the running mean
@@ -148,11 +159,24 @@ final class WalkingDistanceStore {
         persistDebounced()
     }
 
-    /// Reset the per-user correction. Wired into Settings → "Reset
-    /// learning" alongside `ArrivalBiasStore.clearAll()`. Doesn't touch
-    /// the underlying `distances` cache; that's geography, not learning.
+    /// Phase 5b: record a fresh cycling-speed observation. Same shape
+    /// as `recordWalkSpeedSample` against the parallel cycling estimate.
+    func recordCycleSpeedSample(_ sample: WalkSpeedSample) {
+        cycleSpeedEstimate.recordSample(ratio: sample.ratio, at: sample.recordedAt)
+        persistDebounced()
+    }
+
+    /// Reset the per-user walking correction. Wired into Settings →
+    /// "Reset learning". Doesn't touch the underlying `distances` cache;
+    /// that's geography, not learning.
     func clearWalkSpeedEstimate() {
         walkSpeedEstimate = .empty
+        persistDebounced()
+    }
+
+    /// Phase 5b: reset the per-user cycling correction.
+    func clearCycleSpeedEstimate() {
+        cycleSpeedEstimate = .empty
         persistDebounced()
     }
 
@@ -410,6 +434,7 @@ final class WalkingDistanceStore {
     private struct HydratedSnapshot: Sendable {
         let distances: [String: AccessRouteDistances]
         let walkSpeedEstimate: WalkSpeedEstimate?
+        let cycleSpeedEstimate: WalkSpeedEstimate?
     }
 
     private struct Persisted: Codable, Sendable {
@@ -418,6 +443,8 @@ final class WalkingDistanceStore {
         /// Optional so v2 payloads written before Phase 5 still decode
         /// cleanly; absent maps to `WalkSpeedEstimate.empty`.
         let walkSpeedEstimate: WalkSpeedEstimate?
+        /// Optional so pre-Phase-5b payloads still decode cleanly.
+        let cycleSpeedEstimate: WalkSpeedEstimate?
     }
 
     private struct LegacyPersisted: Codable, Sendable {
@@ -427,13 +454,14 @@ final class WalkingDistanceStore {
 
     nonisolated private static func loadPersistedSnapshot(from fileURL: URL) -> HydratedSnapshot {
         guard let data = try? Data(contentsOf: fileURL) else {
-            return HydratedSnapshot(distances: [:], walkSpeedEstimate: nil)
+            return HydratedSnapshot(distances: [:], walkSpeedEstimate: nil, cycleSpeedEstimate: nil)
         }
         if let decoded = try? JSONDecoder().decode(Persisted.self, from: data),
            decoded.version == 2 {
             return HydratedSnapshot(
                 distances: decoded.distances,
-                walkSpeedEstimate: decoded.walkSpeedEstimate
+                walkSpeedEstimate: decoded.walkSpeedEstimate,
+                cycleSpeedEstimate: decoded.cycleSpeedEstimate
             )
         }
         if let legacy = try? JSONDecoder().decode(LegacyPersisted.self, from: data),
@@ -442,10 +470,11 @@ final class WalkingDistanceStore {
                 distances: legacy.distances.mapValues {
                     AccessRouteDistances(walking: $0, cycling: nil)
                 },
-                walkSpeedEstimate: nil
+                walkSpeedEstimate: nil,
+                cycleSpeedEstimate: nil
             )
         }
-        return HydratedSnapshot(distances: [:], walkSpeedEstimate: nil)
+        return HydratedSnapshot(distances: [:], walkSpeedEstimate: nil, cycleSpeedEstimate: nil)
     }
 
     private func persistDebounced() {
@@ -453,7 +482,8 @@ final class WalkingDistanceStore {
         let snapshot = Persisted(
             version: 2,
             distances: distances,
-            walkSpeedEstimate: walkSpeedEstimate == .empty ? nil : walkSpeedEstimate
+            walkSpeedEstimate: walkSpeedEstimate == .empty ? nil : walkSpeedEstimate,
+            cycleSpeedEstimate: cycleSpeedEstimate == .empty ? nil : cycleSpeedEstimate
         )
         let url = fileURL
         persistTask = Task.detached(priority: .utility) {

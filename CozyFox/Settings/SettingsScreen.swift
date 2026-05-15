@@ -231,6 +231,7 @@ struct SettingsScreen: View {
             Button("Reset learning", role: .destructive) {
                 model.arrivalBiasStore.clearAll()
                 model.walkingStore.clearWalkSpeedEstimate()
+                model.walkingStore.clearCycleSpeedEstimate()
             }
             Button("Cancel", role: .cancel) {}
         } message: {

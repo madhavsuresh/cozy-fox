@@ -23,6 +23,9 @@ final class RefreshCoordinator {
     /// Phase 5: stopwatch that pairs region-exit timestamps with Phase 4
     /// boarding events to feed a per-user MapKit walk-speed correction.
     let walkSpeedTracker: WalkSpeedTracker
+    /// Phase 5b: motion-transition stopwatch for cycling. Independent of
+    /// walking because pace ratios don't transfer between modes.
+    let bikeSpeedTracker: BikeSpeedTracker
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -87,6 +90,7 @@ final class RefreshCoordinator {
         self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
+        self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -244,6 +248,26 @@ final class RefreshCoordinator {
                 at: boarding.observedAt
             )
         }
+
+        // Phase 5b: motion-transition pairs for cycling. We pick up the
+        // start at the moment motion enters .cycling and close out when
+        // it leaves. Uses cached `lastKnown` for the endpoints — radius
+        // resolution to a known anchor / station forgives staleness.
+        let cyclingStarted = previousMotion != .cycling && motion == .cycling
+        let cyclingEnded = previousMotion == .cycling && motion != .cycling
+        if cyclingStarted, let loc = location?.lastKnown {
+            bikeSpeedTracker.recordRideStart(
+                at: (lat: loc.latitude, lon: loc.longitude),
+                at: .now,
+                anchors: preferences.loadCommuteAnchors()
+            )
+        } else if cyclingEnded, let loc = location?.lastKnown {
+            bikeSpeedTracker.recordRideEnd(
+                at: (lat: loc.latitude, lon: loc.longitude),
+                at: .now
+            )
+        }
+
         previousMotion = motion
 
         let context = location?.context ?? .unknown
