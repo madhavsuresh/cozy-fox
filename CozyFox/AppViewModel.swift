@@ -22,6 +22,11 @@ final class AppViewModel {
     /// by the dashboard's progress strip. Refreshed each cycle from
     /// `RefreshCoordinator.latestPositions`.
     var vehiclePositions: [VehiclePosition] = []
+    /// In-memory mirror of `RefreshCoordinator.latestBikeInventory`, observed
+    /// by the dashboard's trip-pin Divvy chips. Held here (not in
+    /// `TransitSnapshot`) so the persistent cache never sees the full station
+    /// list.
+    var bikeInventory: BikeInventorySnapshot = .empty
     var isRefreshing: Bool = false
     var activeDetail: DetailDestination?
     var isOnboardingComplete: Bool
@@ -190,6 +195,7 @@ final class AppViewModel {
         vehiclePositions = refreshCoordinator.latestPositions.isEmpty
             ? snapshot.vehiclePositions
             : refreshCoordinator.latestPositions
+        bikeInventory = refreshCoordinator.latestBikeInventory
     }
 
     func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {

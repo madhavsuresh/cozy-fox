@@ -24,7 +24,6 @@ final class RefreshCoordinator {
     private let divvyClient: DivvyGBFSClient
 
     private let resolver = NearestBikeResolver()
-    private let tripDivvyResolver = TripDivvyResolver()
     private let stationResolver = NearestStationResolver()
     private let busStopResolver = NearestBusStopResolver()
     private let metraStationResolver = NearestMetraStationResolver()
@@ -42,6 +41,12 @@ final class RefreshCoordinator {
     /// Refreshed every cycle; exposed so the dashboard can draw a "where's
     /// my train" strip. Empty when no route is pinned.
     private(set) var latestPositions: [VehiclePosition] = []
+
+    /// Latest Divvy GBFS station + free-bike snapshot, held in memory only.
+    /// The dashboard's trip-pin Divvy chips read directly from this — the
+    /// full station list never goes through SwiftData. Empty until the
+    /// first successful `refreshBikes`.
+    private(set) var latestBikeInventory: BikeInventorySnapshot = .empty
 
     init(
         store: TransitStore,
@@ -587,16 +592,16 @@ final class RefreshCoordinator {
             async let bikesTask = divvyClient.fetchEBikes()
             let (stations, ebikes) = try await (stationsTask, bikesTask)
             await store.recordStationSnapshots(stations)
+            latestBikeInventory = BikeInventorySnapshot(
+                stations: stations,
+                eBikes: ebikes,
+                fetchedAt: Date()
+            )
 
             guard let origin else {
                 await store.replaceNearbyBikePicks([])
                 return
             }
-            let tripFreeFloatingBikeCount = tripDivvyResolver.freeFloatingEBikeCount(
-                near: (origin.latitude, origin.longitude),
-                eBikes: ebikes,
-                includeFreeFloating: includeFreeFloating
-            )
             let picks = resolver.nearby(
                 topStations: 3,
                 topFreeFloating: 3,
@@ -607,8 +612,7 @@ final class RefreshCoordinator {
             )
             await store.replaceNearbyBikePicks(
                 picks.stationPicks,
-                freeFloatingPicks: picks.freeFloatingPicks,
-                tripFreeFloatingBikeCount: tripFreeFloatingBikeCount
+                freeFloatingPicks: picks.freeFloatingPicks
             )
         } catch {
             // leave previous nearest bike in place
