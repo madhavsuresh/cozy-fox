@@ -124,18 +124,25 @@ public actor TransitStore {
     /// dashboard reads all rows; the widget / Live Activity reads rank 0.
     public func replaceNearbyBikePicks(
         _ picks: [NearestBikePick],
-        freeFloatingPicks: [NearestFreeBikePick] = []
+        freeFloatingPicks: [NearestFreeBikePick] = [],
+        tripFreeFloatingBikeCount: Int = 0
     ) async {
+        let now = Date()
         await MainActor.run {
             let ctx = ModelContext(container)
             try? ctx.delete(model: CachedNearestBike.self)
             try? ctx.delete(model: CachedNearestFreeBike.self)
+            try? ctx.delete(model: CachedTripBikeSummary.self)
             for (rank, pick) in picks.enumerated() {
                 ctx.insert(CachedNearestBike(pick: pick, rank: rank))
             }
             for (rank, pick) in freeFloatingPicks.enumerated() {
                 ctx.insert(CachedNearestFreeBike(pick: pick, rank: rank))
             }
+            ctx.insert(CachedTripBikeSummary(
+                freeFloatingBikeCount: tripFreeFloatingBikeCount,
+                computedAt: now
+            ))
             try? ctx.save()
         }
     }
