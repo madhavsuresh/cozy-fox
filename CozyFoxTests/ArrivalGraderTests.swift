@@ -283,6 +283,193 @@ struct ArrivalGraderTests {
         #expect(grader.trackedRunCountForTests == 0)
     }
 
+    // MARK: - ingestBoardingEvent (Phase 4)
+
+    @Test func boardingResolvesSinglePendingGradeWithinWindow() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-single"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let predictedArrivalAt = t0.addingTimeInterval(5 * 60)
+        let arrival = makeArrival(
+            predictedAt: t0,
+            arrivalAt: predictedArrivalAt
+        )
+        await grader.ingestArrivals([arrival], now: t0)
+        #expect(grader.pendingCountForTests == 1)
+
+        // Board 90 seconds after the predicted arrival → API was early by 90s.
+        let boardingAt = predictedArrivalAt.addingTimeInterval(90)
+        let resolved = await grader.ingestBoardingEvent(
+            stationId: arrival.stationId,
+            observedAt: boardingAt
+        )
+
+        #expect(resolved == 1)
+        #expect(grader.pendingCountForTests == 0)
+        let cellKey = BiasCellKey.make(
+            line: arrival.line.rawValue,
+            stopId: String(arrival.stopId),
+            direction: arrival.directionCode,
+            at: predictedArrivalAt
+        )
+        let cell = store.snapshot(key: cellKey)
+        #expect(cell?.count == 1)
+        #expect(cell?.mean == 90)
+    }
+
+    @Test func boardingWithNoPendingGradesReturnsZero() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-none"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let resolved = await grader.ingestBoardingEvent(
+            stationId: 40900,
+            observedAt: t0
+        )
+        #expect(resolved == 0)
+    }
+
+    @Test func boardingOutsideWindowDoesNotResolve() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-late"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let predictedArrivalAt = t0.addingTimeInterval(5 * 60)
+        let arrival = makeArrival(
+            predictedAt: t0,
+            arrivalAt: predictedArrivalAt
+        )
+        await grader.ingestArrivals([arrival], now: t0)
+
+        // Board 4 minutes after the predicted arrival → outside the default
+        // ±3-min match window.
+        let boardingAt = predictedArrivalAt.addingTimeInterval(4 * 60)
+        let resolved = await grader.ingestBoardingEvent(
+            stationId: arrival.stationId,
+            observedAt: boardingAt
+        )
+
+        #expect(resolved == 0)
+        // Pending grade should still be there.
+        #expect(grader.pendingCountForTests == 1)
+    }
+
+    @Test func boardingResolvesAllPendingLinesAtSameStation() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-multi"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let predictedArrivalAt = t0.addingTimeInterval(5 * 60)
+        let red = makeArrival(
+            line: .red,
+            runNumber: "401",
+            stopId: 30173,
+            predictedAt: t0,
+            arrivalAt: predictedArrivalAt
+        )
+        let brown = makeArrival(
+            line: .brown,
+            runNumber: "501",
+            stopId: 30174,
+            predictedAt: t0,
+            arrivalAt: predictedArrivalAt
+        )
+        await grader.ingestArrivals([red, brown], now: t0)
+        #expect(grader.pendingCountForTests == 2)
+
+        let boardingAt = predictedArrivalAt.addingTimeInterval(60)
+        let resolved = await grader.ingestBoardingEvent(
+            stationId: red.stationId,  // both arrivals share stationId 40900
+            observedAt: boardingAt
+        )
+
+        // Both pending grades at this station resolve.
+        #expect(resolved == 2)
+        #expect(grader.pendingCountForTests == 0)
+    }
+
+    @Test func boardingAtDifferentStationDoesNotResolve() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-other"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let predictedArrivalAt = t0.addingTimeInterval(5 * 60)
+        let arrival = makeArrival(
+            predictedAt: t0,
+            arrivalAt: predictedArrivalAt
+        )
+        await grader.ingestArrivals([arrival], now: t0)
+
+        // arrival.stationId is 40900 (the makeArrival default).
+        let resolved = await grader.ingestBoardingEvent(
+            stationId: 99999,  // an unrelated station
+            observedAt: predictedArrivalAt.addingTimeInterval(60)
+        )
+
+        #expect(resolved == 0)
+        #expect(grader.pendingCountForTests == 1)
+    }
+
+    @Test func boardingPreventsDoubleWriteFromLaterPositionTransition() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-double"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let predictedArrivalAt = t0.addingTimeInterval(5 * 60)
+        let arrival = makeArrival(
+            predictedAt: t0,
+            arrivalAt: predictedArrivalAt
+        )
+        await grader.ingestArrivals([arrival], now: t0)
+
+        // User boards — resolves the pending grade as a Phase 4 sample.
+        let boardingAt = predictedArrivalAt.addingTimeInterval(60)
+        _ = await grader.ingestBoardingEvent(
+            stationId: arrival.stationId,
+            observedAt: boardingAt
+        )
+        #expect(grader.pendingCountForTests == 0)
+
+        // Now a later position-snapshot transition arrives for the SAME run
+        // at the SAME stop. The pending entry was already removed, so passive
+        // grading must not write a second sample.
+        let firstPosition = makePosition(
+            nextStopId: arrival.stopId,
+            observedAt: boardingAt.addingTimeInterval(30)
+        )
+        await grader.ingestPositions([firstPosition], now: boardingAt.addingTimeInterval(30))
+        let secondPosition = makePosition(
+            nextStopId: arrival.stopId + 1,
+            observedAt: boardingAt.addingTimeInterval(120)
+        )
+        await grader.ingestPositions([secondPosition], now: boardingAt.addingTimeInterval(120))
+
+        // Sample count should still be 1 — only the boarding event wrote.
+        let cellKey = BiasCellKey.make(
+            line: arrival.line.rawValue,
+            stopId: String(arrival.stopId),
+            direction: arrival.directionCode,
+            at: predictedArrivalAt
+        )
+        #expect(store.snapshot(key: cellKey)?.count == 1)
+    }
+
+    @Test func boardingFallsBackToZeroWhenStationMapEmpty() async throws {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-board-empty"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        // No ingestArrivals call → stationIdByStopId is empty. Even if we
+        // hypothetically forged a pending entry (we can't, the map is
+        // private), a boarding event can't resolve anything.
+        let resolved = await grader.ingestBoardingEvent(
+            stationId: 40900,
+            observedAt: t0
+        )
+        #expect(resolved == 0)
+    }
+
     // MARK: - Helpers
 
     static func temporaryFile(name: String) -> URL {

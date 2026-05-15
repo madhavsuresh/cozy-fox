@@ -32,6 +32,15 @@ final class ArrivalGrader {
     /// call. Reset on app launch — Phase 2 is in-memory only.
     private var previousNextStopByRun: [String: Int] = [:]
 
+    /// Map from `Arrival.stopId` (per-platform) to `Arrival.stationId`
+    /// (per-station). Phase 4 boarding events arrive at the station
+    /// granularity (`LStation.id` via `BoardingDetector`), but the
+    /// pending-grade map is keyed by platform-level `stopId`. Each
+    /// `ingestArrivals` call populates this from the `Arrival` payloads
+    /// themselves — `Arrival` carries both fields, so we never need a
+    /// separate `LStationCatalog` index. Reset on app launch.
+    private var stationIdByStopId: [Int: Int] = [:]
+
     /// Wall-clock timestamp of the last snapshot that included each run.
     /// Used to evict stale entries from `previousNextStopByRun` so the
     /// map doesn't grow unbounded over a long-running session.
@@ -74,6 +83,11 @@ final class ArrivalGrader {
 
         for arrival in arrivals {
             guard arrival.arrivalAt.timeIntervalSince(now) >= minLeadTime else { continue }
+            // Cache the platform → station mapping unconditionally, so
+            // Phase 4 boarding events can resolve pending grades by
+            // station even when individual arrivals were skipped by
+            // the lead-time gate.
+            stationIdByStopId[arrival.stopId] = arrival.stationId
             let key = PendingGradeKey(
                 line: arrival.line.rawValue,
                 runNumber: arrival.runNumber,
@@ -161,6 +175,74 @@ final class ArrivalGrader {
         for key in expired {
             pending.removeValue(forKey: key)
         }
+    }
+
+    /// Phase 4: resolve pending grades at a station using the user's
+    /// actual boarding moment as ground truth. Higher-quality than
+    /// `VehiclePosition.nextStopId` transitions for two reasons:
+    ///   1. **Subway / tunnel coverage**: at subway stops the
+    ///      `nextStopId` field can be sparse or missing; passive grading
+    ///      misses those crossings entirely. A user being there closes
+    ///      the loop.
+    ///   2. **Door-open moment**: the boarding event captures when the
+    ///      user could actually board, not when the GTFS-rt feed says
+    ///      the vehicle crossed a sensor — a small but consistent
+    ///      offset.
+    ///
+    /// For each pending grade whose `stopId` maps to `stationId` and
+    /// whose `firstPredictedArrivalAt` falls within `±matchWindow` of
+    /// `observedAt`, this writes a Welford sample with
+    /// `deltaSeconds = observedAt - firstPredictedArrivalAt` (same sign
+    /// convention as passive grading) and removes the entry from
+    /// `pending`. Multiple lines at the same station predicting around
+    /// the same time each get their own sample.
+    ///
+    /// **No double-write**: the entry is removed from `pending` as part
+    /// of this method; a later `nextStopId` transition for the same key
+    /// will find nothing to resolve.
+    ///
+    /// **Sample weight stays equal** to passive samples. Welford running
+    /// stats don't take a per-sample weight; the value here is coverage,
+    /// not weight inflation.
+    ///
+    /// Returns the number of pending grades resolved — useful for tests.
+    @discardableResult
+    func ingestBoardingEvent(
+        stationId: Int,
+        observedAt: Date,
+        matchWindow: TimeInterval = 3 * 60
+    ) async -> Int {
+        if let biasStore { await biasStore.hydrateFromDiskIfNeeded() }
+
+        var matchedKeys: [PendingGradeKey] = []
+        matchedKeys.reserveCapacity(pending.count)
+        for (key, grade) in pending {
+            guard let mappedStationId = stationIdByStopId[grade.stopId] else { continue }
+            guard mappedStationId == stationId else { continue }
+            let delta = abs(observedAt.timeIntervalSince(grade.firstPredictedArrivalAt))
+            guard delta <= matchWindow else { continue }
+            matchedKeys.append(key)
+        }
+
+        for key in matchedKeys {
+            guard let grade = pending[key] else { continue }
+            let cellKey = BiasCellKey.make(
+                line: grade.line,
+                stopId: String(grade.stopId),
+                direction: grade.directionCode,
+                at: grade.firstPredictedArrivalAt,
+                calendar: calendar
+            )
+            let deltaSeconds = observedAt.timeIntervalSince(grade.firstPredictedArrivalAt)
+            biasStore?.recordSample(
+                key: cellKey,
+                deltaSeconds: deltaSeconds,
+                at: observedAt
+            )
+            pending.removeValue(forKey: key)
+        }
+
+        return matchedKeys.count
     }
 
     // MARK: - Test hooks
