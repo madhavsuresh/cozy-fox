@@ -5767,12 +5767,12 @@ private enum DashboardRailDestination: Hashable {
 }
 
 private struct DashboardTripRouteToken: Identifiable, Hashable {
-        enum Kind: Hashable {
-            case train(LineColor)
-            case bus(String)
-            case metra(String)
-            case intercampus(IntercampusDirection)
-        }
+    enum Kind: Hashable {
+        case train(LineColor)
+        case bus(String)
+        case metra(String)
+        case intercampus(IntercampusDirection)
+    }
 
     let kind: Kind
     let summaryLabel: String
