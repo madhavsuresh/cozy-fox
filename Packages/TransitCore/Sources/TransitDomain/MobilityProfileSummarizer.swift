@@ -32,6 +32,10 @@ public struct MobilityProfileSummarizer: Sendable {
             guard let cursor else { return true }
             return observation.recordedAt > cursor
         }
+        let newCommuteLegObservations = profile.commuteLegObservations.filter { observation in
+            guard let cursor else { return true }
+            return observation.recordedAt > cursor
+        }
 
         for observation in newObservations {
             fold(observation: observation, into: &summary)
@@ -39,13 +43,17 @@ public struct MobilityProfileSummarizer: Sendable {
         for observation in newRouteObservations {
             fold(routeObservation: observation, into: &summary)
         }
+        for observation in newCommuteLegObservations {
+            summary.fold(commuteLegObservation: observation)
+        }
 
         // Advance the cursor to the latest observation we consumed, or `now`
         // when there were no new rows so we don't keep re-scanning identical
         // histories on every refresh.
         let latestObservation = newObservations.map(\.recordedAt).max()
         let latestRouteObservation = newRouteObservations.map(\.recordedAt).max()
-        let latest = [latestObservation, latestRouteObservation, cursor]
+        let latestCommuteLegObservation = newCommuteLegObservations.map(\.recordedAt).max()
+        let latest = [latestObservation, latestRouteObservation, latestCommuteLegObservation, cursor]
             .compactMap { $0 }
             .max()
         summary.lastSummarizedAt = max(latest ?? now, now)
