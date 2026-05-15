@@ -19,4 +19,10 @@ public enum UserDefaultsKey {
     public static let lastKnownLocation = "lastKnownLocation"
     public static let mobilityProfile = "mobilityProfile"
     public static let onboardingComplete = "onboardingComplete"
+    /// Wall-clock when `LocationCoordinator.context` first transitioned to
+    /// `.elsewhere` in the current "out" session. Cleared when the user is
+    /// observed back at home or work. Persisted so cold-starts after an
+    /// extended outing know how long the user has been away — important
+    /// for the "head home" suggestion gate.
+    public static let elsewhereSince = "elsewhereSince"
 }

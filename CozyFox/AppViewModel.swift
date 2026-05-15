@@ -50,6 +50,19 @@ final class AppViewModel {
     /// Whether the 30 s ticker should actually run right now.
     var liveUpdatesActive: Bool { liveUpdatesEnabled && !isLowPowerMode }
 
+    /// In-memory suppression for the head-home tile. When non-nil and
+    /// in the future, the tile stays hidden even if
+    /// `HomewardSuggester.shouldSurface` would otherwise pass its gates.
+    /// Reset on app cold-start by design: a 2-hour suppression buys the
+    /// rest of one outing; tomorrow is a fresh chance.
+    var homewardSuppressedUntil: Date?
+
+    /// User dismissed the head-home tile. Pause it for `seconds` so the
+    /// suggester stops firing this session.
+    func suppressHomeward(for seconds: TimeInterval) {
+        homewardSuppressedUntil = Date().addingTimeInterval(seconds)
+    }
+
     /// Foreground refresh ticker — polls CTA every 30 s while the app is
     /// active so the dashboard and Live Activity reflect delays in close to
     /// real time. iOS suspends background `Task.sleep` aggressively, so this

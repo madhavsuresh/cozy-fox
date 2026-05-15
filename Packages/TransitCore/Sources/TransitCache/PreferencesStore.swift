@@ -81,4 +81,21 @@ public struct PreferencesStore: Sendable {
         get { defaults.bool(forKey: UserDefaultsKey.onboardingComplete) }
         nonmutating set { defaults.set(newValue, forKey: UserDefaultsKey.onboardingComplete) }
     }
+
+    /// First moment in the current "out" session — when context flipped
+    /// to `.elsewhere`. Persisted across launches so the head-home tile
+    /// can reason about long outings even after the app is force-quit.
+    public func loadElsewhereSince() -> Date? {
+        let interval = defaults.double(forKey: UserDefaultsKey.elsewhereSince)
+        guard interval > 0 else { return nil }
+        return Date(timeIntervalSinceReferenceDate: interval)
+    }
+
+    public func saveElsewhereSince(_ date: Date?) {
+        if let date {
+            defaults.set(date.timeIntervalSinceReferenceDate, forKey: UserDefaultsKey.elsewhereSince)
+        } else {
+            defaults.removeObject(forKey: UserDefaultsKey.elsewhereSince)
+        }
+    }
 }
