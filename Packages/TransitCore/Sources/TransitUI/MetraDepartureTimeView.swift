@@ -167,6 +167,13 @@ public struct MetraDepartureListView: View {
         var detailFont: Font {
             ChicagoTypography.body(.regular, relativeTo: .caption2)
         }
+
+        var showsTrainNumberByDefault: Bool {
+            switch self {
+            case .compact: false
+            case .regular: true
+            }
+        }
     }
 
     public let predictions: [MetraPrediction]
@@ -179,13 +186,13 @@ public struct MetraDepartureListView: View {
         predictions: [MetraPrediction],
         maxCount: Int = 3,
         density: Density = .regular,
-        showsTrainNumber: Bool = false,
+        showsTrainNumber: Bool? = nil,
         accessibilityPrefix: String = "Metra departures"
     ) {
         self.predictions = predictions
         self.maxCount = maxCount
         self.density = density
-        self.showsTrainNumber = showsTrainNumber
+        self.showsTrainNumber = showsTrainNumber ?? density.showsTrainNumberByDefault
         self.accessibilityPrefix = accessibilityPrefix
     }
 
@@ -220,8 +227,9 @@ public struct MetraDepartureListView: View {
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if showsTrainNumber {
-                    Text("Train \(prediction.trainNumber)")
+                if showsTrainNumber,
+                   let trainNumberText = trainNumberText(for: prediction) {
+                    Text(trainNumberText)
                         .font(density.detailFont)
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
@@ -236,10 +244,18 @@ public struct MetraDepartureListView: View {
 
     private var accessibilityLabel: String {
         let departures = displayed.map { prediction in
-            "\(MetraDepartureFormatter.accessibilityString(prediction.arrivalAt)) to \(MetraDepartureGrouper.displayDestinationName(prediction.destinationName))"
+            let destination = MetraDepartureGrouper.displayDestinationName(prediction.destinationName)
+            let trainNumber = trainNumberText(for: prediction).map { ", \($0)" } ?? ""
+            return "\(MetraDepartureFormatter.accessibilityString(prediction.arrivalAt)) to \(destination)\(trainNumber)"
         }
         .joined(separator: ", ")
         return "\(accessibilityPrefix): \(departures)"
+    }
+
+    private func trainNumberText(for prediction: MetraPrediction) -> String? {
+        let trainNumber = prediction.trainNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trainNumber.isEmpty else { return nil }
+        return "Train \(trainNumber)"
     }
 
     private func timeColor(for prediction: MetraPrediction) -> Color {
