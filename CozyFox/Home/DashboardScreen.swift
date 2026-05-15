@@ -792,12 +792,16 @@ struct DashboardScreen: View {
                 if let badge = GhostTrainBadge(firstAssessment) {
                     badge
                 }
+                let tripTrainUrgencies = train.stationId.map {
+                    departureUrgencies(forStationId: $0, arrivals: arrivals.prefix(8))
+                } ?? []
                 HeadwayDotStrip(arrivals: arrivals.prefix(8).map(\.arrivalAt),
                                 accent: train.line.swiftUIColor,
                                 complications: ghostComplications(
                                     for: arrivals.prefix(8),
                                     assessments: assessments
-                                ))
+                                ),
+                                urgencies: tripTrainUrgencies)
             } else {
                 Text(model.isRefreshing ? "Fetching arrivals…" : "No upcoming arrivals returned yet.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -866,8 +870,12 @@ struct DashboardScreen: View {
                         .lineLimit(1)
                         .accessibilityLabel("Another Route \(bus.route) bus in \(bunching.minutes) minutes")
                 }
+                let tripBusUrgencies = bus.stopId.map {
+                    departureUrgencies(forBusStopId: $0, predictions: predictions.prefix(8))
+                } ?? []
                 HeadwayDotStrip(arrivals: predictions.prefix(8).map(\.arrivalAt),
-                                accent: ChicagoPalette.Mode.bus)
+                                accent: ChicagoPalette.Mode.bus,
+                                urgencies: tripBusUrgencies)
             } else {
                 Text(model.isRefreshing ? "Fetching predictions…" : "No upcoming buses returned yet.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -915,8 +923,12 @@ struct DashboardScreen: View {
                         accessibilityPrefix: "Metra \(group.title.lowercased()) departures"
                     )
                 }
+                let tripMetraUrgencies = metra.stationId.map {
+                    departureUrgencies(forMetraStationId: $0, predictions: group.departures.prefix(8))
+                } ?? []
                 HeadwayDotStrip(arrivals: group.departures.prefix(8).map(\.arrivalAt),
-                                accent: accent)
+                                accent: accent,
+                                urgencies: tripMetraUrgencies)
             } else {
                 Text(model.isRefreshing ? "Fetching Metra trains…" : "No upcoming Metra trains returned yet.")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -2565,6 +2577,10 @@ struct DashboardScreen: View {
                             complications: ghostComplications(
                                 for: times.prefix(8),
                                 assessments: assessments
+                            ),
+                            urgencies: departureUrgencies(
+                                forStationId: first.stationId,
+                                arrivals: times.prefix(8)
                             )
                         )
                     }
@@ -3090,7 +3106,11 @@ struct DashboardScreen: View {
                 }
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),
-                    accent: ChicagoPalette.Mode.bus
+                    accent: ChicagoPalette.Mode.bus,
+                    urgencies: departureUrgencies(
+                        forBusStopId: stop.id,
+                        predictions: predictions.prefix(8)
+                    )
                 )
             }
             busProgressStrip(toStop: stop, route: route)
@@ -3391,7 +3411,11 @@ struct DashboardScreen: View {
                 }
                 HeadwayDotStrip(
                     arrivals: group.departures.prefix(8).map(\.arrivalAt),
-                    accent: pinnedMetraAccent
+                    accent: pinnedMetraAccent,
+                    urgencies: departureUrgencies(
+                        forMetraStationId: station.id,
+                        predictions: group.departures.prefix(8)
+                    )
                 )
             }
             metraProgressStrip(toStation: station, route: route)
@@ -3914,6 +3938,75 @@ struct DashboardScreen: View {
 
     private func bunchingHint(for metraPredictions: [MetraPrediction]) -> HeadwayBunchingDetector.Hint? {
         HeadwayBunchingDetector().detect(arrivalTimes: metraPredictions.map(\.arrivalAt))
+    }
+
+    /// Per-arrival departure urgency for the dot-strip thermometer.
+    /// Returns `[]` (no overlays) when the user's current location or
+    /// MapKit walking distance is unavailable — `HeadwayDotStrip`
+    /// gracefully renders neutral dots in that case.
+    private func departureUrgencies(
+        forStationId stationId: Int,
+        arrivals: ArraySlice<Arrival>
+    ) -> [DepartureUrgency.Bucket?] {
+        guard let lastKnown = model.location.lastKnown else { return [] }
+        let origin = (lat: lastKnown.latitude, lon: lastKnown.longitude)
+        guard let cached = model.walkingResolver.cached(origin: origin, stationId: stationId) else {
+            return []
+        }
+        let now = Date()
+        return arrivals.map { arrival in
+            DepartureUrgency.from(
+                arrivalAt: arrival.arrivalAt,
+                walkSeconds: cached.expectedTravelTime,
+                now: now
+            )?.bucket
+        }
+    }
+
+    private func departureUrgencies(
+        forBusStopId stopId: Int,
+        predictions: ArraySlice<BusPrediction>
+    ) -> [DepartureUrgency.Bucket?] {
+        guard let lastKnown = model.location.lastKnown else { return [] }
+        let origin = (lat: lastKnown.latitude, lon: lastKnown.longitude)
+        guard let cached = model.walkingResolver.cached(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: stopId),
+            mode: .walking
+        ) else {
+            return []
+        }
+        let now = Date()
+        return predictions.map { prediction in
+            DepartureUrgency.from(
+                arrivalAt: prediction.arrivalAt,
+                walkSeconds: cached.expectedTravelTime,
+                now: now
+            )?.bucket
+        }
+    }
+
+    private func departureUrgencies(
+        forMetraStationId stationId: String,
+        predictions: ArraySlice<MetraPrediction>
+    ) -> [DepartureUrgency.Bucket?] {
+        guard let lastKnown = model.location.lastKnown else { return [] }
+        let origin = (lat: lastKnown.latitude, lon: lastKnown.longitude)
+        guard let cached = model.walkingResolver.cached(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: stationId),
+            mode: .walking
+        ) else {
+            return []
+        }
+        let now = Date()
+        return predictions.map { prediction in
+            DepartureUrgency.from(
+                arrivalAt: prediction.arrivalAt,
+                walkSeconds: cached.expectedTravelTime,
+                now: now
+            )?.bucket
+        }
     }
 
     private func predictions(for stop: BusStop, limit: Int = 3) -> [BusPrediction] {
