@@ -195,6 +195,28 @@ public struct NearestFreeBikePick: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+/// Transient in-memory snapshot of the latest Divvy GBFS fetch. Held by
+/// `RefreshCoordinator` (not SwiftData) because the per-station / per-bike
+/// rows would otherwise balloon the persistent store — the dashboard's trip
+/// chips need the *current* inventory, not a 14-day history.
+public struct BikeInventorySnapshot: Sendable, Hashable {
+    public var stations: [BikeStation]
+    public var eBikes: [EBike]
+    public var fetchedAt: Date?
+
+    public init(
+        stations: [BikeStation] = [],
+        eBikes: [EBike] = [],
+        fetchedAt: Date? = nil
+    ) {
+        self.stations = stations
+        self.eBikes = eBikes
+        self.fetchedAt = fetchedAt
+    }
+
+    public static let empty = BikeInventorySnapshot()
+}
+
 public enum NearbyBikeOption: Sendable, Hashable, Identifiable {
     case station(NearestBikePick)
     case freeFloating(NearestFreeBikePick)
