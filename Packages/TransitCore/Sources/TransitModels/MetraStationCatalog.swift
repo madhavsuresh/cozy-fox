@@ -239,7 +239,15 @@ private struct MetraCatalogStore: Sendable {
 
     private func activeServiceIds(on date: Date) -> Set<String> {
         let key = Self.serviceDateFormatter.string(from: date)
-        let weekdayIndex = Self.calendar.component(.weekday, from: date) - 1
+        // The catalog stores each service's weekday flags in GTFS
+        // calendar.txt order: [Mon, Tue, Wed, Thu, Fri, Sat, Sun].
+        // `Calendar.component(.weekday, ...)` returns Apple's ordering
+        // (Sun=1, Mon=2, …, Sat=7), so we map it onto the GTFS slot.
+        // Without this conversion a standard Mon–Fri service decodes
+        // as Sun–Thu, which silently swaps weekday and weekend
+        // schedules for Friday and Sunday.
+        let appleWeekday = Self.calendar.component(.weekday, from: date)
+        let weekdayIndex = (appleWeekday + 5) % 7
         var active = Set(services.compactMap { service -> String? in
             guard service.startDate <= key, key <= service.endDate else { return nil }
             guard service.weekdays.indices.contains(weekdayIndex),
