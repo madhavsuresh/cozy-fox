@@ -115,6 +115,9 @@ struct CommuteLiveActivity: Widget {
             if let bus = state.bus {
                 busLegRow(bus)
             }
+            if let metra = state.metra {
+                metraLegRow(metra)
+            }
         }
     }
 
@@ -135,12 +138,19 @@ struct CommuteLiveActivity: Widget {
                     fallbackFollowing: bus.followingArrival
                 )
             }
+            if let metra = state.metra {
+                arrivalStack(
+                    upcoming: metra.upcomingArrivals,
+                    fallbackNext: metra.nextArrival,
+                    fallbackFollowing: metra.followingArrival
+                )
+            }
         }
     }
 
     @ViewBuilder
     private func expandedBottom(state: CommuteAttributes.ContentState) -> some View {
-        let alerts = [state.train?.alertHeadline, state.bus?.alertHeadline]
+        let alerts = [state.train?.alertHeadline, state.bus?.alertHeadline, state.metra?.alertHeadline]
             .compactMap { $0 }
         if let first = alerts.first {
             Label(first, systemImage: "exclamationmark.triangle.fill")
@@ -161,6 +171,11 @@ struct CommuteLiveActivity: Widget {
                 Image(systemName: "bus.fill")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(ChicagoPalette.OnDarkSafe.gold)
+            }
+            if state.metra != nil {
+                Image(systemName: "train.side.front.car")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.flagBlue)
             }
         }
     }
@@ -188,6 +203,22 @@ struct CommuteLiveActivity: Widget {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: ChicagoSpacing.xs) {
                 RouteBadge(bus: leg.routeLabel, size: .sm)
+                Text("→ \(leg.destination)")
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
+                    .lineLimit(1)
+            }
+            Text(leg.stopName)
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.OnDarkSafe.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func metraLegRow(_ leg: CommuteAttributes.MetraLeg) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: ChicagoSpacing.xs) {
+                RouteBadge(metra: leg.routeId, size: .sm)
                 Text("→ \(leg.destination)")
                     .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.OnDarkSafe.primary)
@@ -233,7 +264,8 @@ struct CommuteLiveActivity: Widget {
     ) -> Countdown {
         let dates = [
             state.train?.countdown(now: now),
-            state.bus?.countdown(now: now)
+            state.bus?.countdown(now: now),
+            state.metra?.countdown(now: now)
         ].compactMap { $0?.futureDate }
         if let soonest = dates.min() {
             return .future(soonest)
@@ -252,6 +284,10 @@ struct CommuteLiveActivity: Widget {
         if let bus = state.bus {
             dates += bus.upcomingArrivals
             dates.append(bus.nextArrival)
+        }
+        if let metra = state.metra {
+            dates += metra.upcomingArrivals
+            dates.append(metra.nextArrival)
         }
         let now = Date.now
         return Array(Set(dates.filter { $0 > now })).sorted()
@@ -272,6 +308,34 @@ private func secondaryFutureArrival(
     return nil
 }
 
+private func confidenceOpacity(
+    for marks: [ArrivalConfidenceMark],
+    arrivals: [Date],
+    now: Date
+) -> Double {
+    guard !marks.isEmpty else { return 1 }
+    let nextArrival = arrivals.first { $0 > now } ?? arrivals.first
+    let mark: ArrivalConfidenceMark?
+    if let nextArrival {
+        mark = marks.min {
+            abs($0.arrivalAt.timeIntervalSince(nextArrival))
+                < abs($1.arrivalAt.timeIntervalSince(nextArrival))
+        }
+    } else {
+        mark = marks.first
+    }
+    switch mark?.tone {
+    case .strong:
+        return 1
+    case .normal:
+        return 0.78
+    case .weak:
+        return 0.46
+    case nil:
+        return 1
+    }
+}
+
 private extension CommuteAttributes.TrainLeg {
     func countdown(now: Date) -> Countdown {
         upcomingArrivals.firstFuture(now: now, fallback: nextArrival)
@@ -279,6 +343,12 @@ private extension CommuteAttributes.TrainLeg {
 }
 
 private extension CommuteAttributes.BusLeg {
+    func countdown(now: Date) -> Countdown {
+        upcomingArrivals.firstFuture(now: now, fallback: nextArrival)
+    }
+}
+
+private extension CommuteAttributes.MetraLeg {
     func countdown(now: Date) -> Countdown {
         upcomingArrivals.firstFuture(now: now, fallback: nextArrival)
     }
@@ -311,6 +381,7 @@ private struct LockScreenView: View {
                     nextArrival: train.nextArrival,
                     followingArrival: train.followingArrival,
                     upcomingArrivals: train.upcomingArrivals,
+                    confidenceMarks: train.confidenceMarks,
                     alert: train.alertHeadline
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -327,6 +398,7 @@ private struct LockScreenView: View {
                     nextArrival: bus.nextArrival,
                     followingArrival: bus.followingArrival,
                     upcomingArrivals: bus.upcomingArrivals,
+                    confidenceMarks: bus.confidenceMarks,
                     alert: bus.alertHeadline
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -341,6 +413,7 @@ private struct LockScreenView: View {
                 nextArrival: train.nextArrival,
                 followingArrival: train.followingArrival,
                 upcomingArrivals: train.upcomingArrivals,
+                confidenceMarks: train.confidenceMarks,
                 alert: train.alertHeadline
             )
         } else if let bus = state.bus {
@@ -352,7 +425,22 @@ private struct LockScreenView: View {
                 nextArrival: bus.nextArrival,
                 followingArrival: bus.followingArrival,
                 upcomingArrivals: bus.upcomingArrivals,
+                confidenceMarks: bus.confidenceMarks,
                 alert: bus.alertHeadline
+            )
+        } else if let metra = state.metra {
+            let accent = MetraStationCatalog.route(id: metra.routeId)?.swiftUIColor
+                ?? ChicagoPalette.OnDarkSafe.flagBlue
+            LegRow(
+                accentColor: accent,
+                badge: AnyView(RouteBadge(metra: metra.routeId, size: .sm)),
+                headline: "→ \(metra.destination)",
+                subhead: metra.stopName,
+                nextArrival: metra.nextArrival,
+                followingArrival: metra.followingArrival,
+                upcomingArrivals: metra.upcomingArrivals,
+                confidenceMarks: metra.confidenceMarks,
+                alert: metra.alertHeadline
             )
         }
     }
@@ -367,6 +455,7 @@ private struct LegRow: View {
     let nextArrival: Date
     let followingArrival: Date?
     let upcomingArrivals: [Date]
+    let confidenceMarks: [ArrivalConfidenceMark]
     let alert: String?
 
     var body: some View {
@@ -380,11 +469,17 @@ private struct LegRow: View {
         // "elapsed since the missed train" territory — confusing and, per
         // the user, stressful.
         TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            let visualConfidence = confidenceOpacity(
+                for: confidenceMarks,
+                arrivals: dotStripArrivals,
+                now: timeline.date
+            )
             VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                 HStack(spacing: ChicagoSpacing.sm) {
                     RoundedRectangle(cornerRadius: 2.5)
                         .fill(accentColor)
                         .frame(width: 4)
+                        .opacity(max(0.55, visualConfidence))
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: ChicagoSpacing.xs) {
                             badge
@@ -415,6 +510,7 @@ private struct LegRow: View {
                         style: .onDark
                     )
                     .padding(.leading, 4 + ChicagoSpacing.sm)  // align with the text column
+                    .opacity(visualConfidence)
                 }
             }
         }
@@ -440,14 +536,21 @@ private struct LegColumn: View {
     let nextArrival: Date
     let followingArrival: Date?
     let upcomingArrivals: [Date]
+    let confidenceMarks: [ArrivalConfidenceMark]
     let alert: String?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            let visualConfidence = confidenceOpacity(
+                for: confidenceMarks,
+                arrivals: dotStripArrivals,
+                now: timeline.date
+            )
             HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
                 RoundedRectangle(cornerRadius: 2.5)
                     .fill(accentColor)
                     .frame(width: 4)
+                    .opacity(max(0.55, visualConfidence))
                 VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                     HStack(spacing: ChicagoSpacing.xs) {
                         badge
@@ -468,6 +571,7 @@ private struct LegColumn: View {
                             now: timeline.date,
                             style: .onDark
                         )
+                        .opacity(visualConfidence)
                     }
                     if let alert {
                         Label(alert, systemImage: "exclamationmark.triangle.fill")

@@ -150,12 +150,86 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         }
     }
 
+    /// One lightweight, semantic record of a commute leg. This intentionally
+    /// stores route identity, anchors, and durations rather than a raw trace.
+    public struct CommuteLegObservation: Codable, Sendable, Hashable, Identifiable {
+        public enum Mode: String, Codable, Sendable, Hashable {
+            case train
+            case bus
+            case metra
+            case divvy
+        }
+
+        public enum AnchorKind: String, Codable, Sendable, Hashable {
+            case home
+            case work
+            case custom
+            case unknown
+        }
+
+        public enum SampleQuality: String, Codable, Sendable, Hashable {
+            /// Region-exit paired with an observed CTA L boarding event.
+            case observedBoarding
+            /// Anchor-exit/entry or route-choice inference without a precise
+            /// boarding point.
+            case inferred
+        }
+
+        public let id: UUID
+        public let recordedAt: Date
+        public let direction: CommuteDirection
+        public let mode: Mode
+        public let routeId: String?
+        public let stopId: String?
+        public let stopLabel: String?
+        public let originAnchor: AnchorKind
+        public let destinationAnchor: AnchorKind
+        public let accessSeconds: TimeInterval
+        public let totalSeconds: TimeInterval?
+        public let weekday: Int
+        public let hour: Int
+        public let sampleQuality: SampleQuality
+
+        public init(
+            id: UUID = UUID(),
+            recordedAt: Date,
+            direction: CommuteDirection,
+            mode: Mode,
+            routeId: String?,
+            stopId: String?,
+            stopLabel: String? = nil,
+            originAnchor: AnchorKind,
+            destinationAnchor: AnchorKind,
+            accessSeconds: TimeInterval,
+            totalSeconds: TimeInterval? = nil,
+            weekday: Int,
+            hour: Int,
+            sampleQuality: SampleQuality
+        ) {
+            self.id = id
+            self.recordedAt = recordedAt
+            self.direction = direction
+            self.mode = mode
+            self.routeId = routeId
+            self.stopId = stopId
+            self.stopLabel = stopLabel
+            self.originAnchor = originAnchor
+            self.destinationAnchor = destinationAnchor
+            self.accessSeconds = accessSeconds
+            self.totalSeconds = totalSeconds
+            self.weekday = weekday
+            self.hour = hour
+            self.sampleQuality = sampleQuality
+        }
+    }
+
     /// How long the raw `observations` / `routeObservations` arrays are kept.
     /// Longer-term behavior survives in `summary` after a row ages out.
     public static let rawRetentionDays: Double = 14
 
     public var observations: [Observation]
     public var routeObservations: [RouteObservation]
+    public var commuteLegObservations: [CommuteLegObservation]
     public var updatedAt: Date?
     /// Derived, long-term distillation of past observations. Built and updated
     /// out-of-band by `MobilityProfileSummarizer` so we can keep raw history
@@ -165,11 +239,13 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
     public init(
         observations: [Observation] = [],
         routeObservations: [RouteObservation] = [],
+        commuteLegObservations: [CommuteLegObservation] = [],
         updatedAt: Date? = nil,
         summary: MobilityProfileSummary = .empty
     ) {
         self.observations = observations
         self.routeObservations = routeObservations
+        self.commuteLegObservations = commuteLegObservations
         self.updatedAt = updatedAt
         self.summary = summary
     }
@@ -177,6 +253,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case observations
         case routeObservations
+        case commuteLegObservations
         case updatedAt
         case summary
     }
@@ -185,6 +262,7 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.observations = (try? c.decode([Observation].self, forKey: .observations)) ?? []
         self.routeObservations = (try? c.decode([RouteObservation].self, forKey: .routeObservations)) ?? []
+        self.commuteLegObservations = (try? c.decode([CommuteLegObservation].self, forKey: .commuteLegObservations)) ?? []
         self.updatedAt = try? c.decode(Date.self, forKey: .updatedAt)
         var summary = (try? c.decode(MobilityProfileSummary.self, forKey: .summary)) ?? .empty
         // First load after upgrading from a pre-summary version: fold the
@@ -201,6 +279,9 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
             }
             for observation in self.routeObservations {
                 summary.fold(routeObservation: observation)
+            }
+            for observation in self.commuteLegObservations {
+                summary.fold(commuteLegObservation: observation)
             }
         }
         self.summary = summary
@@ -283,12 +364,51 @@ public struct MobilityProfile: Codable, Sendable, Hashable {
         prune(relativeTo: date)
     }
 
+    public mutating func recordCommuteLegObservation(
+        direction: CommuteDirection,
+        mode: CommuteLegObservation.Mode,
+        routeId: String?,
+        stopId: String?,
+        stopLabel: String? = nil,
+        originAnchor: CommuteLegObservation.AnchorKind,
+        destinationAnchor: CommuteLegObservation.AnchorKind,
+        accessSeconds: TimeInterval,
+        totalSeconds: TimeInterval? = nil,
+        sampleQuality: CommuteLegObservation.SampleQuality,
+        at date: Date = .now,
+        calendar: Calendar = .current
+    ) {
+        guard accessSeconds > 0 else { return }
+        let observation = CommuteLegObservation(
+            recordedAt: date,
+            direction: direction,
+            mode: mode,
+            routeId: routeId,
+            stopId: stopId,
+            stopLabel: stopLabel,
+            originAnchor: originAnchor,
+            destinationAnchor: destinationAnchor,
+            accessSeconds: accessSeconds,
+            totalSeconds: totalSeconds,
+            weekday: calendar.component(.weekday, from: date),
+            hour: calendar.component(.hour, from: date),
+            sampleQuality: sampleQuality
+        )
+        commuteLegObservations.append(observation)
+        updatedAt = date
+        summary.fold(commuteLegObservation: observation)
+        prune(relativeTo: date)
+    }
+
     public mutating func prune(relativeTo date: Date = .now) {
         let cutoff = date.addingTimeInterval(-Self.rawRetentionDays * 24 * 60 * 60)
         observations = observations
             .filter { $0.recordedAt >= cutoff }
             .suffixArray(limit: 512)
         routeObservations = routeObservations
+            .filter { $0.recordedAt >= cutoff }
+            .suffixArray(limit: 160)
+        commuteLegObservations = commuteLegObservations
             .filter { $0.recordedAt >= cutoff }
             .suffixArray(limit: 160)
     }
@@ -460,10 +580,125 @@ public struct MobilityProfileSummary: Codable, Sendable, Hashable {
         }
     }
 
+    /// Long-lived aggregate for learned access/commute timing by route and
+    /// anchor pair.
+    public struct CommuteLegPattern: Codable, Sendable, Hashable {
+        public var direction: CommuteDirection
+        public var mode: MobilityProfile.CommuteLegObservation.Mode
+        public var routeId: String?
+        public var stopId: String?
+        public var originAnchor: MobilityProfile.CommuteLegObservation.AnchorKind
+        public var destinationAnchor: MobilityProfile.CommuteLegObservation.AnchorKind
+        public var totalCount: Int
+        public var accessMeanSeconds: Double
+        public var accessM2Seconds: Double
+        public var totalMeanSeconds: Double
+        public var totalM2Seconds: Double
+        public var totalDurationCount: Int
+        public var weekdayCounts: [String: Int]
+        public var hourCounts: [String: Int]
+        public var latestSampleAt: Date
+
+        public init(
+            direction: CommuteDirection,
+            mode: MobilityProfile.CommuteLegObservation.Mode,
+            routeId: String?,
+            stopId: String?,
+            originAnchor: MobilityProfile.CommuteLegObservation.AnchorKind,
+            destinationAnchor: MobilityProfile.CommuteLegObservation.AnchorKind,
+            totalCount: Int = 0,
+            accessMeanSeconds: Double = 0,
+            accessM2Seconds: Double = 0,
+            totalMeanSeconds: Double = 0,
+            totalM2Seconds: Double = 0,
+            totalDurationCount: Int = 0,
+            weekdayCounts: [String: Int] = [:],
+            hourCounts: [String: Int] = [:],
+            latestSampleAt: Date
+        ) {
+            self.direction = direction
+            self.mode = mode
+            self.routeId = routeId
+            self.stopId = stopId
+            self.originAnchor = originAnchor
+            self.destinationAnchor = destinationAnchor
+            self.totalCount = totalCount
+            self.accessMeanSeconds = accessMeanSeconds
+            self.accessM2Seconds = accessM2Seconds
+            self.totalMeanSeconds = totalMeanSeconds
+            self.totalM2Seconds = totalM2Seconds
+            self.totalDurationCount = totalDurationCount
+            self.weekdayCounts = weekdayCounts
+            self.hourCounts = hourCounts
+            self.latestSampleAt = latestSampleAt
+        }
+
+        public static func key(
+            direction: CommuteDirection,
+            mode: MobilityProfile.CommuteLegObservation.Mode,
+            routeId: String?,
+            stopId: String?,
+            originAnchor: MobilityProfile.CommuteLegObservation.AnchorKind,
+            destinationAnchor: MobilityProfile.CommuteLegObservation.AnchorKind
+        ) -> String {
+            [
+                direction.rawValue,
+                mode.rawValue,
+                routeId ?? "_",
+                stopId ?? "_",
+                originAnchor.rawValue,
+                destinationAnchor.rawValue,
+            ].joined(separator: ":")
+        }
+
+        public var key: String {
+            Self.key(
+                direction: direction,
+                mode: mode,
+                routeId: routeId,
+                stopId: stopId,
+                originAnchor: originAnchor,
+                destinationAnchor: destinationAnchor
+            )
+        }
+
+        public var accessStandardDeviationSeconds: Double? {
+            guard totalCount >= 2 else { return nil }
+            return (accessM2Seconds / Double(totalCount - 1)).squareRoot()
+        }
+
+        public var totalStandardDeviationSeconds: Double? {
+            guard totalDurationCount >= 2 else { return nil }
+            return (totalM2Seconds / Double(totalDurationCount - 1)).squareRoot()
+        }
+
+        public mutating func record(_ observation: MobilityProfile.CommuteLegObservation) {
+            totalCount += 1
+            let accessDelta = observation.accessSeconds - accessMeanSeconds
+            accessMeanSeconds += accessDelta / Double(totalCount)
+            let accessDelta2 = observation.accessSeconds - accessMeanSeconds
+            accessM2Seconds += accessDelta * accessDelta2
+
+            if let total = observation.totalSeconds, total > 0 {
+                totalDurationCount += 1
+                let totalDelta = total - totalMeanSeconds
+                totalMeanSeconds += totalDelta / Double(totalDurationCount)
+                let totalDelta2 = total - totalMeanSeconds
+                totalM2Seconds += totalDelta * totalDelta2
+            }
+
+            weekdayCounts[String(observation.weekday), default: 0] += 1
+            hourCounts[String(observation.hour), default: 0] += 1
+            latestSampleAt = max(latestSampleAt, observation.recordedAt)
+        }
+    }
+
     /// Departure windows keyed by `Observation.Source.rawValue + ":" + direction.rawValue`.
     public var departureWindows: [String: DepartureWindow]
     /// Route patterns keyed by `RoutePattern.key`.
     public var routePatterns: [String: RoutePattern]
+    /// Commute-leg timing patterns keyed by `CommuteLegPattern.key`.
+    public var commuteLegPatterns: [String: CommuteLegPattern]
     /// When the summary was last folded forward. Observations strictly after
     /// this date are the ones the summarizer still needs to consume.
     public var lastSummarizedAt: Date?
@@ -472,19 +707,46 @@ public struct MobilityProfileSummary: Codable, Sendable, Hashable {
     /// Total route observations the summary has consumed so far. Used for UI
     /// display and to gauge how much learning has accumulated.
     public var consumedRouteObservationCount: Int
+    /// Total commute-leg timing observations folded into the summary.
+    public var consumedCommuteLegObservationCount: Int
 
     public init(
         departureWindows: [String: DepartureWindow] = [:],
         routePatterns: [String: RoutePattern] = [:],
+        commuteLegPatterns: [String: CommuteLegPattern] = [:],
         lastSummarizedAt: Date? = nil,
         consumedObservationCount: Int = 0,
-        consumedRouteObservationCount: Int = 0
+        consumedRouteObservationCount: Int = 0,
+        consumedCommuteLegObservationCount: Int = 0
     ) {
         self.departureWindows = departureWindows
         self.routePatterns = routePatterns
+        self.commuteLegPatterns = commuteLegPatterns
         self.lastSummarizedAt = lastSummarizedAt
         self.consumedObservationCount = consumedObservationCount
         self.consumedRouteObservationCount = consumedRouteObservationCount
+        self.consumedCommuteLegObservationCount = consumedCommuteLegObservationCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case departureWindows
+        case routePatterns
+        case commuteLegPatterns
+        case lastSummarizedAt
+        case consumedObservationCount
+        case consumedRouteObservationCount
+        case consumedCommuteLegObservationCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.departureWindows = (try? c.decode([String: DepartureWindow].self, forKey: .departureWindows)) ?? [:]
+        self.routePatterns = (try? c.decode([String: RoutePattern].self, forKey: .routePatterns)) ?? [:]
+        self.commuteLegPatterns = (try? c.decode([String: CommuteLegPattern].self, forKey: .commuteLegPatterns)) ?? [:]
+        self.lastSummarizedAt = try? c.decode(Date.self, forKey: .lastSummarizedAt)
+        self.consumedObservationCount = (try? c.decode(Int.self, forKey: .consumedObservationCount)) ?? 0
+        self.consumedRouteObservationCount = (try? c.decode(Int.self, forKey: .consumedRouteObservationCount)) ?? 0
+        self.consumedCommuteLegObservationCount = (try? c.decode(Int.self, forKey: .consumedCommuteLegObservationCount)) ?? 0
     }
 
     public static let empty = MobilityProfileSummary()
@@ -507,8 +769,23 @@ public struct MobilityProfileSummary: Codable, Sendable, Hashable {
         routePatterns.values.filter { $0.direction == direction }
     }
 
+    public func commuteLegs(
+        direction: CommuteDirection? = nil,
+        mode: MobilityProfile.CommuteLegObservation.Mode? = nil,
+        routeId: String? = nil,
+        stopId: String? = nil
+    ) -> [CommuteLegPattern] {
+        commuteLegPatterns.values.filter { pattern in
+            if let direction, pattern.direction != direction { return false }
+            if let mode, pattern.mode != mode { return false }
+            if let routeId, pattern.routeId != routeId { return false }
+            if let stopId, pattern.stopId != stopId { return false }
+            return true
+        }
+    }
+
     public var isEmpty: Bool {
-        departureWindows.isEmpty && routePatterns.isEmpty
+        departureWindows.isEmpty && routePatterns.isEmpty && commuteLegPatterns.isEmpty
     }
 
     /// Folds a single observation into the summary in place. Advances
@@ -599,6 +876,30 @@ public struct MobilityProfileSummary: Codable, Sendable, Hashable {
         if counted {
             consumedRouteObservationCount += 1
         }
+        advanceCursor(to: observation.recordedAt)
+    }
+
+    public mutating func fold(commuteLegObservation observation: MobilityProfile.CommuteLegObservation) {
+        let key = CommuteLegPattern.key(
+            direction: observation.direction,
+            mode: observation.mode,
+            routeId: observation.routeId,
+            stopId: observation.stopId,
+            originAnchor: observation.originAnchor,
+            destinationAnchor: observation.destinationAnchor
+        )
+        var pattern = commuteLegPatterns[key] ?? CommuteLegPattern(
+            direction: observation.direction,
+            mode: observation.mode,
+            routeId: observation.routeId,
+            stopId: observation.stopId,
+            originAnchor: observation.originAnchor,
+            destinationAnchor: observation.destinationAnchor,
+            latestSampleAt: observation.recordedAt
+        )
+        pattern.record(observation)
+        commuteLegPatterns[key] = pattern
+        consumedCommuteLegObservationCount += 1
         advanceCursor(to: observation.recordedAt)
     }
 

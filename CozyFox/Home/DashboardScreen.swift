@@ -55,6 +55,13 @@ struct DashboardScreen: View {
     private let tripDivvyResolver = TripDivvyResolver(radiusMeters: 400)
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let corridorResolver = TransitCorridorResolver()
+    private let opportunityScorer = TransitOpportunityScorer()
+
+    private static var chicagoCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago") ?? .current
+        return calendar
+    }
 
     var body: some View {
         NavigationStack {
@@ -1142,7 +1149,8 @@ struct DashboardScreen: View {
         from plans: [TripPlan],
         origin: PlannerCoordinate
     ) -> [HomeTripOption] {
-        plans.compactMap { plan -> HomeTripOption? in
+        let transferScorer = TransferViabilityScorer()
+        return plans.compactMap { plan -> HomeTripOption? in
             let transitLegs = plan.legs.enumerated().filter { $0.element.mode == .transit }
             guard !transitLegs.isEmpty else { return nil }
 
@@ -1204,11 +1212,18 @@ struct DashboardScreen: View {
                 ),
                 expectedTravelTime: plan.expectedTravelTime,
                 totalDistanceMeters: plan.totalDistanceMeters,
+                reliabilityScore: transferScorer.score(plan: plan).score,
                 boardingAccess: boardingAccess,
                 trainChoices: dedupedTrains,
                 busChoices: dedupedBuses,
                 metraChoices: dedupedMetra
             )
+        }
+        .sorted {
+            if abs($0.reliabilityScore - $1.reliabilityScore) > 0.04 {
+                return $0.reliabilityScore > $1.reliabilityScore
+            }
+            return $0.expectedTravelTime < $1.expectedTravelTime
         }
     }
 
@@ -3595,6 +3610,13 @@ struct DashboardScreen: View {
 
     private var nearbyTrainCorridors: [TrainCorridorEntry] {
         guard routePreferences.isModeVisible(.trains), let origin else { return [] }
+        let now = Date()
+        let accessEstimator = PersonalAccessEstimator(
+            profile: model.preferences.loadMobilityProfile(),
+            now: now,
+            calendar: Self.chicagoCalendar
+        )
+        let scoringDirection = quietScoringDirection(now: now)
         let candidates = corridorResolver.nearbyTrainCandidates(
             to: origin,
             radiusMeters: 2_000,
@@ -3622,7 +3644,15 @@ struct DashboardScreen: View {
                 station: candidate.station,
                 distance: distance,
                 directionGroups: trainDirectionGroups(from: arrivals),
-                catchableArrivalAt: catchableArrival(from: arrivals, distanceMeters: distance)?.arrivalAt
+                catchableArrivalAt: catchableArrival(from: arrivals, distanceMeters: distance)?.arrivalAt,
+                reliabilityScore: trainReliabilityScore(
+                    arrivals: arrivals,
+                    line: candidate.line,
+                    stationId: candidate.station.id,
+                    direction: scoringDirection,
+                    accessEstimator: accessEstimator,
+                    now: now
+                )
             )
             if let current = bestByCorridor[candidate.corridor] {
                 if isBetterTrainCorridorEntry(entry, than: current) {
@@ -3633,11 +3663,20 @@ struct DashboardScreen: View {
             }
         }
 
-        return TransitCorridor.trainOrder.compactMap { bestByCorridor[$0] }
+        return TransitCorridor.trainOrder
+            .compactMap { bestByCorridor[$0] }
+            .sorted { isBetterTrainCorridorEntry($0, than: $1) }
     }
 
     private var nearbyBusCorridors: [BusCorridorEntry] {
         guard routePreferences.isModeVisible(.buses), let origin else { return [] }
+        let now = Date()
+        let accessEstimator = PersonalAccessEstimator(
+            profile: model.preferences.loadMobilityProfile(),
+            now: now,
+            calendar: Self.chicagoCalendar
+        )
+        let scoringDirection = quietScoringDirection(now: now)
         let candidates = corridorResolver.nearbyBusCandidates(
             to: origin,
             radiusMeters: 1_500,
@@ -3657,6 +3696,14 @@ struct DashboardScreen: View {
                 catchablePrediction: catchablePrediction(
                     from: predictions,
                     distanceMeters: candidate.distanceMeters
+                ),
+                reliabilityScore: busReliabilityScore(
+                    predictions: predictions,
+                    route: candidate.stop.route,
+                    stopId: candidate.stop.id,
+                    direction: scoringDirection,
+                    accessEstimator: accessEstimator,
+                    now: now
                 )
             )
             if let current = bestByCorridor[candidate.corridor] {
@@ -3668,11 +3715,20 @@ struct DashboardScreen: View {
             }
         }
 
-        return TransitCorridor.busOrder.compactMap { bestByCorridor[$0] }
+        return TransitCorridor.busOrder
+            .compactMap { bestByCorridor[$0] }
+            .sorted { isBetterBusCorridorEntry($0, than: $1) }
     }
 
     private var nearbyMetraRoutes: [MetraEntry] {
         guard routePreferences.isModeVisible(.metra), let origin else { return [] }
+        let now = Date()
+        let accessEstimator = PersonalAccessEstimator(
+            profile: model.preferences.loadMobilityProfile(),
+            now: now,
+            calendar: Self.chicagoCalendar
+        )
+        let scoringDirection = quietScoringDirection(now: now)
         return NearestMetraStationResolver(maxDistanceMeters: 3_000)
             .nearestPerRoute(
                 to: origin,
@@ -3681,7 +3737,29 @@ struct DashboardScreen: View {
             )
             .filter { $0.routeId != pinnedMetraRoute }
             .filter { isMetraRouteDiscoverable($0.routeId) }
-            .map { MetraEntry(routeId: $0.routeId, station: $0.station, distance: $0.distance) }
+            .map { entry in
+                MetraEntry(
+                    routeId: entry.routeId,
+                    station: entry.station,
+                    distance: entry.distance,
+                    reliabilityScore: metraReliabilityScore(
+                        predictions: model.snapshot.metraPredictions.filter {
+                            $0.routeId == entry.routeId && $0.stationId == entry.station.id
+                        },
+                        routeId: entry.routeId,
+                        stationId: entry.station.id,
+                        direction: scoringDirection,
+                        accessEstimator: accessEstimator,
+                        now: now
+                    )
+                )
+            }
+            .sorted { lhs, rhs in
+                if isReliabilityDifferent(lhs.reliabilityScore, rhs.reliabilityScore) {
+                    return (lhs.reliabilityScore ?? 0) > (rhs.reliabilityScore ?? 0)
+                }
+                return lhs.distance < rhs.distance
+            }
     }
 
     private func arrivals(
@@ -3740,10 +3818,153 @@ struct DashboardScreen: View {
         return predictions.first { $0.arrivalAt >= cutoff }
     }
 
+    private func trainReliabilityScore(
+        arrivals: [Arrival],
+        line: LineColor,
+        stationId: Int,
+        direction: CommuteDirection,
+        accessEstimator: PersonalAccessEstimator,
+        now: Date
+    ) -> Double? {
+        let access = accessEstimator.estimate(
+            direction: direction,
+            mode: .train,
+            routeId: line.rawValue,
+            stopId: String(stationId)
+        )
+        guard let access, access.confidence >= 0.2 else { return nil }
+        let ghosts = ghostAssessments(for: arrivals, now: now)
+        let alerts = alerts(forLine: line)
+        let cells = model.arrivalBiasStore.cells
+        return arrivals
+            .filter { $0.arrivalAt > now }
+            .map { arrival in
+                let key = BiasCellKey.make(
+                    line: arrival.line.rawValue,
+                    stopId: String(arrival.stopId),
+                    direction: arrival.directionCode,
+                    at: arrival.arrivalAt,
+                    calendar: Self.chicagoCalendar
+                )
+                return opportunityScorer.scoreTrain(
+                    arrival,
+                    access: access,
+                    biasCell: cells[key],
+                    ghost: ghosts[arrival.id],
+                    alerts: alerts,
+                    now: now
+                )
+            }
+            .filter { $0.confidence >= 0.35 }
+            .map(\.score)
+            .max()
+    }
+
+    private func busReliabilityScore(
+        predictions: [BusPrediction],
+        route: String,
+        stopId: Int,
+        direction: CommuteDirection,
+        accessEstimator: PersonalAccessEstimator,
+        now: Date
+    ) -> Double? {
+        let access = accessEstimator.estimate(
+            direction: direction,
+            mode: .bus,
+            routeId: route,
+            stopId: String(stopId)
+        )
+        guard let access, access.confidence >= 0.2 else { return nil }
+        let alerts = alerts(forBusRoute: route)
+        let cells = model.arrivalBiasStore.cells
+        return predictions
+            .filter { $0.arrivalAt > now }
+            .map { prediction in
+                let key = BiasCellKey.make(
+                    line: prediction.route,
+                    stopId: String(prediction.stopId),
+                    direction: prediction.directionName,
+                    at: prediction.arrivalAt,
+                    calendar: Self.chicagoCalendar
+                )
+                return opportunityScorer.scoreBus(
+                    prediction,
+                    access: access,
+                    biasCell: cells[key],
+                    alerts: alerts,
+                    now: now
+                )
+            }
+            .filter { $0.confidence >= 0.35 }
+            .map(\.score)
+            .max()
+    }
+
+    private func metraReliabilityScore(
+        predictions: [MetraPrediction],
+        routeId: String,
+        stationId: String,
+        direction: CommuteDirection,
+        accessEstimator: PersonalAccessEstimator,
+        now: Date
+    ) -> Double? {
+        let access = accessEstimator.estimate(
+            direction: direction,
+            mode: .metra,
+            routeId: routeId,
+            stopId: stationId
+        )
+        guard let access, access.confidence >= 0.2 else { return nil }
+        let alerts = alerts(forMetraRoute: routeId)
+        return predictions
+            .filter { $0.arrivalAt > now }
+            .map {
+                opportunityScorer.scoreMetra(
+                    $0,
+                    access: access,
+                    alerts: alerts,
+                    now: now
+                )
+            }
+            .filter { $0.confidence >= 0.3 }
+            .map(\.score)
+            .max()
+    }
+
+    private func quietScoringDirection(now: Date) -> CommuteDirection {
+        if let autoPinnedDirection {
+            return autoPinnedDirection
+        }
+        switch model.location.context {
+        case .atHome:
+            return .toWork
+        case .atWork, .elsewhere:
+            return .toHome
+        case .unknown:
+            return Self.chicagoCalendar.component(.hour, from: now) < 12 ? .toWork : .toHome
+        }
+    }
+
+    private func isReliabilityDifferent(_ lhs: Double?, _ rhs: Double?) -> Bool {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?):
+            return abs(lhs - rhs) > 0.05
+        case let (lhs?, nil):
+            return lhs >= 0.52
+        case let (nil, rhs?):
+            return rhs >= 0.52
+        case (nil, nil):
+            return false
+        }
+    }
+
     private func isBetterTrainCorridorEntry(
         _ lhs: TrainCorridorEntry,
         than rhs: TrainCorridorEntry
     ) -> Bool {
+        if isReliabilityDifferent(lhs.reliabilityScore, rhs.reliabilityScore) {
+            return (lhs.reliabilityScore ?? 0) > (rhs.reliabilityScore ?? 0)
+        }
         if (lhs.catchableArrivalAt != nil) != (rhs.catchableArrivalAt != nil) {
             return lhs.catchableArrivalAt != nil
         }
@@ -3769,6 +3990,9 @@ struct DashboardScreen: View {
         _ lhs: BusCorridorEntry,
         than rhs: BusCorridorEntry
     ) -> Bool {
+        if isReliabilityDifferent(lhs.reliabilityScore, rhs.reliabilityScore) {
+            return (lhs.reliabilityScore ?? 0) > (rhs.reliabilityScore ?? 0)
+        }
         if (lhs.catchablePrediction != nil) != (rhs.catchablePrediction != nil) {
             return lhs.catchablePrediction != nil
         }
@@ -4759,6 +4983,7 @@ private struct TrainCorridorEntry: Identifiable {
     let distance: Double
     let directionGroups: [NearbyTrainDirectionGroup]
     let catchableArrivalAt: Date?
+    let reliabilityScore: Double?
 
     var id: String { "\(corridor.rawValue)-\(line.rawValue)-\(station.id)" }
 
@@ -4780,6 +5005,7 @@ private struct BusCorridorEntry: Identifiable {
     let distance: Double
     let predictions: [BusPrediction]
     let catchablePrediction: BusPrediction?
+    let reliabilityScore: Double?
 
     var id: String { "\(corridor.rawValue)-\(stop.id)-\(stop.route)" }
 
@@ -4799,6 +5025,7 @@ private struct MetraEntry: Identifiable {
     let routeId: String
     let station: MetraStation
     let distance: Double
+    let reliabilityScore: Double?
     var id: String { "\(routeId)-\(station.id)" }
 }
 
@@ -5069,6 +5296,7 @@ private struct HomeTripOption: Identifiable {
     let transitSummary: String
     let expectedTravelTime: TimeInterval
     let totalDistanceMeters: Double
+    let reliabilityScore: Double
     let boardingAccess: HomeTripBoardingAccess?
     let trainChoices: [HomeTripTrainChoice]
     let busChoices: [HomeTripBusChoice]

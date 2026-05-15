@@ -529,8 +529,12 @@ public struct LocalPredictionEngine: Sendable {
     }
 
     private func coverageScore(profile: MobilityProfile) -> Double {
-        let rawCount = profile.observations.count + profile.routeObservations.count
-        let summaryCount = profile.summary.consumedObservationCount + profile.summary.consumedRouteObservationCount
+        let rawCount = profile.observations.count
+            + profile.routeObservations.count
+            + profile.commuteLegObservations.count
+        let summaryCount = profile.summary.consumedObservationCount
+            + profile.summary.consumedRouteObservationCount
+            + profile.summary.consumedCommuteLegObservationCount
         let total = max(rawCount, summaryCount)
         guard total > 0 else { return 0 }
         return min(1, Double(total) / 50)

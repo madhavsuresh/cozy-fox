@@ -26,6 +26,12 @@ final class RefreshCoordinator {
     /// Phase 5b: motion-transition stopwatch for cycling. Independent of
     /// walking because pace ratios don't transfer between modes.
     let bikeSpeedTracker: BikeSpeedTracker
+    /// Bias cells stay app-side, but the quiet relevance layer needs a
+    /// snapshot during refresh to rank arrivals without changing copy.
+    private weak var arrivalBiasStore: ArrivalBiasStore?
+    /// Quiet relevance timing: pairs anchor exits with observed boarding or
+    /// anchor entry and folds semantic commute-leg durations into the profile.
+    let commuteLegTracker: CommuteLegTracker
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -41,6 +47,7 @@ final class RefreshCoordinator {
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let corridorResolver = TransitCorridorResolver()
     private let autopinner = CommuteAutopinner()
+    private let catchableWindowEvaluator = CatchableWindowEvaluator()
     /// Phase 4: detects "user just boarded a train at a CTA L station"
     /// from motion + location. Pure / stateless; the coordinator owns
     /// `previousMotion` and feeds it in.
@@ -91,6 +98,8 @@ final class RefreshCoordinator {
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
         self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
+        self.arrivalBiasStore = arrivalBiasStore
+        self.commuteLegTracker = CommuteLegTracker(preferences: preferences)
 
         let session = LiveHTTPClient.makeSharedSession()
         let http = LiveHTTPClient(session: session)
@@ -160,10 +169,39 @@ final class RefreshCoordinator {
             group.addTask { await self.refreshPositions(prefs: prefs) }
         }
 
-        // Keep the always-on Live Activity (if enabled) in sync with the
-        // freshly-refreshed snapshot.
+        // Keep Live Activity content in sync. Always-on keeps the tile alive;
+        // auto-start only surfaces when learned access time and arrivals line
+        // up inside the user's catchable window.
         let snapshot = await store.currentSnapshot()
-        await LiveActivityCoordinator.shared.ensureRunning(snapshot: snapshot, prefs: prefs)
+        let relevance = quietRelevanceContext(snapshot: snapshot)
+        if prefs.alwaysShowLiveActivity {
+            await LiveActivityCoordinator.shared.ensureRunning(
+                snapshot: snapshot,
+                prefs: prefs,
+                relevance: relevance
+            )
+        } else if let surfacePrefs = catchableWindowEvaluator.surfacePreferences(
+            preferences: prefs,
+            profile: relevance.profile,
+            context: relevance.currentContext,
+            trainArrivals: snapshot.trainArrivals,
+            busPredictions: snapshot.busPredictions,
+            metraPredictions: snapshot.metraPredictions,
+            vehiclePositions: snapshot.vehiclePositions,
+            activeAlerts: snapshot.activeAlerts,
+            trainsFetchedAt: snapshot.trainsFetchedAt,
+            cellLookup: { relevance.biasCells[$0] },
+            now: .now,
+            calendar: relevance.calendar
+        ) {
+            await LiveActivityCoordinator.shared.ensureRelevant(
+                snapshot: snapshot,
+                prefs: surfacePrefs,
+                relevance: relevance
+            )
+        } else {
+            await LiveActivityCoordinator.shared.ensureRunning(snapshot: snapshot, prefs: prefs)
+        }
 
         WidgetCenter.shared.reloadAllTimelines()
         return expiredTripChanged || autopinChanged
@@ -171,6 +209,11 @@ final class RefreshCoordinator {
 
     /// Called whenever the location coordinator detects a region transition.
     func handleContextChange(_ context: CommuteContext) async {
+        commuteLegTracker.recordAnchorEntry(
+            context: context,
+            at: .now,
+            routePreferences: preferences.loadRoutePreferences()
+        )
         await refreshAll()
     }
 
@@ -190,41 +233,15 @@ final class RefreshCoordinator {
         if let anchor {
             walkSpeedTracker.recordRegionExit(direction: direction, anchor: anchor, at: .now)
         }
+        commuteLegTracker.recordRegionExit(direction: direction, at: .now)
         let prefs = preferences.loadRoutePreferences()
         guard prefs.autoStartLiveActivity else { return }
-        guard let pref = prefs.trains.first(where: {
-            $0.direction == direction && prefs.isTrainLineVisible($0.line)
-        })
-            ?? prefs.buses.first(where: {
-                $0.direction == direction && prefs.isBusRouteVisible($0.route)
-            }).map(toTrainStub) else {
-            return
-        }
         await refreshAll()
-        await LiveActivityCoordinator.shared.startCommute(
-            for: pref,
-            snapshot: await store.currentSnapshot()
-        )
-    }
-
-    private func toTrainStub(_ bus: BusPreference) -> TrainPreference {
-        // Only used when no train preference exists — Live Activity surfaces
-        // the bus arrival via this stub.
-        TrainPreference(
-            mapId: 0,
-            stopId: bus.stopId,
-            stationName: bus.stopName,
-            line: .red,
-            directionLabel: bus.directionLabel,
-            direction: bus.direction
-        )
     }
 
     private func applyAutopinIfNeeded() async -> Bool {
-        if preferences.loadRoutePreferences().plannedTripPin != nil {
-            return false
-        }
         let motion = await location?.refreshMotion() ?? .unknown
+        let routePreferences = preferences.loadRoutePreferences()
         // Phase 4: check whether the user just boarded a train at a CTA
         // L station. Uses the *cached* `lastKnown` location instead of
         // a one-shot `refreshLocation()` to keep this cheap — stale by
@@ -246,6 +263,11 @@ final class RefreshCoordinator {
             walkSpeedTracker.recordBoarding(
                 stationId: boarding.stationId,
                 at: boarding.observedAt
+            )
+            commuteLegTracker.recordBoarding(
+                stationId: boarding.stationId,
+                observedAt: boarding.observedAt,
+                routePreferences: routePreferences
             )
         }
 
@@ -270,9 +292,13 @@ final class RefreshCoordinator {
 
         previousMotion = motion
 
+        if routePreferences.plannedTripPin != nil {
+            return false
+        }
+
         let context = location?.context ?? .unknown
         let result = autopinner.apply(
-            preferences: preferences.loadRoutePreferences(),
+            preferences: routePreferences,
             anchors: preferences.loadCommuteAnchors(),
             profile: preferences.loadMobilityProfile(),
             location: preferences.loadLastKnownLocation(),
@@ -313,6 +339,24 @@ final class RefreshCoordinator {
             origin: (lat: plan.origin.latitude, lon: plan.origin.longitude),
             stations: plan.stations
         )
+    }
+
+    private func quietRelevanceContext(
+        snapshot: TransitSnapshot
+    ) -> LiveActivityCoordinator.QuietRelevanceContext {
+        LiveActivityCoordinator.QuietRelevanceContext(
+            profile: preferences.loadMobilityProfile(),
+            currentContext: location?.context ?? .unknown,
+            biasCells: arrivalBiasStore?.cells ?? [:],
+            trainsFetchedAt: snapshot.trainsFetchedAt,
+            calendar: Self.chicagoCalendar
+        )
+    }
+
+    private static var chicagoCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago") ?? .current
+        return calendar
     }
 
     // MARK: - Per-service refreshers
