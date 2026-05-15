@@ -3446,8 +3446,24 @@ struct DashboardScreen: View {
                         Button("Unpin", role: .destructive) { setPinnedBus(nil) }
                         Divider()
                     }
-                    ForEach(busPickerRoutes, id: \.self) { route in
-                        Button("Route \(route)") { setPinnedBus(route) }
+                    let nearby = nearbyBusRoutesForPicker
+                    if !nearby.isEmpty {
+                        Section("Nearby") {
+                            ForEach(nearby) { entry in
+                                Button("Route \(entry.route) — \(DistanceFormatter.short(entry.distanceMeters))") {
+                                    setPinnedBus(entry.route)
+                                }
+                            }
+                        }
+                        Section("All routes") {
+                            ForEach(busPickerRoutes, id: \.self) { route in
+                                Button("Route \(route)") { setPinnedBus(route) }
+                            }
+                        }
+                    } else {
+                        ForEach(busPickerRoutes, id: \.self) { route in
+                            Button("Route \(route)") { setPinnedBus(route) }
+                        }
                     }
                 } label: {
                     HStack(spacing: ChicagoSpacing.xs) {
@@ -3477,6 +3493,32 @@ struct DashboardScreen: View {
 
     private var busPickerRoutes: [String] {
         BusStopCatalog.allRoutes.filter { isBusRouteDiscoverable($0) }
+    }
+
+    private struct PinnedBusPickerNearbyEntry: Identifiable {
+        let route: String
+        let distanceMeters: Double
+        var id: String { route }
+    }
+
+    /// Closest discoverable bus routes (deduplicated to one entry per route at
+    /// its nearest stop), so the picker can surface "what's around me" before
+    /// the full alphabetical list.
+    private var nearbyBusRoutesForPicker: [PinnedBusPickerNearbyEntry] {
+        guard let origin else { return [] }
+        return NearestBusStopResolver(maxDistanceMeters: 1_500)
+            .nearest(to: origin, limit: 30, catalog: BusStopCatalog.all)
+            .filter { isBusRouteDiscoverable($0.route) }
+            .prefix(8)
+            .map { stop in
+                PinnedBusPickerNearbyEntry(
+                    route: stop.route,
+                    distanceMeters: Distance.meters(
+                        from: origin,
+                        to: (stop.latitude, stop.longitude)
+                    )
+                )
+            }
     }
 
     private func pinnedBusCard(route: String) -> some View {
