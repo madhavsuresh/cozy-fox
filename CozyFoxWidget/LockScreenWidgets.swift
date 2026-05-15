@@ -109,9 +109,9 @@ struct LockScreenEntry: TimelineEntry {
             return snapshot.trainArrivals
                 .filter { $0.line == pinned }
                 .filter { preferences.pinnedStationId == nil || $0.stationId == preferences.pinnedStationId }
-                .filter {
-                    preferences.pinnedTrainDestination == nil
-                        || $0.destinationName == preferences.pinnedTrainDestination
+                .filter { arrival in
+                    preferences.pinnedTrainDestinations?
+                        .contains(arrival.destinationName) ?? true
                 }
         }
         guard preferences.isModeVisible(.trains),

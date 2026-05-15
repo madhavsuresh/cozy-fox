@@ -423,10 +423,18 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// the dashboard auto-picks the nearest station on `pinnedLine`. Cleared
     /// whenever `pinnedLine` changes.
     public var pinnedStationId: Int?
-    /// Specific destination name (the CTA `destNm` field, e.g. "Howard", "95th")
-    /// the user chose at the pinned station, so the Live Activity tracks one
-    /// direction. Cleared whenever `pinnedLine` or `pinnedStationId` changes.
-    public var pinnedTrainDestination: String?
+    /// Destination names (the CTA `destNm` field, e.g. "Howard", "95th")
+    /// the user chose at the pinned station, filtering arrivals to one
+    /// direction. Multiple destinations in the same physical direction
+    /// (Forest Park + UIC-Halsted on the Blue Line) can be selected
+    /// together; `nil` means "all destinations at this station, both
+    /// directions." Cleared whenever `pinnedLine` or `pinnedStationId`
+    /// changes.
+    ///
+    /// Legacy payloads stored a single `String?` under the same key; the
+    /// custom decoder accepts either shape and wraps a single string
+    /// into a one-element array.
+    public var pinnedTrainDestinations: [String]?
     /// User has explicitly pinned a CTA bus route (e.g. "22", "X9", "147").
     /// When set, the refresh path fetches predictions at the nearest stop on
     /// that route. Optional MapKit-suggested route fills this in too.
@@ -495,7 +503,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         alwaysShowLiveActivity: Bool = true,
         pinnedLine: LineColor? = nil,
         pinnedStationId: Int? = nil,
-        pinnedTrainDestination: String? = nil,
+        pinnedTrainDestinations: [String]? = nil,
         pinnedBusRoute: String? = nil,
         pinnedBusDirection: String? = nil,
         pinnedBusStopId: Int? = nil,
@@ -527,7 +535,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.alwaysShowLiveActivity = alwaysShowLiveActivity
         self.pinnedLine = pinnedLine
         self.pinnedStationId = pinnedStationId
-        self.pinnedTrainDestination = pinnedTrainDestination
+        self.pinnedTrainDestinations = pinnedTrainDestinations
         self.pinnedBusRoute = pinnedBusRoute
         self.pinnedBusDirection = pinnedBusDirection
         self.pinnedBusStopId = pinnedBusStopId
@@ -549,9 +557,17 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
+    /// Read-only legacy key for the pre-grouping single-destination
+    /// payload. Kept in a separate enum so the auto-synthesized
+    /// encoder doesn't try to write it.
+    private enum LegacyCodingKeys: String, CodingKey {
+        case pinnedTrainDestination
+    }
+
     // preferences blobs already on disk from older app versions.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try? decoder.container(keyedBy: LegacyCodingKeys.self)
         self.trains = (try? c.decode([TrainPreference].self, forKey: .trains)) ?? []
         self.buses = (try? c.decode([BusPreference].self, forKey: .buses)) ?? []
         self.metra = (try? c.decode([MetraPreference].self, forKey: .metra)) ?? []
@@ -564,7 +580,18 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.alwaysShowLiveActivity = (try? c.decode(Bool.self, forKey: .alwaysShowLiveActivity)) ?? true
         self.pinnedLine = try? c.decode(LineColor.self, forKey: .pinnedLine)
         self.pinnedStationId = try? c.decode(Int.self, forKey: .pinnedStationId)
-        self.pinnedTrainDestination = try? c.decode(String.self, forKey: .pinnedTrainDestination)
+        // Backward-compat: legacy payloads stored a single `String?`
+        // under `.pinnedTrainDestination` (singular). New writes use
+        // `[String]?` under `.pinnedTrainDestinations`. Try the new
+        // key first, fall back to the legacy single string wrapped
+        // in a one-element array.
+        if let array = try? c.decode([String].self, forKey: .pinnedTrainDestinations) {
+            self.pinnedTrainDestinations = array
+        } else if let legacyDest = try? legacy?.decode(String.self, forKey: .pinnedTrainDestination) {
+            self.pinnedTrainDestinations = [legacyDest]
+        } else {
+            self.pinnedTrainDestinations = nil
+        }
         self.pinnedBusRoute = try? c.decode(String.self, forKey: .pinnedBusRoute)
         self.pinnedBusDirection = try? c.decode(String.self, forKey: .pinnedBusDirection)
         self.pinnedBusStopId = try? c.decode(Int.self, forKey: .pinnedBusStopId)

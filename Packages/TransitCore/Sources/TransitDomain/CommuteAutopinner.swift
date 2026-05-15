@@ -62,7 +62,7 @@ public struct CommuteAutopinner: Sendable {
     private struct PinFields: Equatable {
         let line: LineColor?
         let stationId: Int?
-        let trainDestination: String?
+        let trainDestinations: [String]?
         let busRoute: String?
         let busDirection: String?
         let busStopId: Int?
@@ -147,7 +147,7 @@ public struct CommuteAutopinner: Sendable {
         var updated = preferences
         updated.pinnedLine = choice.line
         updated.pinnedStationId = choice.stationId
-        updated.pinnedTrainDestination = nil
+        updated.pinnedTrainDestinations = nil
         updated.pinnedBusRoute = choice.busRoute
         updated.pinnedBusDirection = choice.busDirection
         updated.pinnedBusStopId = choice.busStopId
@@ -256,7 +256,7 @@ public struct CommuteAutopinner: Sendable {
         var updated = preferences
         updated.pinnedLine = nil
         updated.pinnedStationId = nil
-        updated.pinnedTrainDestination = nil
+        updated.pinnedTrainDestinations = nil
         updated.pinnedBusRoute = nil
         updated.pinnedBusDirection = nil
         updated.pinnedBusStopId = nil
@@ -550,7 +550,7 @@ public struct CommuteAutopinner: Sendable {
         PinFields(
             line: preferences.pinnedLine,
             stationId: preferences.pinnedStationId,
-            trainDestination: preferences.pinnedTrainDestination,
+            trainDestinations: preferences.pinnedTrainDestinations,
             busRoute: preferences.pinnedBusRoute,
             busDirection: preferences.pinnedBusDirection,
             busStopId: preferences.pinnedBusStopId,

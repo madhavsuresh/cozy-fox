@@ -48,14 +48,25 @@ struct MediumWidgetWrapper: View {
                     entry.preferences.pinnedStationId == nil
                         || $0.stationId == entry.preferences.pinnedStationId
                 }
-                .filter {
-                    entry.preferences.pinnedTrainDestination == nil
-                        || $0.destinationName == entry.preferences.pinnedTrainDestination
+                .filter { arrival in
+                    entry.preferences.pinnedTrainDestinations?
+                        .contains(arrival.destinationName) ?? true
                 }
             guard let first = arrivals.first else { return nil }
+            // Direction label: when the user picked one destination,
+            // show it. When they picked many (e.g., Forest Park +
+            // UIC-Halsted), or none, fall back to the first arrival's
+            // destination — that's "what's coming next."
+            let directionLabel: String = {
+                if let pinned = entry.preferences.pinnedTrainDestinations,
+                   pinned.count == 1 {
+                    return pinned[0]
+                }
+                return first.destinationName
+            }()
             return MediumDashboardView.TrainPick(
                 title: first.line.shortName,
-                directionLabel: entry.preferences.pinnedTrainDestination ?? first.destinationName,
+                directionLabel: directionLabel,
                 arrivals: arrivals
             )
         }
