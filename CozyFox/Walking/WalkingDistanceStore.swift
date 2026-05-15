@@ -222,9 +222,9 @@ final class WalkingDistanceStore {
     /// cell IDs are a stable industry standard rather than ad-hoc math.
     /// Falls back to a raw coord string on the (essentially impossible)
     /// chance H3 rejects the input as out-of-range.
-    static let cellResolution: H3Cell.Resolution = .res10
+    nonisolated static let cellResolution: H3Cell.Resolution = .res10
 
-    static func bucketKey(origin: (lat: Double, lon: Double), destinationKey: String) -> String {
+    nonisolated static func bucketKey(origin: (lat: Double, lon: Double), destinationKey: String) -> String {
         let cellID: String
         if let cell = try? H3LatLng(
             latitudeDegs: origin.lat,
@@ -237,23 +237,23 @@ final class WalkingDistanceStore {
         return "\(cellID)_\(destinationKey)"
     }
 
-    static func stationDestinationKey(stationId: Int) -> String {
+    nonisolated static func stationDestinationKey(stationId: Int) -> String {
         String(stationId)
     }
 
-    static func busStopDestinationKey(stopId: Int) -> String {
+    nonisolated static func busStopDestinationKey(stopId: Int) -> String {
         "bus-\(stopId)"
     }
 
-    static func metraStationDestinationKey(stationId: String) -> String {
+    nonisolated static func metraStationDestinationKey(stationId: String) -> String {
         "metra-\(stationId)"
     }
 
-    static func intercampusStopDestinationKey(stopId: String) -> String {
+    nonisolated static func intercampusStopDestinationKey(stopId: String) -> String {
         "intercampus-\(stopId)"
     }
 
-    static func bucketKey(origin: (lat: Double, lon: Double), stationId: Int) -> String {
+    nonisolated static func bucketKey(origin: (lat: Double, lon: Double), stationId: Int) -> String {
         bucketKey(origin: origin, destinationKey: stationDestinationKey(stationId: stationId))
     }
 

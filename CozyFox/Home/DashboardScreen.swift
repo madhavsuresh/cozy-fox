@@ -78,6 +78,7 @@ struct DashboardScreen: View {
                         liveUpdatesBar
                         headHomeCard
                         pleasantSurpriseCard
+                        portfolioSection
                         if shouldShowIntercampusSurface {
                             intercampusCard
                                 .id(DashboardRailDestination.intercampus)
@@ -4919,6 +4920,207 @@ struct DashboardScreen: View {
         Text(text)
             .font(ChicagoTypography.body(.medium, relativeTo: .caption))
             .foregroundStyle(ChicagoPalette.Gray.medium)
+    }
+
+    // MARK: - Portfolio (Phase 5)
+
+    /// Renders one card per active portfolio. Each card shows every
+    /// option ranked by score with the hysteresis-approved
+    /// recommendation highlighted. Empty when the user has no
+    /// portfolios.
+    @ViewBuilder
+    private var portfolioSection: some View {
+        let portfolios = routePreferences.portfolios
+        if !portfolios.isEmpty {
+            ForEach(portfolios) { portfolio in
+                portfolioCard(portfolio)
+            }
+        }
+    }
+
+    private func portfolioCard(_ portfolio: RoutePortfolio) -> some View {
+        let evaluation = model.portfolioEvaluations[portfolio.id]
+        let recommendation = model.portfolioRecommendations[portfolio.id]
+        let sortedOptions = sortedPortfolioOptions(portfolio: portfolio, evaluation: evaluation)
+
+        return ChicagoCard(
+            title: portfolio.title,
+            eyebrow: "Portfolio · \(portfolio.direction.label)",
+            ornament: .icon(systemName: "list.bullet.rectangle.fill"),
+            accent: ChicagoPalette.flagBlue
+        ) {
+            if sortedOptions.isEmpty {
+                Text("No options yet.")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else if evaluation == nil {
+                Text(model.isRefreshing ? "Evaluating…" : "Waiting for the next refresh.")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else {
+                VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                    ForEach(sortedOptions) { option in
+                        portfolioOptionRow(
+                            option: option,
+                            evaluation: evaluation?.evaluation(for: option.id),
+                            isRecommended: recommendation?.optionID == option.id,
+                            recommendation: recommendation
+                        )
+                    }
+                }
+                .animation(.easeInOut(duration: 0.25), value: recommendation?.optionID)
+            }
+        }
+    }
+
+    /// Stable per-option ordering: by aggregate score (ascending) when
+    /// an evaluation exists, otherwise by the portfolio's stored order.
+    /// Same-score ties fall back to insertion order so the list
+    /// doesn't shuffle on equally-good options.
+    private func sortedPortfolioOptions(
+        portfolio: RoutePortfolio,
+        evaluation: PortfolioEvaluation?
+    ) -> [RouteOption] {
+        guard let scores = evaluation?.scores else { return portfolio.options }
+        return portfolio.options
+            .enumerated()
+            .sorted { lhs, rhs in
+                let a = scores[lhs.element.id] ?? .infinity
+                let b = scores[rhs.element.id] ?? .infinity
+                if a == b { return lhs.offset < rhs.offset }
+                return a < b
+            }
+            .map(\.element)
+    }
+
+    @ViewBuilder
+    private func portfolioOptionRow(
+        option: RouteOption,
+        evaluation: RouteEvaluation?,
+        isRecommended: Bool,
+        recommendation: PortfolioRecommendation?
+    ) -> some View {
+        HStack(alignment: .top, spacing: ChicagoSpacing.sm) {
+            portfolioOptionBadge(option)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(option.label)
+                    .font(ChicagoTypography.body(
+                        isRecommended ? .medium : .regular,
+                        relativeTo: isRecommended ? .subheadline : .footnote
+                    ))
+                    .foregroundStyle(isRecommended
+                        ? ChicagoPalette.Gray.darkest
+                        : ChicagoPalette.Gray.dark)
+                    .lineLimit(1)
+                if let evaluation, !evaluation.available {
+                    Text(portfolioUnavailabilityText(for: evaluation.unavailableReason))
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                } else if isRecommended, let missCost = recommendation?.missCost {
+                    portfolioMissCostLine(
+                        missCost,
+                        lowConfidence: recommendation?.lowConfidence ?? false
+                    )
+                }
+            }
+            Spacer(minLength: ChicagoSpacing.sm)
+            if let evaluation {
+                portfolioOptionEta(evaluation: evaluation, prominent: isRecommended)
+            }
+        }
+        .padding(.vertical, isRecommended ? ChicagoSpacing.xs : 0)
+        .padding(.horizontal, isRecommended ? ChicagoSpacing.sm : 0)
+        .background(
+            isRecommended ? ChicagoPalette.Surface.elevated : .clear,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+    }
+
+    @ViewBuilder
+    private func portfolioOptionBadge(_ option: RouteOption) -> some View {
+        if let resolution = option.firstTransitLeg?.transit?.resolution {
+            switch resolution {
+            case .line(let line):
+                RouteBadge(line: line, size: .sm)
+            case .bus(let route):
+                RouteBadge(bus: route, size: .sm)
+            case .metra(let route):
+                RouteBadge(metra: route, size: .sm)
+            case .unknown:
+                Image(systemName: "questionmark.diamond")
+                    .font(.caption)
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            }
+        } else {
+            Image(systemName: "figure.walk")
+                .font(.caption)
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+        }
+    }
+
+    @ViewBuilder
+    private func portfolioOptionEta(evaluation: RouteEvaluation, prominent: Bool) -> some View {
+        if evaluation.available {
+            let minutes = max(0, Int((evaluation.etaMedian.timeIntervalSince(.now) / 60).rounded()))
+            if prominent {
+                BigNumber(
+                    minutes,
+                    unit: "min",
+                    size: .sm,
+                    tone: .primary,
+                    accessibilityLabel: "\(minutes) minutes"
+                )
+            } else {
+                Text("\(minutes) min")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            }
+        } else {
+            Image(systemName: "minus.circle")
+                .font(.caption)
+                .foregroundStyle(ChicagoPalette.Gray.light)
+        }
+    }
+
+    @ViewBuilder
+    private func portfolioMissCostLine(
+        _ missCost: MissCostResult,
+        lowConfidence: Bool
+    ) -> some View {
+        let opacity: Double = lowConfidence ? 0.55 : 1.0
+        if missCost.collapses {
+            Text("Last vehicle — no fallback")
+                .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.starRed.opacity(opacity))
+                .lineLimit(1)
+        } else if missCost.delta.isFinite, missCost.delta > 0 {
+            let mins = max(1, Int((missCost.delta / 60).rounded()))
+            Text("Miss cost: +\(mins) min")
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.medium.opacity(opacity))
+                .lineLimit(1)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private func portfolioUnavailabilityText(for reason: UnavailableReason?) -> String {
+        switch reason {
+        case .noArrivalsInHorizon:
+            return "No arrivals in the next 45 min."
+        case .lastVehicleAlreadyPassed:
+            return "Last vehicle already left."
+        case .staleFeed:
+            return "Feed delayed."
+        case .userTooFar:
+            return "Too far from boarding stop."
+        case .closedStation(let ids):
+            return "Closed station: \(ids.map(String.init).joined(separator: ", "))."
+        case .none:
+            return "Unavailable."
+        }
     }
 }
 
