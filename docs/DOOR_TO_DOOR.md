@@ -177,6 +177,59 @@ UI takeaway — the user shouldn't see `p_dock = 0.55` or this formula. They sho
 
 This is exactly the kind of decision the prediction layer should make silently, per the predictions-stay-invisible feedback memory.
 
+## Generalizing: fast-but-risky vs reliable baseline
+
+The classic-Divvy case is one instance of a shape that recurs throughout door-to-door planning. Worth naming, because once the prediction layer can handle this generally, a lot of choices collapse into the same machinery.
+
+### Shape
+
+Choose between:
+
+- A **reliable baseline** at known cost `T_base` (walking is the canonical one).
+- A **fast option** at cost `T_fast` that saves `B = T_base − T_fast` when it works, with probability `P_fail` of failing into a recovery action that costs `R` and may blow a downstream deadline with conditional miss probability `P_miss` and penalty `M`.
+
+Expected loss vs baseline:
+
+```
+E[Δ] = −B  +  P_fail × (R + P_miss × M)
+       └─┘    └──────┬───────┘ └─────┬─────┘
+      upside     risk-weighted    downside
+       (sure)     recovery cost   (catastrophic if M is big)
+```
+
+Fast option wins iff `B > P_fail × (R + P_miss × M)`.
+
+### Where the same skeleton applies
+
+Different problems in Cozy Fox's domain map onto exactly this template — only the variables change:
+
+| Decision                                          | `B` (upside)               | `P_fail` (failure mode)              | Deadline?               |
+|---------------------------------------------------|----------------------------|--------------------------------------|-------------------------|
+| Classic Divvy vs walk to fixed Metra              | bike time saved             | dock full at destination              | Yes — Metra departure    |
+| Tight transfer vs comfortable next train           | one headway saved           | miss the connection                   | Yes — the connection     |
+| Race the closer L stop vs walk further to the next | shorter walk                | train arrives before you do           | Yes — train arrival      |
+| E-Divvy final-mile vs walk from L                  | last-mile time saved        | dock empty / no usable bike           | Soft — meeting time      |
+| Bus vs walk, no deadline                           | bus speed                   | bus delayed                           | No                      |
+| Leave-now vs wait-for-next-Divvy-rebalance         | bike option opens up        | rebalance doesn't happen in time      | Whatever you're catching |
+
+### Structural insight
+
+**Bounded upside, potentially fat-tailed downside.** The upside `B` is capped by physics (a bike only saves so much vs walking). The downside is whatever `M` is — and `M` can be large (next Metra in 30 min, last train of the night, missing a meeting).
+
+Two regimes:
+
+- **No deadline (`M = 0`).** Collapses to ordinary expected-time minimization. `Fast wins iff B > P_fail × R`. This is where most mapping apps live and why they happily route you through risky shortcuts.
+- **Hard deadline (`M` large).** `P_fail × P_miss × M` dominates. Even a low `P_fail` can sink the decision if `M` is big enough. The prediction layer must trade some expected-time gain for catching-probability — the user wants to *make the train*, not optimize the median.
+
+### Implication for the prediction layer
+
+- A leg-selection output isn't just an ETA — it's `(recommended action, P_success, fallback)`. The fallback is part of the recommendation, not an afterthought.
+- Two policy modes corresponding to the regimes:
+    - **No deadline:** minimize `E[T]`.
+    - **Hard deadline:** ensure `P_catch ≥ θ` (e.g., 0.95) first, then minimize `E[T]` among options that clear the threshold.
+- The risk tolerance `θ` is itself **learnable** from the user's accept/reject behavior on past recommendations — consistent safe choices → tighten `θ`, consistent close calls → loosen. (Same shape as the existing learning roadmap: behavior reveals preference.)
+- **Multi-leg trips chain these decisions.** Leg-2's `P_miss` depends on leg-1's *actual* finish time, not its mean. So the right computation is over the joint distribution of leg outcomes, not the product of marginals. (Same point as the "Catching probability on multi-leg trips" section above — that section is one application of this general shape.)
+
 ## Open questions
 
 - Which divvy-observer models are stable enough to consume? (`predictor.py`, `tile_predictor.py`, `dg_nissm.py`, `cdg_nmip.py`... need to triage.)
