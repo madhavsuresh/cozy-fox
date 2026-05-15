@@ -63,7 +63,10 @@ struct WalkingDistanceResolverCorrectionTests {
         #expect(distance?.meters == 400)
     }
 
-    @Test func cyclingModeIsNeverCorrected() async {
+    @Test func cyclingModeIsNotAffectedByWalkingEstimate() async {
+        // Phase 5b: walking and cycling estimates are independent.
+        // Heavily-skewed walking samples must not bleed into cycling
+        // results.
         let store = Self.makeStore()
         store.record(
             meters: 800,
@@ -72,7 +75,6 @@ struct WalkingDistanceResolverCorrectionTests {
             destinationKey: WalkingDistanceStore.stationDestinationKey(stationId: 40380),
             mode: .cycling
         )
-        // 10 samples with ratio 1.5 — gate definitely passes.
         for _ in 0..<10 {
             store.recordWalkSpeedSample(WalkSpeedSample(
                 actualSeconds: 450,
@@ -86,8 +88,59 @@ struct WalkingDistanceResolverCorrectionTests {
             destinationKey: WalkingDistanceStore.stationDestinationKey(stationId: 40380),
             mode: .cycling
         )
-        // Cycling is never corrected — raw 180 stands.
+        // Walking estimate doesn't affect cycling — raw 180 stands.
         #expect(distance?.expectedTravelTime == 180)
+    }
+
+    @Test func cyclingAppliesCycleSpeedEstimateAtGate() async {
+        let store = Self.makeStore()
+        store.record(
+            meters: 800,
+            expectedTravelTime: 600,
+            origin: origin(),
+            destinationKey: WalkingDistanceStore.stationDestinationKey(stationId: 40380),
+            mode: .cycling
+        )
+        // 5 cycle samples at ratio 1.2 → gate clears, mean = 1.2.
+        for _ in 0..<5 {
+            store.recordCycleSpeedSample(WalkSpeedSample(
+                actualSeconds: 720,
+                expectedSeconds: 600,
+                recordedAt: Date()
+            ))
+        }
+        let resolver = WalkingDistanceResolver(store: store)
+        let distance = resolver.cached(
+            origin: origin(),
+            destinationKey: WalkingDistanceStore.stationDestinationKey(stationId: 40380),
+            mode: .cycling
+        )
+        #expect(distance != nil)
+        // 600 raw * 1.2 corrected = 720.
+        #expect(abs((distance?.expectedTravelTime ?? 0) - 720) < 1e-9)
+        // Distance (geography) unchanged.
+        #expect(distance?.meters == 800)
+    }
+
+    @Test func walkingIsNotAffectedByCyclingEstimate() async {
+        // Mirror — cycling samples don't leak into walking results.
+        let store = Self.makeStore()
+        store.record(
+            meters: 400,
+            expectedTravelTime: 300,
+            origin: origin(),
+            stationId: 40380
+        )
+        for _ in 0..<10 {
+            store.recordCycleSpeedSample(WalkSpeedSample(
+                actualSeconds: 720,
+                expectedSeconds: 600,
+                recordedAt: Date()
+            ))
+        }
+        let resolver = WalkingDistanceResolver(store: store)
+        let distance = resolver.cached(origin: origin(), stationId: 40380)
+        #expect(distance?.expectedTravelTime == 300)
     }
 
     @Test func clearingEstimateImmediatelyRevertsCorrection() async {

@@ -14,15 +14,21 @@ final class WalkingDistanceResolver {
         self.store = store
     }
 
-    /// Phase 5: applies the per-user `walkSpeedEstimate` to a cached
-    /// `WalkingDistance` if it's past the confidence gate. Walking only —
-    /// cycling speeds vary too much by effort/terrain/equipment for a
-    /// single multiplicative correction to be meaningful. Distance stays
-    /// unmodified (it's geography, not pace).
+    /// Phase 5 + Phase 5b: applies the per-user multiplicative speed
+    /// correction to a cached `WalkingDistance` when the relevant
+    /// estimate is past its confidence gate. Walking and cycling have
+    /// independent estimates because pace ratios don't transfer between
+    /// modes — they're shaped by completely different inputs (gait vs
+    /// terrain/effort/equipment). Distance stays unmodified; only
+    /// `expectedTravelTime` shifts.
     private func corrected(_ raw: WalkingDistance?, mode: AccessTravelMode) -> WalkingDistance? {
         guard let raw else { return nil }
-        guard mode == .walking else { return raw }
-        guard let ratio = store.walkSpeedEstimate.confidentRatio() else { return raw }
+        let ratio: Double?
+        switch mode {
+        case .walking: ratio = store.walkSpeedEstimate.confidentRatio()
+        case .cycling: ratio = store.cycleSpeedEstimate.confidentRatio()
+        }
+        guard let ratio else { return raw }
         return WalkingDistance(
             meters: raw.meters,
             expectedTravelTime: raw.expectedTravelTime * ratio,
