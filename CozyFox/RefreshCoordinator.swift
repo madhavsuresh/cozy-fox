@@ -429,6 +429,10 @@ final class RefreshCoordinator {
         if !collected.isEmpty {
             await store.replaceBusPredictions(collected)
         }
+        // Phase 2 (buses): register pending grades from the freshly
+        // fetched predictions. The grader's own guard short-circuits the
+        // empty case; calling unconditionally keeps behavior consistent.
+        await arrivalGrader.ingestBusPredictions(collected)
     }
 
     private func refreshMetra(
