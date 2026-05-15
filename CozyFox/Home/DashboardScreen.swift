@@ -249,12 +249,19 @@ struct DashboardScreen: View {
             suppressedUntil: model.homewardSuppressedUntil
         )
         if shouldShow {
+            let lastWarning = lastTrainWarning()
+            let copy: String = {
+                if let lastWarning {
+                    return "Last train in ~\(lastWarning.minutesUntilLast)m. Plan now?"
+                }
+                return "Plan a route from where you are."
+            }()
             HStack(spacing: ChicagoSpacing.md) {
                 VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                     Text("Head home?")
                         .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    Text("Plan a route from where you are.")
+                    Text(copy)
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(2)
@@ -278,10 +285,33 @@ struct DashboardScreen: View {
             }
             .padding(ChicagoSpacing.md)
             .background(
-                ChicagoPalette.Surface.elevated,
+                lastWarning != nil
+                    ? AnyShapeStyle(ChicagoPalette.starRed.opacity(0.10))
+                    : AnyShapeStyle(ChicagoPalette.Surface.elevated),
                 in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
             )
         }
+    }
+
+    /// Real-time "last train looks soon" check. Fires when the user is
+    /// `.elsewhere`, their habitual home-bound pattern is a train,
+    /// and the current snapshot's arrivals for that (line, station)
+    /// are sparse + winding down. Returns nil otherwise.
+    private func lastTrainWarning() -> LastTrainSafety.Warning? {
+        guard model.location.context == .elsewhere else { return nil }
+        let profile = model.preferences.loadMobilityProfile()
+        guard let homePattern = profile.summary.patterns(direction: .toHome)
+            .sorted(by: { $0.totalCount > $1.totalCount })
+            .first,
+            homePattern.mode == .train,
+            let line = LineColor(rawValue: homePattern.routeId),
+            let stationIdString = homePattern.topStationId,
+            let stationId = Int(stationIdString)
+        else { return nil }
+
+        let relevantArrivals = model.snapshot.trainArrivals
+            .filter { $0.line == line && $0.stationId == stationId }
+        return LastTrainSafety().warning(forArrivals: relevantArrivals)
     }
 
     // MARK: - Pleasant-surprise tile
