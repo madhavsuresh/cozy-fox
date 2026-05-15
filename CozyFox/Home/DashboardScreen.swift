@@ -696,9 +696,7 @@ struct DashboardScreen: View {
     private func tripDivvyContextRow(destination: PlannedTripPin.Destination?) -> some View {
         TripDivvyContextRow(
             originStations: tripDivvyOriginStationPicks(),
-            freeFloatingBikeCount: routePreferences.includeFreeFloatingBikes
-                ? model.snapshot.tripFreeFloatingBikeCount
-                : nil,
+            freeFloatingBikeCount: tripDivvyFreeFloatingBikeCount(),
             destinationDockStations: tripDivvyDestinationDockPicks(destination)
         )
     }
@@ -707,7 +705,7 @@ struct DashboardScreen: View {
         guard let origin = model.location.lastKnown else { return [] }
         return tripDivvyResolver.originStations(
             near: (origin.latitude, origin.longitude),
-            stations: model.snapshot.bikeStations,
+            stations: model.bikeInventory.stations,
             limit: 2
         )
     }
@@ -721,8 +719,19 @@ struct DashboardScreen: View {
 
         return tripDivvyResolver.destinationDockStations(
             near: (latitude, longitude),
-            stations: model.snapshot.bikeStations,
+            stations: model.bikeInventory.stations,
             limit: 2
+        )
+    }
+
+    private func tripDivvyFreeFloatingBikeCount() -> Int? {
+        guard routePreferences.includeFreeFloatingBikes,
+              let origin = model.location.lastKnown
+        else { return nil }
+        return tripDivvyResolver.freeFloatingEBikeCount(
+            near: (origin.latitude, origin.longitude),
+            eBikes: model.bikeInventory.eBikes,
+            includeFreeFloating: true
         )
     }
 
