@@ -39,6 +39,7 @@ final class RefreshCoordinator {
     private let busStopResolver = NearestBusStopResolver()
     private let metraStationResolver = NearestMetraStationResolver()
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
+    private let intercampusTrafficResolver = IntercampusTrafficETAResolver()
     private let corridorResolver = TransitCorridorResolver()
     private let autopinner = CommuteAutopinner()
     /// Phase 4: detects "user just boarded a train at a CTA L station"
@@ -741,10 +742,16 @@ final class RefreshCoordinator {
             catalog: IntercampusCatalog.all
         )
         var targetStopIds = Set(nearby.map(\.stop.id))
+        var trafficPriorityStopIds: Set<String> = []
+        var priorityDirections: Set<IntercampusDirection> = []
+        for entry in nearby where priorityDirections.insert(entry.direction).inserted {
+            trafficPriorityStopIds.insert(entry.stop.id)
+        }
         if let selectedStopId = prefs.pinnedIntercampusStopId,
            IntercampusCatalog.stop(id: selectedStopId) != nil
         {
             targetStopIds.insert(selectedStopId)
+            trafficPriorityStopIds.insert(selectedStopId)
         }
         guard !targetStopIds.isEmpty else {
             await store.replaceIntercampusArrivals([])
@@ -766,7 +773,12 @@ final class RefreshCoordinator {
                     perStopDirectionCounts[key] = count + 1
                     return true
                 }
-            await store.replaceIntercampusArrivals(capped)
+            let trafficAdjusted = await intercampusTrafficResolver.applyingTrafficEstimates(
+                to: capped,
+                priorityStopIds: trafficPriorityStopIds,
+                now: .now
+            )
+            await store.replaceIntercampusArrivals(trafficAdjusted)
         } catch {
             // Leave the previous cache in place on transient TripShot failures.
         }

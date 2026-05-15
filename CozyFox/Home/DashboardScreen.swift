@@ -2285,7 +2285,7 @@ struct DashboardScreen: View {
                         unit: "min",
                         size: .md,
                         tone: first.isDelayed ? .alert : .primary,
-                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle, \(first.timeSource.label.lowercased()) time"
+                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle, \(intercampusTimeSourceAccessibilityLabel(first.timeSource))"
                     )
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: ChicagoSpacing.xs) {
@@ -2295,8 +2295,8 @@ struct DashboardScreen: View {
                                 .lineLimit(1)
                             intercampusTimeSourceBadge(first.timeSource)
                         }
-                        if let vehicleLabel = first.vehicleLabel, !vehicleLabel.isEmpty {
-                            Text("Bus \(vehicleLabel)")
+                        if let vehicleStatus = intercampusVehicleStatusText(first) {
+                            Text(vehicleStatus)
                                 .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                                 .foregroundStyle(ChicagoPalette.Gray.light)
                                 .lineLimit(1)
@@ -2312,7 +2312,7 @@ struct DashboardScreen: View {
     }
 
     private func intercampusTimeSourceBadge(_ source: IntercampusArrivalTimeSource) -> some View {
-        let isLive = source == .liveMap
+        let isLive = source != .schedule
         return Text(source.label)
             .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
             .foregroundStyle(isLive ? intercampusAccent : ChicagoPalette.Gray.medium)
@@ -2323,7 +2323,50 @@ struct DashboardScreen: View {
                 (isLive ? intercampusAccent.opacity(0.14) : ChicagoPalette.Gray.light.opacity(0.16)),
                 in: Capsule()
             )
-            .accessibilityLabel(source == .liveMap ? "Live map time" : "Schedule time")
+            .accessibilityLabel(intercampusTimeSourceAccessibilityLabel(source))
+    }
+
+    private func intercampusTimeSourceAccessibilityLabel(_ source: IntercampusArrivalTimeSource) -> String {
+        switch source {
+        case .traffic: "Traffic ETA"
+        case .liveMap: "TripShot ETA"
+        case .schedule: "Schedule time"
+        }
+    }
+
+    private func intercampusVehicleStatusText(_ arrival: IntercampusArrival) -> String? {
+        var components: [String] = []
+        if let vehicleLabel = arrival.vehicleLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !vehicleLabel.isEmpty
+        {
+            components.append("Bus \(vehicleLabel)")
+        } else if arrival.vehicleLocation != nil {
+            components.append("Bus location")
+        }
+
+        if let distance = arrival.trafficEstimate?.distanceMeters {
+            components.append("\(intercampusDistanceText(distance)) away")
+        } else if let location = arrival.vehicleLocation {
+            components.append("location \(intercampusLocationAgeText(location.observedAt))")
+        }
+
+        guard !components.isEmpty else { return nil }
+        return components.joined(separator: " · ")
+    }
+
+    private func intercampusLocationAgeText(_ observedAt: Date) -> String {
+        let seconds = max(0, Date.now.timeIntervalSince(observedAt))
+        guard seconds >= 45 else { return "just now" }
+        return "\(max(1, Int((seconds / 60).rounded())))m ago"
+    }
+
+    private func intercampusDistanceText(_ meters: Double) -> String {
+        let miles = meters / 1_609.344
+        if miles >= 0.1 {
+            return String(format: "%.1f mi", miles)
+        }
+        let feet = max(50, Int(((meters * 3.28084) / 50).rounded()) * 50)
+        return "\(feet) ft"
     }
 
     private func intercampusArrivals(

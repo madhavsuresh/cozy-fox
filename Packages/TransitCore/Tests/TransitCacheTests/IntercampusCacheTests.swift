@@ -24,14 +24,31 @@ struct IntercampusCacheTests {
             arrivalAt: now.addingTimeInterval(300),
             delaySeconds: nil,
             isDelayed: false,
-            timeSource: .schedule
+            timeSource: .traffic,
+            vehicleLocation: IntercampusVehicleLocation(
+                id: "35002",
+                label: "35002",
+                latitude: 41.895,
+                longitude: -87.619,
+                heading: 181,
+                observedAt: now.addingTimeInterval(-30)
+            ),
+            trafficEstimate: IntercampusTrafficEstimate(
+                generatedAt: now,
+                sourceArrivalAt: now.addingTimeInterval(300),
+                arrivalAt: now.addingTimeInterval(240),
+                travelTime: 240,
+                distanceMeters: 1_200
+            )
         )
 
         await store.replaceIntercampusArrivals([arrival])
         let snapshot = await store.currentSnapshot(now: now)
 
         #expect(snapshot.intercampusArrivals == [arrival])
-        #expect(snapshot.intercampusArrivals.first?.timeSource == .schedule)
+        #expect(snapshot.intercampusArrivals.first?.timeSource == .traffic)
+        #expect(snapshot.intercampusArrivals.first?.vehicleLocation?.heading == 181)
+        #expect(snapshot.intercampusArrivals.first?.trafficEstimate?.distanceMeters == 1_200)
         #expect(snapshot.intercampusFetchedAt != nil)
     }
 }

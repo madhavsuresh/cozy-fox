@@ -56,17 +56,67 @@ public struct IntercampusStop: Codable, Sendable, Hashable, Identifiable {
 }
 
 public enum IntercampusArrivalTimeSource: String, Codable, Sendable, Hashable {
-    /// Time came from TripShot realtime updates, backed by the live vehicle map.
+    /// Time came from TripShot realtime stop-time updates.
     case liveMap
+    /// Time came from a fresh vehicle position plus traffic-aware road routing.
+    case traffic
     /// Time came from the static GTFS schedule because no realtime stop update
     /// was available for this trip/stop.
     case schedule
 
     public var label: String {
         switch self {
-        case .liveMap: "Live map"
+        case .liveMap: "TripShot ETA"
+        case .traffic: "Traffic ETA"
         case .schedule: "Schedule"
         }
+    }
+}
+
+public struct IntercampusVehicleLocation: Codable, Sendable, Hashable {
+    public let id: String?
+    public let label: String?
+    public let latitude: Double
+    public let longitude: Double
+    public let heading: Int?
+    public let observedAt: Date
+
+    public init(
+        id: String?,
+        label: String?,
+        latitude: Double,
+        longitude: Double,
+        heading: Int? = nil,
+        observedAt: Date
+    ) {
+        self.id = id
+        self.label = label
+        self.latitude = latitude
+        self.longitude = longitude
+        self.heading = heading
+        self.observedAt = observedAt
+    }
+}
+
+public struct IntercampusTrafficEstimate: Codable, Sendable, Hashable {
+    public let generatedAt: Date
+    public let sourceArrivalAt: Date
+    public let arrivalAt: Date
+    public let travelTime: TimeInterval
+    public let distanceMeters: Double
+
+    public init(
+        generatedAt: Date,
+        sourceArrivalAt: Date,
+        arrivalAt: Date,
+        travelTime: TimeInterval,
+        distanceMeters: Double
+    ) {
+        self.generatedAt = generatedAt
+        self.sourceArrivalAt = sourceArrivalAt
+        self.arrivalAt = arrivalAt
+        self.travelTime = travelTime
+        self.distanceMeters = distanceMeters
     }
 }
 
@@ -85,6 +135,8 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
     public let delaySeconds: Int?
     public let isDelayed: Bool
     public let timeSource: IntercampusArrivalTimeSource
+    public let vehicleLocation: IntercampusVehicleLocation?
+    public let trafficEstimate: IntercampusTrafficEstimate?
 
     public init(
         id: String,
@@ -100,7 +152,9 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
         arrivalAt: Date,
         delaySeconds: Int?,
         isDelayed: Bool,
-        timeSource: IntercampusArrivalTimeSource = .liveMap
+        timeSource: IntercampusArrivalTimeSource = .liveMap,
+        vehicleLocation: IntercampusVehicleLocation? = nil,
+        trafficEstimate: IntercampusTrafficEstimate? = nil
     ) {
         self.id = id
         self.routeId = routeId
@@ -116,10 +170,33 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
         self.delaySeconds = delaySeconds
         self.isDelayed = isDelayed
         self.timeSource = timeSource
+        self.vehicleLocation = vehicleLocation
+        self.trafficEstimate = trafficEstimate
     }
 
     public func minutesUntilArrival(now: Date = .now) -> Int {
         Int((arrivalAt.timeIntervalSince(now) / 60).rounded())
+    }
+
+    public func applyingTrafficEstimate(_ estimate: IntercampusTrafficEstimate) -> IntercampusArrival {
+        IntercampusArrival(
+            id: id,
+            routeId: routeId,
+            direction: direction,
+            tripId: tripId,
+            vehicleId: vehicleId,
+            vehicleLabel: vehicleLabel,
+            stopId: stopId,
+            stopName: stopName,
+            destinationName: destinationName,
+            generatedAt: generatedAt,
+            arrivalAt: estimate.arrivalAt,
+            delaySeconds: delaySeconds,
+            isDelayed: isDelayed,
+            timeSource: .traffic,
+            vehicleLocation: vehicleLocation,
+            trafficEstimate: estimate
+        )
     }
 }
 

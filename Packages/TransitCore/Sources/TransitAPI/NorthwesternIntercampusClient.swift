@@ -144,7 +144,7 @@ private enum TripShotIntercampusParser {
               let route = IntercampusCatalog.route(id: routeId),
               trip?.relationship != .canceled
         else { return [] }
-        let vehicle = tripVehicle ?? vehiclesByTripId[tripId]
+        let vehicle = vehiclesByTripId[tripId]?.overlaid(with: tripVehicle) ?? tripVehicle
 
         return fields
             .filter { $0.number == 2 }
@@ -175,7 +175,8 @@ private enum TripShotIntercampusParser {
                     arrivalAt: arrivalAt,
                     delaySeconds: delay,
                     isDelayed: abs(delay ?? 0) >= 60,
-                    timeSource: .liveMap
+                    timeSource: .liveMap,
+                    vehicleLocation: vehicle?.location
                 )
             }
     }
@@ -272,35 +273,92 @@ private enum TripShotIntercampusParser {
 private enum TripShotVehiclePositionParser {
     static func vehiclesByTripId(from data: Data) -> [String: IntercampusVehicleDescriptor] {
         let root = TripShotProtoReader.fields(in: data)
+        let feedTimestamp = TripShotIntercampusParser.feedTimestamp(from: data)
         return Dictionary(
             root
                 .filter { $0.number == 2 }
                 .compactMap(\.bytes)
-                .compactMap(parseVehiclePositionEntity),
+                .compactMap { parseVehiclePositionEntity($0, feedTimestamp: feedTimestamp) },
             uniquingKeysWith: { current, _ in current }
         )
     }
 
-    private static func parseVehiclePositionEntity(_ data: Data) -> (String, IntercampusVehicleDescriptor)? {
+    private static func parseVehiclePositionEntity(
+        _ data: Data,
+        feedTimestamp: Date?
+    ) -> (String, IntercampusVehicleDescriptor)? {
         let entity = TripShotProtoReader.fields(in: data)
         guard let vehiclePositionData = entity.first(where: { $0.number == 4 })?.bytes else {
             return nil
         }
         let fields = TripShotProtoReader.fields(in: vehiclePositionData)
+        let timestamp = fields.first(where: { $0.number == 5 })?.varintValue
+            .map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? feedTimestamp ?? Date()
         guard let trip = fields.first(where: { $0.number == 1 })?.bytes.map(TripShotIntercampusParser.parseTripDescriptor),
               let tripId = trip.tripId.nonEmpty,
               (trip.routeId.nonEmpty.flatMap(IntercampusCatalog.route(id:)) != nil
                   || IntercampusCatalog.routeId(forTrip: tripId) != nil),
-              let vehicle = fields.first(where: { $0.number == 8 })?.bytes.map(TripShotIntercampusParser.parseVehicleDescriptor),
-              vehicle.id.nonEmpty != nil || vehicle.label.nonEmpty != nil
+              let vehicle = fields.first(where: { $0.number == 8 })?.bytes.map(TripShotIntercampusParser.parseVehicleDescriptor)
         else { return nil }
-        return (tripId, vehicle)
+        let position = fields.first(where: { $0.number == 2 })?.bytes.flatMap(parsePosition)
+        guard vehicle.id.nonEmpty != nil || vehicle.label.nonEmpty != nil || position != nil else {
+            return nil
+        }
+        let location = position.map {
+            IntercampusVehicleLocation(
+                id: vehicle.id,
+                label: vehicle.label,
+                latitude: Double($0.latitude),
+                longitude: Double($0.longitude),
+                heading: $0.bearing.map { Int($0.rounded()) },
+                observedAt: timestamp
+            )
+        }
+        return (tripId, IntercampusVehicleDescriptor(
+            id: vehicle.id,
+            label: vehicle.label,
+            location: location
+        ))
+    }
+
+    private static func parsePosition(_ data: Data) -> Position? {
+        let fields = TripShotProtoReader.fields(in: data)
+        guard let lat = fields.first(where: { $0.number == 1 })?.floatValue,
+              let lon = fields.first(where: { $0.number == 2 })?.floatValue
+        else { return nil }
+        return Position(
+            latitude: lat,
+            longitude: lon,
+            bearing: fields.first(where: { $0.number == 3 })?.floatValue
+        )
+    }
+
+    private struct Position {
+        let latitude: Float
+        let longitude: Float
+        let bearing: Float?
     }
 }
 
 private struct IntercampusVehicleDescriptor: Sendable, Hashable {
     let id: String?
     let label: String?
+    let location: IntercampusVehicleLocation?
+
+    init(id: String?, label: String?, location: IntercampusVehicleLocation? = nil) {
+        self.id = id
+        self.label = label
+        self.location = location
+    }
+
+    func overlaid(with preferred: IntercampusVehicleDescriptor?) -> IntercampusVehicleDescriptor {
+        guard let preferred else { return self }
+        return IntercampusVehicleDescriptor(
+            id: preferred.id.nonEmpty ?? id,
+            label: preferred.label.nonEmpty ?? label,
+            location: preferred.location ?? location
+        )
+    }
 }
 
 private extension IntercampusArrival {
@@ -320,7 +378,9 @@ private extension IntercampusArrival {
             arrivalAt: arrivalAt,
             delaySeconds: delaySeconds,
             isDelayed: isDelayed,
-            timeSource: timeSource
+            timeSource: timeSource,
+            vehicleLocation: vehicleLocation ?? vehicle.location,
+            trafficEstimate: trafficEstimate
         )
     }
 }
