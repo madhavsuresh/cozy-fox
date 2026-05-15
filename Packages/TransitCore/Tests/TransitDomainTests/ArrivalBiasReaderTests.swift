@@ -144,6 +144,69 @@ struct ArrivalBiasReaderTests {
         #expect(spy.keys.count == 1)
         #expect(spy.keys.first?.stopId == "30074")
     }
+
+    // MARK: - Bus variant
+
+    private func busPrediction(
+        route: String = "22",
+        stopId: Int = 1818,
+        directionName: String = "Northbound",
+        arrivalAt: Date = arrivalInstant
+    ) -> BusPrediction {
+        BusPrediction(
+            id: "\(route)-\(stopId)-\(arrivalAt.timeIntervalSince1970)",
+            route: route,
+            routeName: "Clark",
+            vehicleId: "1841",
+            stopId: stopId,
+            stopName: "Clark & Division",
+            destinationName: "Howard",
+            directionName: directionName,
+            generatedAt: arrivalAt.addingTimeInterval(-300),
+            arrivalAt: arrivalAt,
+            isDelayed: false,
+            isApproaching: false
+        )
+    }
+
+    @Test func busEmptyPredictionsReturnsNil() {
+        let result = reader.headlineCorrection(
+            busPredictions: [],
+            cellLookup: { _ in nil }
+        )
+        #expect(result == nil)
+    }
+
+    @Test func busHeadlineKeyMatchesRouteStopDirection() {
+        let target = busPrediction()
+        let spy = LookupSpy()
+        _ = reader.headlineCorrection(
+            busPredictions: [target],
+            cellLookup: { key in
+                spy.record(key)
+                return nil
+            },
+            calendar: Self.chicagoCalendar
+        )
+        let observed = spy.keys.first
+        #expect(observed?.line == "22")
+        #expect(observed?.stopId == "1818")
+        #expect(observed?.direction == "Northbound")
+        #expect(observed?.hourClass == .amPeak)
+        #expect(observed?.weekdayClass == .weekdayPeak)
+        #expect(observed?.season == .spring)
+    }
+
+    @Test func busHeadlineWithConfidentCellReturnsCorrection() {
+        let confident = cell(count: 36, mean: 120, stddev: 60)
+        let result = reader.headlineCorrection(
+            busPredictions: [busPrediction()],
+            cellLookup: { _ in confident },
+            calendar: Self.chicagoCalendar
+        )
+        #expect(result != nil)
+        #expect(result?.magnitudeSeconds == 120)
+    }
 }
 
 /// Sendable-safe spy for recording `BiasCellKey` invocations from the

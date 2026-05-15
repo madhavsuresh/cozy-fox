@@ -744,6 +744,7 @@ struct DashboardScreen: View {
                 pinAlertInlineSummary(alerts)
             }
             if let minutes, let first {
+                let biasCorrection = headlineBiasCorrection(for: predictions)
                 HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
                     BigNumber(
                         minutes,
@@ -756,6 +757,13 @@ struct DashboardScreen: View {
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
+                }
+                if let biasCorrection {
+                    Text(biasCorrection.displayText)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .accessibilityLabel(biasCorrection.accessibilityLabel)
                 }
                 HeadwayDotStrip(arrivals: predictions.prefix(8).map(\.arrivalAt),
                                 accent: ChicagoPalette.Mode.bus)
@@ -2941,6 +2949,7 @@ struct DashboardScreen: View {
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else if let minutes, let first {
+                let biasCorrection = headlineBiasCorrection(for: predictions)
                 HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
                     BigNumber(
                         minutes,
@@ -2953,6 +2962,13 @@ struct DashboardScreen: View {
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
+                }
+                if let biasCorrection {
+                    Text(biasCorrection.displayText)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .accessibilityLabel(biasCorrection.accessibilityLabel)
                 }
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),
@@ -3733,6 +3749,18 @@ struct DashboardScreen: View {
         let cells = model.arrivalBiasStore.cells
         return ArrivalBiasReader().headlineCorrection(
             arrivals: arrivals,
+            cellLookup: { cells[$0] }
+        )
+    }
+
+    /// Bus variant — same gates, keyed off `BusPrediction.route` /
+    /// `stopId` / `directionName`.
+    private func headlineBiasCorrection(
+        for busPredictions: [BusPrediction]
+    ) -> ArrivalBiasCorrection? {
+        let cells = model.arrivalBiasStore.cells
+        return ArrivalBiasReader().headlineCorrection(
+            busPredictions: busPredictions,
             cellLookup: { cells[$0] }
         )
     }

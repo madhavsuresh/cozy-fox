@@ -470,6 +470,216 @@ struct ArrivalGraderTests {
         #expect(resolved == 0)
     }
 
+    // MARK: - ingestBusPredictions
+
+    private func makeBusPrediction(
+        route: String = "22",
+        vehicleId: String = "1841",
+        stopId: Int = 1818,
+        directionName: String = "Northbound",
+        generatedAt: Date,
+        arrivalAt: Date
+    ) -> BusPrediction {
+        BusPrediction(
+            id: "\(route)-\(vehicleId)-\(stopId)-\(Int(arrivalAt.timeIntervalSinceReferenceDate))",
+            route: route,
+            routeName: "Clark",
+            vehicleId: vehicleId,
+            stopId: stopId,
+            stopName: "Clark & Division",
+            destinationName: "Howard",
+            directionName: directionName,
+            generatedAt: generatedAt,
+            arrivalAt: arrivalAt,
+            isDelayed: false,
+            isApproaching: false
+        )
+    }
+
+    @Test func busIngestSkipsPredictionsInsideLeadTimeWindow() async {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-bus-leadtime"))
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let tooClose = makeBusPrediction(
+            generatedAt: t0,
+            arrivalAt: t0.addingTimeInterval(2 * 60)
+        )
+        let okPrediction = makeBusPrediction(
+            vehicleId: "1842",
+            stopId: 1820,
+            generatedAt: t0,
+            arrivalAt: t0.addingTimeInterval(5 * 60)
+        )
+        await grader.ingestBusPredictions([tooClose, okPrediction], now: t0)
+        #expect(grader.pendingCountForTests == 1)
+    }
+
+    @Test func busIngestFirstPredictionWins() async {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-bus-firstwin"))
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let firstArrival = t0.addingTimeInterval(5 * 60)
+        let original = makeBusPrediction(generatedAt: t0, arrivalAt: firstArrival)
+        let updated = makeBusPrediction(generatedAt: t0.addingTimeInterval(60), arrivalAt: firstArrival.addingTimeInterval(120))
+
+        await grader.ingestBusPredictions([original], now: t0)
+        await grader.ingestBusPredictions([updated], now: t0.addingTimeInterval(60))
+        #expect(grader.pendingCountForTests == 1)
+        // The pending grade's firstPredictedArrivalAt should still be the
+        // original (5 min), not the updated (7 min). This is the
+        // load-bearing "API doesn't grade itself by re-predicting" guard.
+        let pending = grader._pendingForTests(line: "22", runNumber: "1841", stopId: 1818)
+        #expect(pending != nil)
+        #expect(pending?.firstPredictedArrivalAt == firstArrival)
+    }
+
+    // MARK: - bus position crossing resolution
+
+    @Test func busPositionTransitionResolvesPendingGrade() async {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-bus-crossing"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let predictedArrival = t0.addingTimeInterval(5 * 60)
+        let prediction = makeBusPrediction(generatedAt: t0, arrivalAt: predictedArrival)
+        await grader.ingestBusPredictions([prediction], now: t0)
+        #expect(grader.pendingCountForTests == 1)
+
+        // First snapshot: bus heading to our stop (id 1818).
+        let frame1 = makePosition(
+            runNumber: "1841",
+            route: "22",
+            nextStopId: 1818,
+            observedAt: t0.addingTimeInterval(3 * 60),
+            mode: .bus
+        )
+        await grader.ingestPositions([frame1], now: t0.addingTimeInterval(3 * 60))
+
+        // Second snapshot: bus has rolled past 1818, now heading to 1819.
+        // Crossed-at timestamp = observedAt of frame2.
+        let observedCrossingAt = t0.addingTimeInterval(6 * 60)
+        let frame2 = makePosition(
+            runNumber: "1841",
+            route: "22",
+            nextStopId: 1819,
+            observedAt: observedCrossingAt,
+            mode: .bus
+        )
+        await grader.ingestPositions([frame2], now: observedCrossingAt)
+
+        // Sample written: bus arrived 1 min late (predicted 5 min,
+        // observed 6 min). Welford delta = +60 s.
+        let cellKey = BiasCellKey.make(
+            line: "22",
+            stopId: "1818",
+            direction: "Northbound",
+            at: predictedArrival
+        )
+        let cell = store.snapshot(key: cellKey)
+        #expect(cell?.count == 1)
+        #expect(abs((cell?.mean ?? 0) - 60) < 1e-9)
+        #expect(grader.pendingCountForTests == 0)
+    }
+
+    @Test func busVehicleIdCollidingWithTrainRunDoesNotCrossContaminate() async {
+        // A bus and a train both happen to use id "401". The split
+        // previous-snapshot maps must keep them independent — a bus
+        // crossing shouldn't fire against a stale train run entry and
+        // vice versa.
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-bus-collision"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        // Train prediction at stopId 30173.
+        let trainArrival = makeArrival(
+            line: .red,
+            runNumber: "401",
+            stopId: 30173,
+            predictedAt: t0,
+            arrivalAt: t0.addingTimeInterval(5 * 60)
+        )
+        // Bus prediction with id "401" at stopId 1818.
+        let busPrediction = makeBusPrediction(
+            route: "22",
+            vehicleId: "401",
+            stopId: 1818,
+            generatedAt: t0,
+            arrivalAt: t0.addingTimeInterval(5 * 60)
+        )
+        await grader.ingestArrivals([trainArrival], now: t0)
+        await grader.ingestBusPredictions([busPrediction], now: t0)
+        #expect(grader.pendingCountForTests == 2)
+
+        // Frame 1: train sees 30173, bus sees 1818. Both separate.
+        let frame1Train = makePosition(
+            runNumber: "401", route: "red",
+            nextStopId: 30173, observedAt: t0.addingTimeInterval(3 * 60),
+            mode: .train
+        )
+        let frame1Bus = makePosition(
+            runNumber: "401", route: "22",
+            nextStopId: 1818, observedAt: t0.addingTimeInterval(3 * 60),
+            mode: .bus
+        )
+        await grader.ingestPositions([frame1Train, frame1Bus], now: t0.addingTimeInterval(3 * 60))
+
+        // Frame 2: train rolls past 30173, bus rolls past 1818.
+        let frame2Train = makePosition(
+            runNumber: "401", route: "red",
+            nextStopId: 30174, observedAt: t0.addingTimeInterval(6 * 60),
+            mode: .train
+        )
+        let frame2Bus = makePosition(
+            runNumber: "401", route: "22",
+            nextStopId: 1819, observedAt: t0.addingTimeInterval(6 * 60),
+            mode: .bus
+        )
+        await grader.ingestPositions([frame2Train, frame2Bus], now: t0.addingTimeInterval(6 * 60))
+
+        // Both pending grades resolve cleanly — no cross-contamination.
+        #expect(grader.pendingCountForTests == 0)
+
+        // Train cell key uses "red" / "30173", bus cell key uses
+        // "22" / "1818". Neither should contain the other's sample.
+        let trainKey = BiasCellKey.make(
+            line: "red", stopId: "30173", direction: "1",
+            at: trainArrival.arrivalAt
+        )
+        let busKey = BiasCellKey.make(
+            line: "22", stopId: "1818", direction: "Northbound",
+            at: busPrediction.arrivalAt
+        )
+        #expect(store.snapshot(key: trainKey)?.count == 1)
+        #expect(store.snapshot(key: busKey)?.count == 1)
+    }
+
+    @Test func metraPositionsAreIgnoredByGrader() async {
+        // Metra `VehiclePosition.nextStopId` is a stop sequence index,
+        // not a stop id, so it would falsely match if we processed it.
+        // Verify positions of mode .metra are silently skipped.
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-metra-skip"))
+        await store.hydrateFromDiskIfNeeded()
+        let grader = ArrivalGrader(biasStore: store, calendar: .current)
+
+        let frame1 = makePosition(
+            runNumber: "UPN-12345", route: "UP-N",
+            nextStopId: 5, observedAt: t0,
+            mode: .metra
+        )
+        let frame2 = makePosition(
+            runNumber: "UPN-12345", route: "UP-N",
+            nextStopId: 6, observedAt: t0.addingTimeInterval(60),
+            mode: .metra
+        )
+        await grader.ingestPositions([frame1], now: t0)
+        await grader.ingestPositions([frame2], now: t0.addingTimeInterval(60))
+
+        // Metra positions don't seed `previousNextStopByBusVehicle` or
+        // `previousNextStopByTrainRun` — they're tracked nowhere.
+        #expect(grader.trackedRunCountForTests == 0)
+        #expect(grader.trackedBusVehicleCountForTests == 0)
+    }
+
     // MARK: - Helpers
 
     static func temporaryFile(name: String) -> URL {

@@ -49,4 +49,25 @@ public struct ArrivalBiasReader: Sendable {
         )
         return ArrivalBiasCorrection.from(cell: cellLookup(key))
     }
+
+    /// Bus variant. Same contract as the train overload, with the
+    /// `BiasCellKey` derived from `BusPrediction.route` / `stopId` /
+    /// `directionName`. `directionName` rather than a numeric code
+    /// because CTA bus feeds use directional words ("Northbound",
+    /// "Eastbound", …) and we want one cell per direction per stop.
+    public func headlineCorrection(
+        busPredictions: [BusPrediction],
+        cellLookup: CellLookup,
+        calendar: Calendar = .current
+    ) -> ArrivalBiasCorrection? {
+        guard let first = busPredictions.first else { return nil }
+        let key = BiasCellKey.make(
+            line: first.route,
+            stopId: String(first.stopId),
+            direction: first.directionName,
+            at: first.arrivalAt,
+            calendar: calendar
+        )
+        return ArrivalBiasCorrection.from(cell: cellLookup(key))
+    }
 }

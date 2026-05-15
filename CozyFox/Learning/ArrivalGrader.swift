@@ -12,11 +12,11 @@ import TransitModels
 /// any unresolved trips' grades; the bias store itself is persistent so
 /// accumulated samples carry across launches.
 ///
-/// Train-only. Buses (`BusPrediction`) and Metra (`MetraPrediction`) have
-/// their own prediction shapes and the matching semantics differ enough
-/// that they're a separate problem. The extension point is
-/// `ArrivalGradeMatcher.crossings(..., mode:)` — wiring buses or Metra in
-/// later only needs a new `ingest...` overload here, not a matcher rewrite.
+/// Trains + buses. Metra has the same `ArrivalGradeMatcher` extension
+/// point (`crossings(..., mode: .metra)`) but its `VehiclePosition`
+/// `nextStopId` is `current_stop_sequence` rather than a stop id, so
+/// passive resolution doesn't work without a separate trip-sequence
+/// index. Metra grading is deferred to a follow-up.
 @MainActor
 final class ArrivalGrader {
     /// Active pending grades, keyed by `(line, runNumber, stopId)`. The
@@ -27,10 +27,13 @@ final class ArrivalGrader {
     /// approaches and grade against the most-recent value.
     private var pending: [PendingGradeKey: ArrivalGradeMatcher.PendingGrade] = [:]
 
-    /// Map from `VehiclePosition.id` (run number for trains) to the
-    /// previously-observed `nextStopId`. Rebuilt every `ingestPositions`
-    /// call. Reset on app launch — Phase 2 is in-memory only.
-    private var previousNextStopByRun: [String: Int] = [:]
+    /// Map from `VehiclePosition.id` (run number for trains, vehicle id
+    /// for buses) to the previously-observed `nextStopId`. Split by mode
+    /// so a bus vehicle id can't shadow a train run number that happens
+    /// to share the same digits — they live in independent id spaces.
+    /// Reset on app launch.
+    private var previousNextStopByTrainRun: [String: Int] = [:]
+    private var previousNextStopByBusVehicle: [String: Int] = [:]
 
     /// Map from `Arrival.stopId` (per-platform) to `Arrival.stationId`
     /// (per-station). Phase 4 boarding events arrive at the station
@@ -41,10 +44,11 @@ final class ArrivalGrader {
     /// separate `LStationCatalog` index. Reset on app launch.
     private var stationIdByStopId: [Int: Int] = [:]
 
-    /// Wall-clock timestamp of the last snapshot that included each run.
-    /// Used to evict stale entries from `previousNextStopByRun` so the
-    /// map doesn't grow unbounded over a long-running session.
-    private var lastSeenByRun: [String: Date] = [:]
+    /// Wall-clock timestamp of the last snapshot that included each
+    /// tracked run/vehicle. Used to evict stale entries from
+    /// `previousNextStop*` so the maps don't grow unbounded.
+    private var lastSeenByTrainRun: [String: Date] = [:]
+    private var lastSeenByBusVehicle: [String: Date] = [:]
 
     /// Maximum age before a tracked run is dropped from
     /// `previousNextStopByRun`. 60 minutes is comfortably longer than the
@@ -106,6 +110,39 @@ final class ArrivalGrader {
         }
     }
 
+    /// Register pending grades from a freshly-fetched batch of bus
+    /// predictions. Same shape as `ingestArrivals` but keyed by
+    /// `(route, vehicleId, stopId)`. Buses don't have a "run number"
+    /// concept — `vehicleId` is its functional analog (the bus assigned
+    /// to that pull at that stop). `directionName` becomes the cell key's
+    /// direction component.
+    func ingestBusPredictions(
+        _ predictions: [BusPrediction],
+        now: Date = .now,
+        minLeadTime: TimeInterval = 3 * 60
+    ) async {
+        guard !predictions.isEmpty else { return }
+        if let biasStore { await biasStore.hydrateFromDiskIfNeeded() }
+
+        for prediction in predictions {
+            guard prediction.arrivalAt.timeIntervalSince(now) >= minLeadTime else { continue }
+            let key = PendingGradeKey(
+                line: prediction.route,
+                runNumber: prediction.vehicleId,
+                stopId: prediction.stopId
+            )
+            guard pending[key] == nil else { continue }
+            pending[key] = ArrivalGradeMatcher.PendingGrade(
+                line: prediction.route,
+                runNumber: prediction.vehicleId,
+                stopId: prediction.stopId,
+                directionCode: prediction.directionName,
+                firstPredictedAt: prediction.generatedAt,
+                firstPredictedArrivalAt: prediction.arrivalAt
+            )
+        }
+    }
+
     /// Ingest a fresh vehicle-position snapshot. Diffs against the prior
     /// snapshot to detect `nextStopId` transitions (= crossings), writes
     /// the resolved deltas into the bias store, and prunes both expired
@@ -114,15 +151,27 @@ final class ArrivalGrader {
         _ positions: [VehiclePosition],
         now: Date = .now
     ) async {
-        // 1. Compute crossings vs. the previous snapshot.
-        let crossings = matcher.crossings(
-            previousNextStopByRun: previousNextStopByRun,
+        // 1. Compute crossings vs. the previous snapshot. Trains and
+        // buses both use the same `nextStopId`-transition heuristic
+        // (`nextStopId` for buses is the upcoming stop id reported by
+        // the bus tracker). Metra excluded — its `nextStopId` is a
+        // stop sequence index, not a stop id, and would falsely match.
+        let trainCrossings = matcher.crossings(
+            previousNextStopByRun: previousNextStopByTrainRun,
             current: positions,
             mode: .train
         )
+        let busCrossings = matcher.crossings(
+            previousNextStopByRun: previousNextStopByBusVehicle,
+            current: positions,
+            mode: .bus
+        )
 
         // 2. Reconcile and write resolved samples to the bias store.
-        let resolutions = matcher.reconcile(crossings: crossings, pending: pending)
+        let resolutions = matcher.reconcile(
+            crossings: trainCrossings + busCrossings,
+            pending: pending
+        )
         for resolution in resolutions {
             let grade = resolution.pending
             let key = BiasCellKey.make(
@@ -146,26 +195,38 @@ final class ArrivalGrader {
             )
         }
 
-        // 3. Refresh `previousNextStopByRun` and `lastSeenByRun` from the
-        // current snapshot. Train-only; non-train modes are ignored so a
-        // bus showing up in the same snapshot doesn't crowd the map.
-        for position in positions where position.mode == .train {
-            lastSeenByRun[position.id] = position.observedAt
-            if let nextStop = position.nextStopId {
-                previousNextStopByRun[position.id] = nextStop
+        // 3. Refresh the previous-snapshot + last-seen maps. Train +
+        // bus only; Metra positions are skipped because their
+        // `nextStopId` semantics don't match. Mode-split so a bus
+        // vehicle id can't overwrite a train run's entry.
+        for position in positions {
+            switch position.mode {
+            case .train:
+                lastSeenByTrainRun[position.id] = position.observedAt
+                if let nextStop = position.nextStopId {
+                    previousNextStopByTrainRun[position.id] = nextStop
+                }
+            case .bus:
+                lastSeenByBusVehicle[position.id] = position.observedAt
+                if let nextStop = position.nextStopId {
+                    previousNextStopByBusVehicle[position.id] = nextStop
+                }
+            case .metra:
+                break
             }
         }
 
-        // 4. Prune runs that haven't been seen in a while. Walk the
-        // last-seen map and drop both entries together.
+        // 4. Prune runs/vehicles that haven't been seen in a while.
         let runTTLCutoff = now.addingTimeInterval(-Self.runTrackTTL)
-        var staleRuns: [String] = []
-        for (run, lastSeen) in lastSeenByRun where lastSeen < runTTLCutoff {
-            staleRuns.append(run)
+        let staleTrains = lastSeenByTrainRun.filter { $0.value < runTTLCutoff }.map(\.key)
+        for run in staleTrains {
+            lastSeenByTrainRun.removeValue(forKey: run)
+            previousNextStopByTrainRun.removeValue(forKey: run)
         }
-        for run in staleRuns {
-            lastSeenByRun.removeValue(forKey: run)
-            previousNextStopByRun.removeValue(forKey: run)
+        let staleBuses = lastSeenByBusVehicle.filter { $0.value < runTTLCutoff }.map(\.key)
+        for vehicle in staleBuses {
+            lastSeenByBusVehicle.removeValue(forKey: vehicle)
+            previousNextStopByBusVehicle.removeValue(forKey: vehicle)
         }
 
         // 5. Drop expired pending grades (>30 min past their predicted
@@ -259,7 +320,10 @@ final class ArrivalGrader {
         pending[PendingGradeKey(line: line, runNumber: runNumber, stopId: stopId)]
     }
 
-    /// Test-only: the size of the previous-next-stop map (used to verify
-    /// run-track pruning).
-    var trackedRunCountForTests: Int { previousNextStopByRun.count }
+    /// Test-only: the size of the train previous-next-stop map (used to
+    /// verify run-track pruning). Bus variant available via
+    /// `trackedBusVehicleCountForTests`.
+    var trackedRunCountForTests: Int { previousNextStopByTrainRun.count }
+
+    var trackedBusVehicleCountForTests: Int { previousNextStopByBusVehicle.count }
 }
