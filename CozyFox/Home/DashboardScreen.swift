@@ -821,6 +821,7 @@ struct DashboardScreen: View {
             }
             if let minutes, let first {
                 let biasCorrection = headlineBiasCorrection(for: predictions)
+                let bunching = bunchingHint(for: predictions)
                 HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
                     BigNumber(
                         minutes,
@@ -840,6 +841,13 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
                         .accessibilityLabel(biasCorrection.accessibilityLabel)
+                }
+                if let bunching {
+                    Text("+ another in \(bunching.minutes)m")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .accessibilityLabel("Another Route \(bus.route) bus in \(bunching.minutes) minutes")
                 }
                 HeadwayDotStrip(arrivals: predictions.prefix(8).map(\.arrivalAt),
                                 accent: ChicagoPalette.Mode.bus)
@@ -2498,6 +2506,7 @@ struct DashboardScreen: View {
                     let firstAssessment = assessments[first.id]
                     let isGhostLikely = firstAssessment?.isGhostLikely == true
                     let biasCorrection = headlineBiasCorrection(for: times)
+                    let bunching = bunchingHint(for: times)
                     VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
                         Text("→ \(dest)")
                             .font(ChicagoTypography.body(.medium, relativeTo: .caption))
@@ -2525,6 +2534,13 @@ struct DashboardScreen: View {
                                 .foregroundStyle(ChicagoPalette.Gray.medium)
                                 .lineLimit(1)
                                 .accessibilityLabel(biasCorrection.accessibilityLabel)
+                        }
+                        if let bunching {
+                            Text("+ another in \(bunching.minutes)m")
+                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                .foregroundStyle(ChicagoPalette.Gray.medium)
+                                .lineLimit(1)
+                                .accessibilityLabel("Another \(dest) train in \(bunching.minutes) minutes")
                         }
                         HeadwayDotStrip(
                             arrivals: times.prefix(8).map(\.arrivalAt),
@@ -3027,6 +3043,7 @@ struct DashboardScreen: View {
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else if let minutes, let first {
                 let biasCorrection = headlineBiasCorrection(for: predictions)
+                let bunching = bunchingHint(for: predictions)
                 HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
                     BigNumber(
                         minutes,
@@ -3046,6 +3063,13 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .lineLimit(1)
                         .accessibilityLabel(biasCorrection.accessibilityLabel)
+                }
+                if let bunching {
+                    Text("+ another in \(bunching.minutes)m")
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                        .lineLimit(1)
+                        .accessibilityLabel("Another bus in \(bunching.minutes) minutes")
                 }
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),
@@ -3840,6 +3864,23 @@ struct DashboardScreen: View {
             busPredictions: busPredictions,
             cellLookup: { cells[$0] }
         )
+    }
+
+    /// Real-time observation (not a learned prediction): is the
+    /// headline arrival bunched with the next one? Pure function of
+    /// the current API snapshot's spacing — flips the dashboard's
+    /// "+ another in Nm" muted line on when the gap to the next
+    /// arrival is anomalously short relative to subsequent gaps.
+    private func bunchingHint(for arrivals: [Arrival]) -> HeadwayBunchingDetector.Hint? {
+        HeadwayBunchingDetector().detect(arrivalTimes: arrivals.map(\.arrivalAt))
+    }
+
+    private func bunchingHint(for busPredictions: [BusPrediction]) -> HeadwayBunchingDetector.Hint? {
+        HeadwayBunchingDetector().detect(arrivalTimes: busPredictions.map(\.arrivalAt))
+    }
+
+    private func bunchingHint(for metraPredictions: [MetraPrediction]) -> HeadwayBunchingDetector.Hint? {
+        HeadwayBunchingDetector().detect(arrivalTimes: metraPredictions.map(\.arrivalAt))
     }
 
     private func predictions(for stop: BusStop, limit: Int = 3) -> [BusPrediction] {
