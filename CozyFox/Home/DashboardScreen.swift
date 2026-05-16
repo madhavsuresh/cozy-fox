@@ -1215,8 +1215,10 @@ struct DashboardScreen: View {
         let arrivals = model.snapshot.intercampusArrivals
             .filter { $0.direction == intercampus.direction && $0.stopId == intercampus.stopId }
             .sorted { $0.arrivalAt < $1.arrivalAt }
-        let first = arrivals.first
-        let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
+        let scheduled = scheduledIntercampusArrivals(
+            direction: intercampus.direction,
+            stopId: intercampus.stopId
+        )
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(spacing: ChicagoSpacing.xs) {
                 IntercampusRailBadge(direction: intercampus.direction)
@@ -1230,40 +1232,7 @@ struct DashboardScreen: View {
                 }
                 Spacer()
             }
-            if let minutes, let first {
-                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
-                    BigNumber(
-                        minutes,
-                        unit: "min",
-                        size: .md,
-                        tone: first.isDelayed ? .alert : .primary,
-                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle, \(first.timeSource.label.lowercased())"
-                    )
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: ChicagoSpacing.xs) {
-                            Text("→ \(first.destinationName)")
-                                .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                                .foregroundStyle(ChicagoPalette.Gray.medium)
-                                .lineLimit(1)
-                            intercampusTimeSourceBadge(first.timeSource)
-                        }
-                        if let vehicleLabel = first.vehicleLabel, !vehicleLabel.isEmpty {
-                            Text("Bus \(vehicleLabel)")
-                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                                .foregroundStyle(ChicagoPalette.Gray.light)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                HeadwayDotStrip(
-                    arrivals: arrivals.prefix(8).map(\.arrivalAt),
-                    accent: ChicagoPalette.Mode.intercampus
-                )
-            } else {
-                Text(model.isRefreshing ? "Fetching Intercampus arrivals…" : "No upcoming Intercampus arrivals returned yet.")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
-            }
+            intercampusReadoutBody(arrivals: arrivals, scheduled: scheduled)
         }
         .padding(ChicagoSpacing.md)
         .background(ChicagoPalette.Surface.elevated,
@@ -2548,8 +2517,10 @@ struct DashboardScreen: View {
 
     private func intercampusStopRow(choice: IntercampusStopChoice) -> some View {
         let arrivals = intercampusArrivals(direction: choice.direction, stop: choice.stop)
-        let first = arrivals.first
-        let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
+        let scheduled = scheduledIntercampusArrivals(
+            direction: choice.direction,
+            stopId: choice.stop.id
+        )
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(choice.stop.name)
@@ -2564,57 +2535,7 @@ struct DashboardScreen: View {
             Text(choice.direction.label)
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                 .foregroundStyle(ChicagoPalette.Gray.light)
-            if arrivals.isEmpty {
-                Text(model.isRefreshing
-                     ? "Fetching Intercampus arrivals…"
-                     : "No upcoming Intercampus arrivals returned by TripShot.")
-                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                    .foregroundStyle(ChicagoPalette.Gray.medium)
-            } else if let minutes, let first {
-                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
-                    BigNumber(
-                        minutes,
-                        unit: "min",
-                        size: .md,
-                        tone: first.isDelayed ? .alert : .primary,
-                        accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle, \(intercampusTimeSourceAccessibilityLabel(first.timeSource))"
-                    )
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: ChicagoSpacing.xs) {
-                            Text("→ \(first.destinationName)")
-                                .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                                .foregroundStyle(ChicagoPalette.Gray.medium)
-                                .lineLimit(1)
-                            intercampusTimeSourceBadge(first.timeSource)
-                        }
-                        if let vehicleStatus = intercampusVehicleStatusText(first) {
-                            Text(vehicleStatus)
-                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                                .foregroundStyle(ChicagoPalette.Gray.light)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                if intercampusFavorsDotStrip(arrivals) {
-                    HeadwayDotStrip(
-                        arrivals: arrivals.prefix(8).map(\.arrivalAt),
-                        accent: intercampusAccent
-                    )
-                }
-                let scheduled = scheduledIntercampusArrivals(
-                    direction: choice.direction,
-                    stop: choice.stop
-                )
-                if !scheduled.isEmpty {
-                    VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
-                        sectionLabel("Schedule")
-                        IntercampusDepartureListView(
-                            arrivals: scheduled,
-                            accent: intercampusAccent
-                        )
-                    }
-                }
-            }
+            intercampusReadoutBody(arrivals: arrivals, scheduled: scheduled)
         }
     }
 
@@ -2635,10 +2556,10 @@ struct DashboardScreen: View {
     /// plan against, separate from the traffic-adjusted headline.
     private func scheduledIntercampusArrivals(
         direction: IntercampusDirection,
-        stop: IntercampusStop
+        stopId: String
     ) -> [IntercampusArrival] {
         IntercampusCatalog.scheduledArrivals(
-            stopIds: [stop.id],
+            stopIds: [stopId],
             after: .now,
             generatedAt: .now,
             lookaheadDays: 1
@@ -2646,6 +2567,74 @@ struct DashboardScreen: View {
         .filter { $0.direction == direction }
         .prefix(5)
         .map { $0 }
+    }
+
+    /// Shared "live + schedule" readout for an Intercampus stop, used by
+    /// both the standalone Intercampus card and any pinned trip leg that
+    /// includes an Intercampus shuttle. Keeps the two surfaces visually
+    /// identical: live BigNumber + traffic/vehicle context on top, an
+    /// imminent-only dot strip in the middle, and the always-on schedule
+    /// list at the bottom. The empty-state copy matches the card.
+    @ViewBuilder
+    private func intercampusReadoutBody(
+        arrivals: [IntercampusArrival],
+        scheduled: [IntercampusArrival]
+    ) -> some View {
+        if arrivals.isEmpty {
+            Text(model.isRefreshing
+                 ? "Fetching Intercampus arrivals…"
+                 : "No upcoming Intercampus arrivals returned yet.")
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+            if !scheduled.isEmpty {
+                intercampusScheduleSection(scheduled)
+            }
+        } else if let first = arrivals.first {
+            let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
+            HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
+                BigNumber(
+                    minutes,
+                    unit: "min",
+                    size: .md,
+                    tone: first.isDelayed ? .alert : .primary,
+                    accessibilityLabel: "\(minutes) minutes to next Intercampus shuttle, \(intercampusTimeSourceAccessibilityLabel(first.timeSource))"
+                )
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: ChicagoSpacing.xs) {
+                        Text("→ \(first.destinationName)")
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .lineLimit(1)
+                        intercampusTimeSourceBadge(first.timeSource)
+                    }
+                    if let vehicleStatus = intercampusVehicleStatusText(first) {
+                        Text(vehicleStatus)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.Gray.light)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            if intercampusFavorsDotStrip(arrivals) {
+                HeadwayDotStrip(
+                    arrivals: arrivals.prefix(8).map(\.arrivalAt),
+                    accent: intercampusAccent
+                )
+            }
+            if !scheduled.isEmpty {
+                intercampusScheduleSection(scheduled)
+            }
+        }
+    }
+
+    private func intercampusScheduleSection(_ scheduled: [IntercampusArrival]) -> some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            sectionLabel("Schedule")
+            IntercampusDepartureListView(
+                arrivals: scheduled,
+                accent: intercampusAccent
+            )
+        }
     }
 
     private func intercampusTimeSourceBadge(_ source: IntercampusArrivalTimeSource) -> some View {
