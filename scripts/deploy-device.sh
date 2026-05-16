@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build CozyFox (Debug) and install on a connected iPhone.
+# Build CozyFox (Debug) and install on a reachable iPhone.
 # Usage: scripts/deploy-device.sh [UDID]
-#   With no UDID, picks the single connected device. Errors if 0 or multiple.
+#   With no UDID, picks the single reachable device (USB or Wi-Fi-paired).
+#   Errors if 0 or multiple.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,11 +19,14 @@ else
   udids=()
   while IFS= read -r line; do
     udids+=("$line")
-  done < <(xcrun devicectl list devices 2>/dev/null | awk '$1 == "iPhone" && $4 == "connected" {print $3}')
+  done < <(xcrun devicectl list devices 2>/dev/null | awk '$1 == "iPhone" && ($4 == "connected" || $4 == "available") {print $3}')
   case "${#udids[@]}" in
-    0) echo "No connected iPhone. Plug one in (or pair over Wi-Fi) and re-run." >&2; exit 1 ;;
+    0) echo "No reachable iPhone. Plug one in or pair over Wi-Fi (Xcode → Window → Devices) and re-run." >&2
+       echo "Current devicectl view:" >&2
+       xcrun devicectl list devices 2>/dev/null >&2
+       exit 1 ;;
     1) udid="${udids[0]}" ;;
-    *) echo "Multiple connected iPhones — pass a UDID:" >&2
+    *) echo "Multiple reachable iPhones — pass a UDID:" >&2
        printf '  %s\n' "${udids[@]}" >&2
        exit 1 ;;
   esac
