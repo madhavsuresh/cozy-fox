@@ -1,6 +1,7 @@
 import ChicagoTheme
 import SwiftUI
 import TransitDomain
+import TransitModels
 
 /// A row of dots laid out on a 0…`window` minute axis, one per upcoming
 /// arrival. The first three dots are labelled with their minute value,
@@ -48,6 +49,13 @@ public struct HeadwayDotStrip: View {
     /// style. Tints are intentionally faint — passive readout, not a
     /// nudge.
     private let urgencies: [DepartureUrgency.Bucket?]
+    /// Optional per-arrival confidence tones. When present and non-nil
+    /// for a dot, `.weak` mutes the dot to ~60% of its computed opacity
+    /// (the arrival's bias history or live flags suggest it's less
+    /// trustworthy than the headline number). `.strong` leaves the dot
+    /// alone — the strip already emphasizes imminent dots, so we don't
+    /// double-emphasize confidence. Nonverbal by design.
+    private let confidenceTones: [ArrivalConfidenceMark.Tone?]
 
     public init(
         arrivals: [Date],
@@ -56,6 +64,7 @@ public struct HeadwayDotStrip: View {
         now: Date = .now,
         complications: [Complication?] = [],
         urgencies: [DepartureUrgency.Bucket?] = [],
+        confidenceTones: [ArrivalConfidenceMark.Tone?] = [],
         style: Style = .standard
     ) {
         self.arrivals = arrivals
@@ -65,6 +74,7 @@ public struct HeadwayDotStrip: View {
         self.style = style
         self.complications = complications
         self.urgencies = urgencies
+        self.confidenceTones = confidenceTones
     }
 
     private var trackColor: Color {
@@ -144,6 +154,7 @@ public struct HeadwayDotStrip: View {
         let minutes: Int
         let complication: Complication?
         let urgency: DepartureUrgency.Bucket?
+        let confidence: ArrivalConfidenceMark.Tone?
     }
 
     @ViewBuilder
@@ -206,13 +217,16 @@ public struct HeadwayDotStrip: View {
                 let diameter: CGFloat = imminent ? 12 : 8
                 // Linear fade from 1.0 (now) to 0.55 (window edge); imminent
                 // dots locked at 1.0 for emphasis.
-                let opacity = imminent ? 1.0 : (1.0 - (fraction * 0.45))
+                let baseOpacity = imminent ? 1.0 : (1.0 - (fraction * 0.45))
+                let tone = confidence(at: index)
+                let opacity = baseOpacity * confidenceOpacityMultiplier(tone)
                 return Dot(fraction: fraction,
                            diameter: diameter,
                            opacity: opacity,
                            minutes: minutes,
                            complication: complication(at: index),
-                           urgency: urgency(at: index))
+                           urgency: urgency(at: index),
+                           confidence: tone)
             }
             .prefix(6)
             .map { $0 }
@@ -226,6 +240,23 @@ public struct HeadwayDotStrip: View {
     private func urgency(at index: Int) -> DepartureUrgency.Bucket? {
         guard index < urgencies.count else { return nil }
         return urgencies[index]
+    }
+
+    private func confidence(at index: Int) -> ArrivalConfidenceMark.Tone? {
+        guard index < confidenceTones.count else { return nil }
+        return confidenceTones[index]
+    }
+
+    /// `.weak` mutes the dot to ~60% of its computed opacity so an
+    /// unreliable arrival reads as quieter than its neighbors without
+    /// disappearing. `.strong` and `.normal` (and absent tones) leave
+    /// the dot at full strength — the strip already emphasizes imminent
+    /// arrivals, so layering on top would double-encode.
+    private func confidenceOpacityMultiplier(_ tone: ArrivalConfidenceMark.Tone?) -> Double {
+        switch tone {
+        case .weak:                return 0.6
+        case .strong, .normal, nil: return 1.0
+        }
     }
 
     /// Base fill for a dot. `.missed` dots desaturate to neutral so

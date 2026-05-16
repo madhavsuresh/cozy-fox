@@ -26,6 +26,11 @@ final class RefreshCoordinator {
     /// Phase 5b: motion-transition stopwatch for cycling. Independent of
     /// walking because pace ratios don't transfer between modes.
     let bikeSpeedTracker: BikeSpeedTracker
+    /// Stitches region exits with boardings / anchor entries to feed
+    /// `MobilityProfile.commuteLegObservations`, which
+    /// `PersonalAccessEstimator` reads for per-route access-time
+    /// learning.
+    let commuteLegTracker: CommuteLegTracker
 
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
@@ -125,6 +130,7 @@ final class RefreshCoordinator {
         self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
         self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
+        self.commuteLegTracker = CommuteLegTracker(preferences: preferences)
         self.bikeRouteSampler = BikeRouteSampler(routeStore: bikeRouteStore)
 
         // Portfolio evaluator + miss-cost share one scorer so their
@@ -224,11 +230,15 @@ final class RefreshCoordinator {
         // freshly-refreshed snapshot. Pass the per-portfolio
         // recommendations so the LA picks a portfolio's approved
         // option as its source of truth when one exists, falling back
-        // to the single-pin / planned-trip-pin path otherwise.
+        // to the single-pin / planned-trip-pin path otherwise. Also
+        // snapshot the bias cells so the LA can vary dot weight /
+        // opacity per-arrival via `ArrivalConfidenceMarker`.
+        let biasCellsSnapshot = biasStore?.cells ?? [:]
         await LiveActivityCoordinator.shared.ensureRunning(
             snapshot: snapshot,
             prefs: prefs,
-            portfolioRecommendations: latestPortfolioRecommendations
+            portfolioRecommendations: latestPortfolioRecommendations,
+            biasCells: biasCellsSnapshot
         )
 
         WidgetCenter.shared.reloadAllTimelines()
@@ -237,6 +247,11 @@ final class RefreshCoordinator {
 
     /// Called whenever the location coordinator detects a region transition.
     func handleContextChange(_ context: CommuteContext) async {
+        commuteLegTracker.recordAnchorEntry(
+            context: context,
+            at: .now,
+            routePreferences: preferences.loadRoutePreferences()
+        )
         await refreshAll()
     }
 
@@ -256,6 +271,7 @@ final class RefreshCoordinator {
         if let anchor {
             walkSpeedTracker.recordRegionExit(direction: direction, anchor: anchor, at: .now)
         }
+        commuteLegTracker.recordRegionExit(direction: direction, at: .now)
         let prefs = preferences.loadRoutePreferences()
         guard prefs.autoStartLiveActivity else { return }
         guard let pref = prefs.trains.first(where: {
@@ -317,6 +333,15 @@ final class RefreshCoordinator {
             walkSpeedTracker.recordBoarding(
                 stationId: boarding.stationId,
                 at: boarding.observedAt
+            )
+            // Pair with `CommuteLegTracker`'s pending region-exit so a
+            // `CommuteLegObservation` lands on the profile —
+            // `PersonalAccessEstimator` reads these for per-route
+            // access-time learning.
+            commuteLegTracker.recordBoarding(
+                stationId: boarding.stationId,
+                observedAt: boarding.observedAt,
+                routePreferences: preferences.loadRoutePreferences()
             )
         }
 
@@ -724,28 +749,30 @@ final class RefreshCoordinator {
         prefs: UserRoutePreferences,
         lastLocation: LastKnownLocation?
     ) async {
-        guard prefs.includeIntercampus,
-              prefs.isModeVisible(.intercampus) || prefs.pinnedIntercampusStopId != nil
-        else {
-            await store.replaceIntercampusArrivals([])
-            return
-        }
-        guard let lastLocation else {
+        let plannedStopIds = Set(
+            (prefs.plannedTripPin?.intercampusLegs.map(\.stopId) ?? [])
+                .filter { IntercampusCatalog.stop(id: $0) != nil }
+        )
+        let shouldFetchNearby = prefs.includeIntercampus && prefs.isModeVisible(.intercampus)
+        guard shouldFetchNearby || prefs.pinnedIntercampusStopId != nil || !plannedStopIds.isEmpty else {
             await store.replaceIntercampusArrivals([])
             return
         }
 
-        let origin = (lastLocation.latitude, lastLocation.longitude)
-        let nearby = intercampusStopResolver.nearestPerDirection(
-            to: origin,
-            limitPerDirection: 12,
-            catalog: IntercampusCatalog.all
-        )
-        var targetStopIds = Set(nearby.map(\.stop.id))
+        var targetStopIds = plannedStopIds
         var trafficPriorityStopIds: Set<String> = []
-        var priorityDirections: Set<IntercampusDirection> = []
-        for entry in nearby where priorityDirections.insert(entry.direction).inserted {
-            trafficPriorityStopIds.insert(entry.stop.id)
+        if shouldFetchNearby, let lastLocation {
+            let origin = (lastLocation.latitude, lastLocation.longitude)
+            let nearby = intercampusStopResolver.nearestPerDirection(
+                to: origin,
+                limitPerDirection: 12,
+                catalog: IntercampusCatalog.all
+            )
+            targetStopIds.formUnion(nearby.map(\.stop.id))
+            var priorityDirections: Set<IntercampusDirection> = []
+            for entry in nearby where priorityDirections.insert(entry.direction).inserted {
+                trafficPriorityStopIds.insert(entry.stop.id)
+            }
         }
         if let selectedStopId = prefs.pinnedIntercampusStopId,
            IntercampusCatalog.stop(id: selectedStopId) != nil

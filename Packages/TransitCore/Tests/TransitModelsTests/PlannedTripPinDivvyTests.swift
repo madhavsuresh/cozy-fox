@@ -26,6 +26,7 @@ struct PlannedTripPinDivvyTests {
         let pin = try JSONDecoder().decode(PlannedTripPin.self, from: Data(legacyJSON.utf8))
 
         #expect(pin.includeDivvyInfo)
+        #expect(pin.intercampusLegs.isEmpty)
     }
 
     @Test func encodesAndDecodesDivvyPreference() throws {
@@ -43,7 +44,15 @@ struct PlannedTripPinDivvyTests {
             allowMultimodal: true,
             includeDivvyInfo: false,
             train: nil,
-            bus: nil
+            bus: nil,
+            intercampusLegs: [
+                PlannedTripPin.IntercampusLeg(
+                    direction: .southbound,
+                    stopId: "nu-chicago",
+                    stopName: "Chicago Campus",
+                    destinationName: "Chicago"
+                )
+            ]
         )
 
         let data = try JSONEncoder().encode(pin)
@@ -51,5 +60,7 @@ struct PlannedTripPinDivvyTests {
 
         #expect(!roundTrip.includeDivvyInfo)
         #expect(roundTrip.withIncludeDivvyInfo(true).includeDivvyInfo)
+        #expect(roundTrip.intercampus?.direction == .southbound)
+        #expect(roundTrip.intercampus?.stopId == "nu-chicago")
     }
 }

@@ -20,7 +20,8 @@ actor LiveActivityCoordinator {
     func ensureRunning(
         snapshot: TransitSnapshot,
         prefs: UserRoutePreferences,
-        portfolioRecommendations: [UUID: PortfolioRecommendation] = [:]
+        portfolioRecommendations: [UUID: PortfolioRecommendation] = [:],
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) async {
         guard prefs.alwaysShowLiveActivity else {
             await endCurrentIfNeeded()
@@ -37,7 +38,8 @@ actor LiveActivityCoordinator {
         let portfolioSource = resolvePortfolioSource(
             prefs: prefs,
             recommendations: portfolioRecommendations,
-            snapshot: snapshot
+            snapshot: snapshot,
+            biasCells: biasCells
         )
 
         let trainLeg: CommuteAttributes.TrainLeg?
@@ -46,8 +48,8 @@ actor LiveActivityCoordinator {
             trainLeg = portfolioSource.train
             busLeg = portfolioSource.bus
         } else {
-            trainLeg = makeTrainLeg(prefs: prefs, snapshot: snapshot)
-            busLeg = makeBusLeg(prefs: prefs, snapshot: snapshot)
+            trainLeg = makeTrainLeg(prefs: prefs, snapshot: snapshot, biasCells: biasCells)
+            busLeg = makeBusLeg(prefs: prefs, snapshot: snapshot, biasCells: biasCells)
         }
         // Metra Live Activity rendering is temporarily disabled; pinned
         // Metra still appears in the app and widgets.
@@ -149,13 +151,14 @@ actor LiveActivityCoordinator {
 
     private func makeTrainLeg(
         prefs: UserRoutePreferences,
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.TrainLeg? {
         // Prefer the pinned line if present; else first tracked; else nothing
         // (we don't auto-fill a "fallback" arrival when only bus is pinned).
         if let tripPin = prefs.plannedTripPin, !tripPin.trainLegs.isEmpty {
             return tripPin.trainLegs
-                .compactMap { makeTripTrainLeg($0, snapshot: snapshot) }
+                .compactMap { makeTripTrainLeg($0, snapshot: snapshot, biasCells: biasCells) }
                 .min { $0.nextArrival < $1.nextArrival }
         }
 
@@ -190,6 +193,7 @@ actor LiveActivityCoordinator {
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
         let following = sorted.dropFirst().first
+        let upcoming = Array(sorted.prefix(6))
         return CommuteAttributes.TrainLeg(
             routeLabel: line.displayName,
             lineColorRaw: line.rawValue,
@@ -200,13 +204,15 @@ actor LiveActivityCoordinator {
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: line, busRoute: nil)
                 .first?.headline,
-            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+            upcomingArrivals: upcoming.map(\.arrivalAt),
+            confidenceMarks: Self.trainMarks(arrivals: upcoming, biasCells: biasCells)
         )
     }
 
     private func makeTripTrainLeg(
         _ tripTrain: PlannedTripPin.TrainLeg,
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.TrainLeg? {
         var arrivals = snapshot.trainArrivals.filter { $0.line == tripTrain.line }
         if let stationId = tripTrain.stationId {
@@ -220,6 +226,7 @@ actor LiveActivityCoordinator {
             .filter { $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
+        let upcoming = Array(sorted.prefix(6))
         return CommuteAttributes.TrainLeg(
             routeLabel: tripTrain.line.displayName,
             lineColorRaw: tripTrain.line.rawValue,
@@ -230,17 +237,19 @@ actor LiveActivityCoordinator {
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: tripTrain.line, busRoute: nil)
                 .first?.headline,
-            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+            upcomingArrivals: upcoming.map(\.arrivalAt),
+            confidenceMarks: Self.trainMarks(arrivals: upcoming, biasCells: biasCells)
         )
     }
 
     private func makeBusLeg(
         prefs: UserRoutePreferences,
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.BusLeg? {
         if let tripPin = prefs.plannedTripPin, !tripPin.busLegs.isEmpty {
             return tripPin.busLegs
-                .compactMap { makeTripBusLeg($0, snapshot: snapshot) }
+                .compactMap { makeTripBusLeg($0, snapshot: snapshot, biasCells: biasCells) }
                 .min { $0.nextArrival < $1.nextArrival }
         }
 
@@ -258,6 +267,7 @@ actor LiveActivityCoordinator {
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
         let following = sorted.dropFirst().first
+        let upcoming = Array(sorted.prefix(6))
         return CommuteAttributes.BusLeg(
             routeLabel: "Route \(route)",
             stopName: first.stopName,
@@ -268,13 +278,15 @@ actor LiveActivityCoordinator {
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: nil, busRoute: route)
                 .first?.headline,
-            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+            upcomingArrivals: upcoming.map(\.arrivalAt),
+            confidenceMarks: Self.busMarks(predictions: upcoming, biasCells: biasCells)
         )
     }
 
     private func makeTripBusLeg(
         _ tripBus: PlannedTripPin.BusLeg,
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.BusLeg? {
         var predictions = snapshot.busPredictions.filter { $0.route == tripBus.route }
         if let direction = tripBus.directionLabel {
@@ -288,6 +300,7 @@ actor LiveActivityCoordinator {
             .filter { $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
+        let upcoming = Array(sorted.prefix(6))
         return CommuteAttributes.BusLeg(
             routeLabel: "Route \(tripBus.route)",
             stopName: tripBus.stopName,
@@ -298,8 +311,58 @@ actor LiveActivityCoordinator {
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: nil, busRoute: tripBus.route)
                 .first?.headline,
-            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+            upcomingArrivals: upcoming.map(\.arrivalAt),
+            confidenceMarks: Self.busMarks(predictions: upcoming, biasCells: biasCells)
         )
+    }
+
+    // MARK: - Confidence marks
+
+    /// Chicago-local calendar for `BiasCellKey.make(at:calendar:)` so the
+    /// per-hour bias buckets line up with how `ArrivalGrader` recorded
+    /// them.
+    private static let chicagoCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago") ?? .current
+        return calendar
+    }()
+
+    static func trainMarks(
+        arrivals: [Arrival],
+        biasCells: [BiasCellKey: BiasCell]
+    ) -> [ArrivalConfidenceMark] {
+        arrivals.map { arrival in
+            let key = BiasCellKey.make(
+                line: arrival.line.rawValue,
+                stopId: String(arrival.stopId),
+                direction: arrival.directionCode,
+                at: arrival.arrivalAt,
+                calendar: chicagoCalendar
+            )
+            return ArrivalConfidenceMarker.mark(
+                for: arrival,
+                biasCell: biasCells[key]
+            )
+        }
+    }
+
+    static func busMarks(
+        predictions: [BusPrediction],
+        biasCells: [BiasCellKey: BiasCell]
+    ) -> [ArrivalConfidenceMark] {
+        predictions.map { prediction in
+            let key = BiasCellKey.make(
+                line: prediction.route,
+                stopId: String(prediction.stopId),
+                direction: prediction.directionName,
+                at: prediction.arrivalAt,
+                calendar: chicagoCalendar
+            )
+            return ArrivalConfidenceMarker.mark(
+                for: prediction,
+                biasCell: biasCells[key]
+            )
+        }
     }
 
     private func soonestArrival(
@@ -343,7 +406,8 @@ actor LiveActivityCoordinator {
     nonisolated func resolvePortfolioSource(
         prefs: UserRoutePreferences,
         recommendations: [UUID: PortfolioRecommendation],
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> PortfolioSource? {
         for portfolio in prefs.portfolios {
             guard let recommendation = recommendations[portfolio.id] else { continue }
@@ -355,9 +419,9 @@ actor LiveActivityCoordinator {
             for leg in option.legs where leg.mode == .transit {
                 switch leg.transit?.resolution {
                 case .line where train == nil:
-                    train = buildPortfolioTrainLeg(fromLeg: leg, snapshot: snapshot)
+                    train = buildPortfolioTrainLeg(fromLeg: leg, snapshot: snapshot, biasCells: biasCells)
                 case .bus where bus == nil:
-                    bus = buildPortfolioBusLeg(fromLeg: leg, snapshot: snapshot)
+                    bus = buildPortfolioBusLeg(fromLeg: leg, snapshot: snapshot, biasCells: biasCells)
                 default:
                     continue
                 }
@@ -375,7 +439,8 @@ actor LiveActivityCoordinator {
 
     nonisolated func buildPortfolioTrainLeg(
         fromLeg leg: RouteOptionLeg,
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.TrainLeg? {
         guard case .line(let line) = leg.transit?.resolution else { return nil }
         guard let stopRef = leg.fromStopID else { return nil }
@@ -393,6 +458,7 @@ actor LiveActivityCoordinator {
             .filter { $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
+        let upcoming = Array(sorted.prefix(6))
         return CommuteAttributes.TrainLeg(
             routeLabel: line.displayName,
             lineColorRaw: line.rawValue,
@@ -403,13 +469,15 @@ actor LiveActivityCoordinator {
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: line, busRoute: nil)
                 .first?.headline,
-            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+            upcomingArrivals: upcoming.map(\.arrivalAt),
+            confidenceMarks: Self.trainMarks(arrivals: upcoming, biasCells: biasCells)
         )
     }
 
     nonisolated func buildPortfolioBusLeg(
         fromLeg leg: RouteOptionLeg,
-        snapshot: TransitSnapshot
+        snapshot: TransitSnapshot,
+        biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.BusLeg? {
         guard case .bus(let route) = leg.transit?.resolution else { return nil }
         guard case .bus(let stopID) = leg.fromStopID else { return nil }
@@ -418,6 +486,7 @@ actor LiveActivityCoordinator {
             .filter { $0.route == route && $0.stopId == stopID && $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }
+        let upcoming = Array(sorted.prefix(6))
         return CommuteAttributes.BusLeg(
             routeLabel: "Route \(route)",
             stopName: first.stopName,
@@ -428,7 +497,8 @@ actor LiveActivityCoordinator {
             alertHeadline: snapshot.activeAlerts
                 .filtered(forLine: nil, busRoute: route)
                 .first?.headline,
-            upcomingArrivals: sorted.prefix(6).map(\.arrivalAt)
+            upcomingArrivals: upcoming.map(\.arrivalAt),
+            confidenceMarks: Self.busMarks(predictions: upcoming, biasCells: biasCells)
         )
     }
 
