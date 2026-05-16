@@ -61,9 +61,7 @@ struct DepartureLadderDebugCard: View {
         case .ready: "Computing…"
         case .missingHome: "Set a Home anchor in Settings."
         case .missingWork: "Set a Work anchor in Settings."
-        case .missingPinnedLine: "Pin a train line on the dashboard."
-        case .noNearbyStationOnLine: "No station on the pinned line is near Home and Work."
-        case .noLiveData: "Waiting for live train arrivals."
+        case .noCandidates: "No pinned line, Metra, bus, or Intercampus route covers Home → Work."
         }
     }
 
@@ -109,11 +107,14 @@ struct DepartureLadderDebugCard: View {
 
     @ViewBuilder
     private var stationFootnote: some View {
-        if let boarding = viewModel.boardingStationName,
-           let alighting = viewModel.alightingStationName {
-            Text("Board \(boarding) → alight \(alighting)")
-                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                .foregroundStyle(ChicagoPalette.Gray.medium)
+        if !viewModel.candidateSummaries.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(viewModel.candidateSummaries, id: \.self) { summary in
+                    Text(summary)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                }
+            }
         }
     }
 

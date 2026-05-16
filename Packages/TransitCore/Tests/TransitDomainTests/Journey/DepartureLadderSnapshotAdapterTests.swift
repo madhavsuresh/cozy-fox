@@ -93,4 +93,78 @@ struct DepartureLadderSnapshotAdapterTests {
         let adapter = DepartureLadderSnapshotAdapter()
         #expect(adapter.feedState(from: snapshot, now: Self.t0) == .missing)
     }
+
+    @Test func liveBusDeparturesFilterByRouteStopAndDirection() {
+        let snapshot = TransitSnapshot(
+            busPredictions: [
+                bus(id: "a", route: "22", stopId: 1, direction: "Northbound", minutesAhead: 4),
+                bus(id: "b", route: "22", stopId: 1, direction: "Southbound", minutesAhead: 5),
+                bus(id: "c", route: "22", stopId: 2, direction: "Northbound", minutesAhead: 6),
+                bus(id: "d", route: "151", stopId: 1, direction: "Northbound", minutesAhead: 7)
+            ],
+            busesFetchedAt: Self.t0
+        )
+        let adapter = DepartureLadderSnapshotAdapter()
+        let result = adapter.liveBusDepartures(from: snapshot, route: "22", stopId: 1, directionLabel: "Northbound", now: Self.t0)
+        #expect(result.count == 1)
+    }
+
+    @Test func liveMetraDeparturesFilterByRouteStationDirectionAndDropCanceled() {
+        let snapshot = TransitSnapshot(
+            metraPredictions: [
+                metra(id: "a", route: "UP-N", station: "OGILVIE", directionId: 0, minutesAhead: 6),
+                metra(id: "b", route: "UP-N", station: "OGILVIE", directionId: 1, minutesAhead: 8),
+                metra(id: "c", route: "UP-N", station: "OGILVIE", directionId: 0, minutesAhead: 14, isCanceled: true)
+            ],
+            metraFetchedAt: Self.t0
+        )
+        let adapter = DepartureLadderSnapshotAdapter()
+        let result = adapter.liveMetraDepartures(from: snapshot, routeId: "UP-N", stationId: "OGILVIE", directionId: 0, now: Self.t0)
+        #expect(result.count == 1)
+    }
+
+    @Test func liveIntercampusDeparturesFilterByStopAndDirection() {
+        let snapshot = TransitSnapshot(
+            intercampusArrivals: [
+                ic(id: "a", direction: .northbound, stopId: "CHIC1", minutesAhead: 5),
+                ic(id: "b", direction: .southbound, stopId: "CHIC1", minutesAhead: 7),
+                ic(id: "c", direction: .northbound, stopId: "EVAN1", minutesAhead: 9)
+            ],
+            intercampusFetchedAt: Self.t0
+        )
+        let adapter = DepartureLadderSnapshotAdapter()
+        let result = adapter.liveIntercampusDepartures(from: snapshot, stopId: "CHIC1", direction: .northbound, now: Self.t0)
+        #expect(result.count == 1)
+    }
+
+    private func bus(id: String, route: String, stopId: Int, direction: String, minutesAhead: Double) -> BusPrediction {
+        BusPrediction(
+            id: id, route: route, routeName: route, vehicleId: "v",
+            stopId: stopId, stopName: "Stop", destinationName: "Dest",
+            directionName: direction, generatedAt: Self.t0,
+            arrivalAt: Self.t0.addingTimeInterval(minutesAhead * 60),
+            isDelayed: false, isApproaching: false
+        )
+    }
+
+    private func metra(id: String, route: String, station: String, directionId: Int, minutesAhead: Double, isCanceled: Bool = false) -> MetraPrediction {
+        let when = Self.t0.addingTimeInterval(minutesAhead * 60)
+        return MetraPrediction(
+            id: id, routeId: route, routeShortName: route, tripId: "t\(id)",
+            trainNumber: "N", stationId: station, stationName: station,
+            destinationName: "Dest", directionId: directionId,
+            generatedAt: Self.t0, scheduledAt: when, arrivalAt: when,
+            delaySeconds: 0, isDelayed: false, isCanceled: isCanceled, isScheduled: false
+        )
+    }
+
+    private func ic(id: String, direction: IntercampusDirection, stopId: String, minutesAhead: Double) -> IntercampusArrival {
+        IntercampusArrival(
+            id: id, routeId: "intercampus", direction: direction, tripId: "t\(id)",
+            vehicleId: nil, vehicleLabel: nil, stopId: stopId, stopName: stopId,
+            destinationName: "Dest", generatedAt: Self.t0,
+            arrivalAt: Self.t0.addingTimeInterval(minutesAhead * 60),
+            delaySeconds: 0, isDelayed: false
+        )
+    }
 }
