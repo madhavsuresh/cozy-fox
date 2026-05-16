@@ -2,6 +2,49 @@ import Foundation
 import TransitCache
 import TransitModels
 
+public struct LadderTransferLeg: Sendable {
+    public let transferWalkSeconds: TimeInterval
+    public let transferWalkSigmaSeconds: TimeInterval
+    public let nextRouteIdentifier: String
+    public let nextDirection: String?
+    public let nextBoardingPoint: JourneyPoint
+    public let nextAlightingPoint: JourneyPoint
+    public let nextInVehicleSeconds: TimeInterval
+    public let nextInVehicleSigmaSeconds: TimeInterval
+    public let nextScheduleHeadwaySeconds: TimeInterval?
+    public let nextLiveDepartures: [LiveDeparture]
+    public let nextFeedState: FeedState
+    public let nextMode: LegMode
+
+    public init(
+        transferWalkSeconds: TimeInterval,
+        transferWalkSigmaSeconds: TimeInterval,
+        nextMode: LegMode,
+        nextRouteIdentifier: String,
+        nextDirection: String? = nil,
+        nextBoardingPoint: JourneyPoint,
+        nextAlightingPoint: JourneyPoint,
+        nextInVehicleSeconds: TimeInterval,
+        nextInVehicleSigmaSeconds: TimeInterval,
+        nextScheduleHeadwaySeconds: TimeInterval? = nil,
+        nextLiveDepartures: [LiveDeparture],
+        nextFeedState: FeedState = .fresh
+    ) {
+        self.transferWalkSeconds = max(0, transferWalkSeconds)
+        self.transferWalkSigmaSeconds = max(0, transferWalkSigmaSeconds)
+        self.nextMode = nextMode
+        self.nextRouteIdentifier = nextRouteIdentifier
+        self.nextDirection = nextDirection
+        self.nextBoardingPoint = nextBoardingPoint
+        self.nextAlightingPoint = nextAlightingPoint
+        self.nextInVehicleSeconds = max(0, nextInVehicleSeconds)
+        self.nextInVehicleSigmaSeconds = max(0, nextInVehicleSigmaSeconds)
+        self.nextScheduleHeadwaySeconds = nextScheduleHeadwaySeconds
+        self.nextLiveDepartures = nextLiveDepartures.sorted { $0.arrivalAt < $1.arrivalAt }
+        self.nextFeedState = nextFeedState
+    }
+}
+
 public struct LadderCandidateSpec: Sendable {
     public let title: String
     public let mode: LegMode
@@ -16,6 +59,7 @@ public struct LadderCandidateSpec: Sendable {
     public let scheduleHeadwaySeconds: TimeInterval?
     public let liveDepartures: [LiveDeparture]
     public let feedState: FeedState
+    public let transfer: LadderTransferLeg?
 
     public init(
         title: String,
@@ -30,7 +74,8 @@ public struct LadderCandidateSpec: Sendable {
         finalMileSigmaSeconds: TimeInterval,
         scheduleHeadwaySeconds: TimeInterval? = nil,
         liveDepartures: [LiveDeparture],
-        feedState: FeedState = .fresh
+        feedState: FeedState = .fresh,
+        transfer: LadderTransferLeg? = nil
     ) {
         self.title = title
         self.mode = mode
@@ -45,6 +90,7 @@ public struct LadderCandidateSpec: Sendable {
         self.scheduleHeadwaySeconds = scheduleHeadwaySeconds
         self.liveDepartures = liveDepartures.sorted { $0.arrivalAt < $1.arrivalAt }
         self.feedState = feedState
+        self.transfer = transfer
     }
 }
 
@@ -54,24 +100,31 @@ public struct DepartureLadderBuilder: Sendable {
     public let dedupeWindowSeconds: TimeInterval
     public let cliffThresholdSeconds: TimeInterval
     public let maxRows: Int
+    public let samplesPerRow: Int
+    public let rngSeed: UInt64
 
     public init(
         horizonSeconds: TimeInterval = 90 * 60,
         walkSlackSeconds: TimeInterval = 60,
         dedupeWindowSeconds: TimeInterval = 90,
         cliffThresholdSeconds: TimeInterval = 8 * 60,
-        maxRows: Int = 5
+        maxRows: Int = 5,
+        samplesPerRow: Int = 128,
+        rngSeed: UInt64 = 0xC0FFEE_BABA
     ) {
         self.horizonSeconds = max(0, horizonSeconds)
         self.walkSlackSeconds = max(0, walkSlackSeconds)
         self.dedupeWindowSeconds = max(0, dedupeWindowSeconds)
         self.cliffThresholdSeconds = max(0, cliffThresholdSeconds)
         self.maxRows = max(1, maxRows)
+        self.samplesPerRow = max(8, samplesPerRow)
+        self.rngSeed = rngSeed
     }
 
     public func build(
         destinationTitle: String,
         origin: JourneyPoint,
+        destinationPoint: JourneyPoint,
         snapshot: TransitSnapshot,
         candidates: [LadderCandidateSpec],
         walkSpeedEstimate: WalkSpeedEstimate,
@@ -83,10 +136,12 @@ public struct DepartureLadderBuilder: Sendable {
         let horizonEnd = now.addingTimeInterval(horizonSeconds)
         let walkRatio = walkSpeedEstimate.confidentRatio(minSamples: 5) ?? 1.0
         let walkConfidence = walkSpeedEstimate.count >= 5 ? min(1.0, 0.5 + Double(walkSpeedEstimate.count) / 60.0) : 0.5
+        let composer = JourneyComposer()
+        let analyzer = LineHealthAnalyzer()
+        var rng = SeededLCG(seed: rngSeed)
 
         var rowsAccumulator: [DepartureLadderRow] = []
         var lineHealth: [LineHealthSnapshot] = []
-        let analyzer = LineHealthAnalyzer()
 
         for spec in candidates {
             let stopProcess = StopArrivalProcess(
@@ -97,20 +152,63 @@ public struct DepartureLadderBuilder: Sendable {
                 scheduleHeadwaySeconds: spec.scheduleHeadwaySeconds,
                 feedState: spec.feedState
             )
-            let health = analyzer.analyze(
-                route: spec.routeIdentifier,
-                direction: spec.direction,
-                upcomingArrivals: spec.liveDepartures.map { $0.arrivalAt },
-                baselineHeadwaySeconds: spec.scheduleHeadwaySeconds,
-                feedState: spec.feedState,
-                generatedAt: now
+            lineHealth.append(
+                analyzer.analyze(
+                    route: spec.routeIdentifier,
+                    direction: spec.direction,
+                    upcomingArrivals: spec.liveDepartures.map { $0.arrivalAt },
+                    baselineHeadwaySeconds: spec.scheduleHeadwaySeconds,
+                    feedState: spec.feedState,
+                    generatedAt: now
+                )
             )
-            lineHealth.append(health)
+
+            let transferStopProcess: StopArrivalProcess? = spec.transfer.map { transfer in
+                StopArrivalProcess(
+                    route: transfer.nextRouteIdentifier,
+                    direction: transfer.nextDirection,
+                    generatedAt: now,
+                    departures: transfer.nextLiveDepartures,
+                    scheduleHeadwaySeconds: transfer.nextScheduleHeadwaySeconds,
+                    feedState: transfer.nextFeedState
+                )
+            }
+            if let transferStopProcess, let transfer = spec.transfer {
+                lineHealth.append(
+                    analyzer.analyze(
+                        route: transfer.nextRouteIdentifier,
+                        direction: transfer.nextDirection,
+                        upcomingArrivals: transfer.nextLiveDepartures.map { $0.arrivalAt },
+                        baselineHeadwaySeconds: transfer.nextScheduleHeadwaySeconds,
+                        feedState: transfer.nextFeedState,
+                        generatedAt: now
+                    )
+                )
+                _ = transferStopProcess
+            }
 
             let baseWalkSeconds = walkingTimeFetcher(origin, spec.boardingPoint)
             let walkMean = baseWalkSeconds * walkRatio
             let walkSigma = max(30, walkMean * 0.12)
             let walkConservative = walkMean + 0.8416 * walkSigma
+
+            let finalMileMean = spec.finalMileSeconds * walkRatio
+            let finalMileSigma = max(30, finalMileMean * 0.12) + spec.finalMileSigmaSeconds
+
+            let (option, kernels) = buildOption(
+                spec: spec,
+                stopProcess: stopProcess,
+                transferStopProcess: transferStopProcess,
+                origin: origin,
+                destinationPoint: destinationPoint,
+                walkMean: walkMean,
+                walkSigma: walkSigma,
+                walkConfidence: walkConfidence,
+                walkSpeedSamples: walkSpeedEstimate.count,
+                finalMileMean: finalMileMean,
+                finalMileSigma: finalMileSigma,
+                walkRatio: walkRatio
+            )
 
             for departure in spec.liveDepartures where departure.arrivalAt <= horizonEnd {
                 let leaveBy = departure.arrivalAt.addingTimeInterval(-(walkConservative + walkSlackSeconds))
@@ -118,47 +216,32 @@ public struct DepartureLadderBuilder: Sendable {
 
                 let userAtStop = leaveBy.addingTimeInterval(walkMean)
                 let waitForecast = stopProcess.waitDistribution(arrivingAt: userAtStop)
-                let inVehicleMean = spec.inVehicleSeconds
-                let inVehicleSigma = spec.inVehicleSigmaSeconds
-                let finalMileMean = spec.finalMileSeconds * walkRatio
-                let finalMileSigma = max(30, finalMileMean * 0.12) + spec.finalMileSigmaSeconds
+                let downstreamRisk = downgradeIfFeedShaky(waitForecast.state, feedState: spec.feedState)
 
-                let arriveDoorP50 = departure.arrivalAt.addingTimeInterval(inVehicleMean + finalMileMean)
-                let arriveDoorP80 = departure.arrivalAt.addingTimeInterval(
-                    inVehicleMean + 0.8416 * inVehicleSigma + finalMileMean + 0.8416 * finalMileSigma
+                let distribution = composer.compose(
+                    option: option,
+                    legProcesses: kernels,
+                    startingAt: leaveBy,
+                    samples: samplesPerRow,
+                    rng: &rng
                 )
+                let totalDuration = distribution.totalDuration
 
-                let totalP50 = arriveDoorP50.timeIntervalSince(leaveBy)
-                let totalP80 = arriveDoorP80.timeIntervalSince(leaveBy)
-                let totalMean = (totalP50 + totalP80) / 2
-                let totalDistribution = TimeDistributionSummary(
-                    mean: max(0, totalMean),
-                    p50: max(0, totalP50),
-                    p80: max(0, totalP80),
-                    p90: max(0, totalP80 + 1.0 * (totalP80 - totalP50)),
-                    confidence: min(walkConfidence, 0.85),
-                    sampleCount: max(spec.liveDepartures.count, 1)
-                )
+                let arriveLow = leaveBy.addingTimeInterval(totalDuration.p50)
+                let arriveHigh = leaveBy.addingTimeInterval(totalDuration.p80)
 
-                let catchProbability: Double = departure.isApproaching ? 0.95 : 0.85
-                let risk = downgradeIfFeedShaky(waitForecast.state, feedState: spec.feedState)
-
-                let secondary: String? = {
-                    if risk == .badGap { return "gap" }
-                    if risk == .bunched { return "bunched" }
-                    if risk == .feedUnreliable { return "feed unreliable" }
-                    if risk == .riskyWait { return "tight" }
-                    return spec.title.lowercased().contains("bus") ? "bus" : nil
-                }()
+                let catchProbability = max(0, min(1, 1 - distribution.failureProbability))
+                let combinedRisk = combineRisk(downstreamRisk, failureProbability: distribution.failureProbability)
+                let secondary = secondaryLabel(risk: combinedRisk, spec: spec)
 
                 rowsAccumulator.append(
                     DepartureLadderRow(
                         leaveByAt: leaveBy,
-                        totalDuration: totalDistribution,
-                        arrivalAt: DepartureLadderRow.ArrivalWindow(low: arriveDoorP50, high: arriveDoorP80),
-                        primaryLabel: spec.title,
+                        totalDuration: totalDuration,
+                        arrivalAt: DepartureLadderRow.ArrivalWindow(low: arriveLow, high: arriveHigh),
+                        primaryLabel: option.title,
                         secondaryLabel: secondary,
-                        risk: risk,
+                        risk: combinedRisk,
                         note: waitForecast.explanation,
                         catchProbability: catchProbability,
                         missCostSeconds: nil
@@ -188,6 +271,126 @@ public struct DepartureLadderBuilder: Sendable {
             nextCliffAt: cliffAt,
             lineHealth: lineHealth
         )
+    }
+
+    private func buildOption(
+        spec: LadderCandidateSpec,
+        stopProcess: StopArrivalProcess,
+        transferStopProcess: StopArrivalProcess?,
+        origin: JourneyPoint,
+        destinationPoint: JourneyPoint,
+        walkMean: TimeInterval,
+        walkSigma: TimeInterval,
+        walkConfidence: Double,
+        walkSpeedSamples: Int,
+        finalMileMean: TimeInterval,
+        finalMileSigma: TimeInterval,
+        walkRatio: Double
+    ) -> (JourneyOption, [UUID: any PreparedLegProcess]) {
+        let walkToBoarding = LegCandidate(
+            mode: .walk,
+            displayLabel: "Walk to boarding",
+            fromPoint: origin,
+            toPoint: spec.boardingPoint
+        )
+        let walkPrepared: any PreparedLegProcess = PreparedWalkProcess(
+            expectedSeconds: walkMean,
+            appliedRatio: 1.0,
+            jitterCoefficient: walkSigma / max(1, walkMean),
+            confidence: walkConfidence,
+            sampleCount: walkSpeedSamples
+        )
+
+        let transit = LegCandidate(
+            mode: spec.mode,
+            displayLabel: spec.title,
+            fromPoint: spec.boardingPoint,
+            toPoint: spec.alightingPoint
+        )
+        let transitPrepared: any PreparedLegProcess = PreparedTransitLeg(
+            mode: spec.mode,
+            stopArrivalProcess: stopProcess,
+            inVehicleMean: spec.inVehicleSeconds,
+            inVehicleSigma: spec.inVehicleSigmaSeconds
+        )
+
+        var slots: [JourneySlot] = [.fixed(walkToBoarding), .fixed(transit)]
+        var kernels: [UUID: any PreparedLegProcess] = [
+            walkToBoarding.id: walkPrepared,
+            transit.id: transitPrepared
+        ]
+
+        var title = spec.title
+
+        if let transfer = spec.transfer, let transferStopProcess = transferStopProcess {
+            let transferWalk = LegCandidate(
+                mode: .walk,
+                displayLabel: "Transfer walk",
+                fromPoint: spec.alightingPoint,
+                toPoint: transfer.nextBoardingPoint
+            )
+            let transferWalkPrepared: any PreparedLegProcess = PreparedWalkProcess(
+                expectedSeconds: transfer.transferWalkSeconds * walkRatio,
+                appliedRatio: 1.0,
+                jitterCoefficient: (transfer.transferWalkSigmaSeconds + 30) / max(1, transfer.transferWalkSeconds * walkRatio),
+                confidence: walkConfidence,
+                sampleCount: walkSpeedSamples
+            )
+
+            let secondTransit = LegCandidate(
+                mode: transfer.nextMode,
+                displayLabel: "\(transfer.nextRouteIdentifier) ride",
+                fromPoint: transfer.nextBoardingPoint,
+                toPoint: transfer.nextAlightingPoint
+            )
+            let secondTransitPrepared: any PreparedLegProcess = PreparedTransitLeg(
+                mode: transfer.nextMode,
+                stopArrivalProcess: transferStopProcess,
+                inVehicleMean: transfer.nextInVehicleSeconds,
+                inVehicleSigma: transfer.nextInVehicleSigmaSeconds
+            )
+
+            slots.append(.fixed(transferWalk))
+            slots.append(.fixed(secondTransit))
+            kernels[transferWalk.id] = transferWalkPrepared
+            kernels[secondTransit.id] = secondTransitPrepared
+
+            title = "\(spec.title) → \(transfer.nextRouteIdentifier)"
+        }
+
+        let finalWalk = LegCandidate(
+            mode: .walk,
+            displayLabel: "Final mile",
+            fromPoint: spec.transfer?.nextAlightingPoint ?? spec.alightingPoint,
+            toPoint: destinationPoint
+        )
+        let finalWalkPrepared: any PreparedLegProcess = PreparedWalkProcess(
+            expectedSeconds: finalMileMean,
+            appliedRatio: 1.0,
+            jitterCoefficient: finalMileSigma / max(1, finalMileMean),
+            confidence: walkConfidence,
+            sampleCount: walkSpeedSamples
+        )
+        slots.append(.fixed(finalWalk))
+        kernels[finalWalk.id] = finalWalkPrepared
+
+        let option = JourneyOption(title: title, summary: spec.title, slots: slots)
+        return (option, kernels)
+    }
+
+    private func secondaryLabel(risk: WaitReasonableness, spec: LadderCandidateSpec) -> String? {
+        if risk == .badGap { return "gap" }
+        if risk == .bunched { return "bunched" }
+        if risk == .feedUnreliable { return "feed unreliable" }
+        if risk == .riskyWait { return "tight" }
+        if spec.transfer != nil { return "transfer" }
+        return spec.title.lowercased().contains("bus") ? "bus" : nil
+    }
+
+    private func combineRisk(_ baseline: WaitReasonableness, failureProbability: Double) -> WaitReasonableness {
+        if failureProbability >= 0.25 { return .badGap }
+        if failureProbability >= 0.10, baseline == .acceptableWait || baseline == .goodWait { return .riskyWait }
+        return baseline
     }
 
     private func collapse(rows: [DepartureLadderRow]) -> [DepartureLadderRow] {

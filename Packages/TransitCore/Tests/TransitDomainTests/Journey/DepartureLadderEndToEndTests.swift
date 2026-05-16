@@ -57,6 +57,7 @@ struct DepartureLadderEndToEndTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [red, brown],
             walkSpeedEstimate: .empty,

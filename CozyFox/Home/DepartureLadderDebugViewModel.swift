@@ -98,6 +98,7 @@ final class DepartureLadderDebugViewModel {
         ladder = builder.build(
             destinationTitle: work.label,
             origin: .anchor(.home),
+            destinationPoint: .coordinate(latitude: work.latitude, longitude: work.longitude),
             snapshot: snapshot,
             candidates: specs,
             walkSpeedEstimate: walkSpeedEstimate,
@@ -147,30 +148,134 @@ final class DepartureLadderDebugViewModel {
                 .cached(origin: home, stationId: boarding.id)?.expectedTravelTime
                 ?? haversineWalkSeconds(from: home, to: (boarding.latitude, boarding.longitude), walkSpeedEstimate: walkSpeedEstimate)
 
-            let finalMile = haversineWalkSeconds(from: (alighting.latitude, alighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
-            let stationDist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
+            let alightingDistanceToWork = haversineMeters(from: (alighting.latitude, alighting.longitude), to: work)
+            let transfer = detectTransfer(
+                from: attempt.line,
+                boarding: boarding,
+                directAlighting: alighting,
+                directAlightingDistanceToWork: alightingDistanceToWork,
+                home: home,
+                work: work,
+                snapshot: snapshot,
+                walkSpeedEstimate: walkSpeedEstimate,
+                now: now
+            )
+
+            let finalAlighting = transfer?.finalAlighting ?? alighting
+            let finalMile = haversineWalkSeconds(from: (finalAlighting.latitude, finalAlighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
+
+            let firstSegmentEnd = transfer?.intermediate ?? alighting
+            let stationDist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (firstSegmentEnd.latitude, firstSegmentEnd.longitude))
             let inVehicle = stationToStationSeconds(meters: stationDist, modeSpeedMps: 12, stopPenaltyPerKm: 25)
 
             let live = adapter.liveTrainDepartures(from: snapshot, line: attempt.line, stationId: boarding.id, now: now)
             let feed = adapter.feedState(fetchedAt: snapshot.trainsFetchedAt, now: now)
+            let title = transfer == nil
+                ? "\(attempt.line.displayName) — \(boarding.name)"
+                : "\(attempt.line.displayName) → \(transfer!.nextLine.displayName)"
             let candidate = LadderCandidateSpec(
-                title: "\(attempt.line.displayName) — \(boarding.name)",
+                title: title,
                 mode: .ctaTrain,
                 routeIdentifier: attempt.line.rawValue,
                 direction: attempt.directionLabel,
                 boardingPoint: .station(systemRef: "L:\(boarding.id)", name: boarding.name, lineHint: attempt.line.rawValue),
-                alightingPoint: .station(systemRef: "L:\(alighting.id)", name: alighting.name, lineHint: attempt.line.rawValue),
+                alightingPoint: .station(systemRef: "L:\(firstSegmentEnd.id)", name: firstSegmentEnd.name, lineHint: attempt.line.rawValue),
                 inVehicleSeconds: inVehicle,
                 inVehicleSigmaSeconds: max(60, inVehicle * 0.12),
                 finalMileSeconds: finalMile,
                 finalMileSigmaSeconds: max(30, finalMile * 0.12),
                 scheduleHeadwaySeconds: 600,
                 liveDepartures: live,
-                feedState: feed
+                feedState: feed,
+                transfer: transfer?.leg
             )
             out.append(ResolvedSpec(modeLabel: "L", candidate: candidate, walkSeconds: walkSeconds))
         }
         return out
+    }
+
+    private struct DetectedTransfer {
+        let intermediate: LStation
+        let finalAlighting: LStation
+        let nextLine: LineColor
+        let leg: LadderTransferLeg
+    }
+
+    private func detectTransfer(
+        from sourceLine: LineColor,
+        boarding: LStation,
+        directAlighting: LStation,
+        directAlightingDistanceToWork: Double,
+        home: (lat: Double, lon: Double),
+        work: (lat: Double, lon: Double),
+        snapshot: TransitSnapshot,
+        walkSpeedEstimate: WalkSpeedEstimate,
+        now: Date
+    ) -> DetectedTransfer? {
+        if directAlightingDistanceToWork < 1500 { return nil }
+
+        var best: (saving: Double, detected: DetectedTransfer)?
+
+        for otherLine in LineColor.allCases where otherLine != sourceLine {
+            guard let nearestOnOther = LStationCatalog.stations(onLine: otherLine).min(by: {
+                haversineMeters(from: ($0.latitude, $0.longitude), to: work) < haversineMeters(from: ($1.latitude, $1.longitude), to: work)
+            }) else { continue }
+            let otherDistance = haversineMeters(from: (nearestOnOther.latitude, nearestOnOther.longitude), to: work)
+            let saving = directAlightingDistanceToWork - otherDistance
+            if saving < 500 { continue }
+
+            let candidatesByDistance = LStationCatalog.all
+                .filter { $0.servedLines.contains(sourceLine) && $0.servedLines.contains(otherLine) && $0.id != boarding.id }
+                .map { (station: $0, distToFinal: haversineMeters(from: ($0.latitude, $0.longitude), to: (nearestOnOther.latitude, nearestOnOther.longitude))) }
+                .sorted { $0.distToFinal < $1.distToFinal }
+            guard let transferStation = candidatesByDistance.first?.station else { continue }
+
+            let onPath = isStationBetween(home: home, work: work, station: transferStation)
+            guard onPath else { continue }
+
+            let secondLegMeters = haversineMeters(from: (transferStation.latitude, transferStation.longitude), to: (nearestOnOther.latitude, nearestOnOther.longitude))
+            let secondLegSeconds = stationToStationSeconds(meters: secondLegMeters, modeSpeedMps: 12, stopPenaltyPerKm: 25)
+            let transferWalk = haversineWalkSeconds(
+                from: (transferStation.latitude, transferStation.longitude),
+                to: (transferStation.latitude, transferStation.longitude),
+                walkSpeedEstimate: walkSpeedEstimate
+            ) + 90
+
+            let live = adapter.liveTrainDepartures(from: snapshot, line: otherLine, stationId: transferStation.id, now: now)
+            let feed = adapter.feedState(fetchedAt: snapshot.trainsFetchedAt, now: now)
+            let leg = LadderTransferLeg(
+                transferWalkSeconds: transferWalk,
+                transferWalkSigmaSeconds: 30,
+                nextMode: .ctaTrain,
+                nextRouteIdentifier: otherLine.rawValue,
+                nextDirection: nil,
+                nextBoardingPoint: .station(systemRef: "L:\(transferStation.id)", name: transferStation.name, lineHint: otherLine.rawValue),
+                nextAlightingPoint: .station(systemRef: "L:\(nearestOnOther.id)", name: nearestOnOther.name, lineHint: otherLine.rawValue),
+                nextInVehicleSeconds: secondLegSeconds,
+                nextInVehicleSigmaSeconds: max(60, secondLegSeconds * 0.15),
+                nextScheduleHeadwaySeconds: 600,
+                nextLiveDepartures: live,
+                nextFeedState: feed
+            )
+
+            let detected = DetectedTransfer(
+                intermediate: transferStation,
+                finalAlighting: nearestOnOther,
+                nextLine: otherLine,
+                leg: leg
+            )
+            if best == nil || saving > best!.saving {
+                best = (saving, detected)
+            }
+        }
+        return best?.detected
+    }
+
+    private func isStationBetween(home: (lat: Double, lon: Double), work: (lat: Double, lon: Double), station: LStation) -> Bool {
+        let homeToWork = haversineMeters(from: home, to: work)
+        let homeToStation = haversineMeters(from: home, to: (station.latitude, station.longitude))
+        let stationToWork = haversineMeters(from: (station.latitude, station.longitude), to: work)
+        return homeToStation + stationToWork < homeToWork * 1.4
     }
 
     private func boardingStation(line: LineColor, preferredStationId: Int?, near origin: (lat: Double, lon: Double)) -> LStation? {

@@ -42,6 +42,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 15, 23, 31, 39]))],
             walkSpeedEstimate: .empty,
@@ -62,6 +63,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: candidates,
             walkSpeedEstimate: .empty,
@@ -76,6 +78,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([5, 12, 19, 26, 33, 40, 47]))],
             walkSpeedEstimate: .empty,
@@ -90,6 +93,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 14, 35, 42]))],
             walkSpeedEstimate: .empty,
@@ -106,6 +110,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 14, 21, 28, 35]))],
             walkSpeedEstimate: .empty,
@@ -121,6 +126,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 15, 23]), feedState: .stale)],
             walkSpeedEstimate: .empty,
@@ -138,6 +144,7 @@ struct DepartureLadderBuilderTests {
         let ladder = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 15, 23, 31]))],
             walkSpeedEstimate: .empty,
@@ -152,11 +159,63 @@ struct DepartureLadderBuilderTests {
         #expect(ladder.rows.last?.missCostSeconds == nil)
     }
 
+    @Test func multiLegCandidateProducesTransferAnnotatedRow() {
+        let builder = DepartureLadderBuilder()
+        let transferDepartures = liveDepartures([15, 22, 29, 36])
+        let transfer = LadderTransferLeg(
+            transferWalkSeconds: 180,
+            transferWalkSigmaSeconds: 30,
+            nextMode: .ctaTrain,
+            nextRouteIdentifier: "P",
+            nextBoardingPoint: .station(systemRef: "L:40900", name: "Howard", lineHint: "P"),
+            nextAlightingPoint: .station(systemRef: "L:41050", name: "Davis", lineHint: "P"),
+            nextInVehicleSeconds: 540,
+            nextInVehicleSigmaSeconds: 60,
+            nextScheduleHeadwaySeconds: 600,
+            nextLiveDepartures: transferDepartures,
+            nextFeedState: .fresh
+        )
+        let candidate = candidate(
+            title: "Red Line — Belmont",
+            liveDepartures: liveDepartures([7, 14, 21, 28])
+        )
+        let withTransfer = LadderCandidateSpec(
+            title: candidate.title,
+            mode: candidate.mode,
+            routeIdentifier: candidate.routeIdentifier,
+            direction: candidate.direction,
+            boardingPoint: candidate.boardingPoint,
+            alightingPoint: .station(systemRef: "L:40900", name: "Howard", lineHint: "Red"),
+            inVehicleSeconds: candidate.inVehicleSeconds,
+            inVehicleSigmaSeconds: candidate.inVehicleSigmaSeconds,
+            finalMileSeconds: candidate.finalMileSeconds,
+            finalMileSigmaSeconds: candidate.finalMileSigmaSeconds,
+            scheduleHeadwaySeconds: candidate.scheduleHeadwaySeconds,
+            liveDepartures: candidate.liveDepartures,
+            feedState: candidate.feedState,
+            transfer: transfer
+        )
+        let ladder = builder.build(
+            destinationTitle: "Work",
+            origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
+            snapshot: .empty,
+            candidates: [withTransfer],
+            walkSpeedEstimate: .empty,
+            walkingTimeFetcher: walkingFetcher,
+            clock: clock
+        )
+        #expect(!ladder.rows.isEmpty)
+        #expect(ladder.rows.allSatisfy { $0.primaryLabel.contains("→") })
+        #expect(ladder.lineHealth.count == 2)
+    }
+
     @Test func deterministicOutputForFixedInputs() {
         let builder = DepartureLadderBuilder()
         let runA = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 15, 23, 31, 39]))],
             walkSpeedEstimate: .empty,
@@ -166,6 +225,7 @@ struct DepartureLadderBuilderTests {
         let runB = builder.build(
             destinationTitle: "Work",
             origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
             snapshot: .empty,
             candidates: [candidate(liveDepartures: liveDepartures([7, 15, 23, 31, 39]))],
             walkSpeedEstimate: .empty,
