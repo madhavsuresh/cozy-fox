@@ -26,6 +26,7 @@ final class DepartureLadderDebugViewModel {
     private let builder = DepartureLadderBuilder()
     private let transferDetector = TransferDetector()
     private let unreachableAlightingMeters: Double = 3_000
+    private let logStore = JourneyPredictionLogStore()
 
     func rebuild(
         snapshot: TransitSnapshot,
@@ -97,7 +98,7 @@ final class DepartureLadderDebugViewModel {
             walkLookup[journeyPointKey(to)] ?? 300
         }
 
-        ladder = builder.build(
+        let built = builder.build(
             destinationTitle: work.label,
             origin: .anchor(.home),
             destinationPoint: .coordinate(latitude: work.latitude, longitude: work.longitude),
@@ -107,7 +108,14 @@ final class DepartureLadderDebugViewModel {
             walkingTimeFetcher: walkFetcher,
             clock: SystemClock()
         )
+        ladder = built
         status = .ready
+
+        let originLabel = home.label
+        let store = logStore
+        Task.detached(priority: .background) {
+            await store.appendLadder(built, origin: originLabel)
+        }
     }
 
     // MARK: - CTA trains
