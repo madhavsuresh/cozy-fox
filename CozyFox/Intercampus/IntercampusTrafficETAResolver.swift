@@ -2,6 +2,22 @@ import Foundation
 import MapKit
 import TransitModels
 
+struct IntercampusTrafficETASample: Sendable, Hashable {
+    let travelTime: TimeInterval
+    let distanceMeters: Double
+}
+
+protocol IntercampusTrafficETAFetching: Sendable {
+    /// Returns a sample, or nil if the directions service couldn't produce a
+    /// usable route (no route, throttled, network error). Throws on
+    /// cancellation so the resolver can avoid caching aborted requests.
+    func fetchEstimate(
+        from origin: (latitude: Double, longitude: Double),
+        to destination: (latitude: Double, longitude: Double),
+        departingAt: Date
+    ) async throws -> IntercampusTrafficETASample?
+}
+
 @MainActor
 final class IntercampusTrafficETAResolver {
     private let maxTrafficEstimatesPerRefresh = 4
@@ -9,7 +25,12 @@ final class IntercampusTrafficETAResolver {
     private let estimateTTL: TimeInterval = 90
     private let failureTTL: TimeInterval = 45
 
+    private let fetcher: IntercampusTrafficETAFetching
     private var cache: [CacheKey: CacheEntry] = [:]
+
+    init(fetcher: IntercampusTrafficETAFetching = MapKitIntercampusTrafficETAFetcher()) {
+        self.fetcher = fetcher
+    }
 
     func applyingTrafficEstimates(
         to arrivals: [IntercampusArrival],
@@ -87,42 +108,26 @@ final class IntercampusTrafficETAResolver {
               let stop = IntercampusCatalog.stop(id: arrival.stopId)
         else { return nil }
 
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(
-            coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
-        ))
-        request.destination = MKMapItem(placemark: MKPlacemark(
-            coordinate: CLLocationCoordinate2D(latitude: stop.latitude, longitude: stop.longitude)
-        ))
-        request.transportType = .automobile
-        request.requestsAlternateRoutes = false
-        request.departureDate = now
-
-        let directions = MKDirections(request: request)
-        guard await MapKitDirectionsLimiter.waitForTurn() else { return nil }
         do {
-            let response = try await directions.calculate()
-            guard let route = response.routes.first,
-                  route.distance.isFinite,
-                  route.expectedTravelTime.isFinite,
-                  route.expectedTravelTime >= 0,
-                  route.expectedTravelTime <= 2 * 60 * 60
-            else {
+            let sample = try await fetcher.fetchEstimate(
+                from: (latitude: location.latitude, longitude: location.longitude),
+                to: (latitude: stop.latitude, longitude: stop.longitude),
+                departingAt: now
+            )
+            guard let sample else {
                 cache[cacheKey] = CacheEntry(estimate: nil, expiresAt: now.addingTimeInterval(failureTTL))
                 return nil
             }
             let estimate = IntercampusTrafficEstimate(
                 generatedAt: now,
                 sourceArrivalAt: arrival.arrivalAt,
-                arrivalAt: now.addingTimeInterval(route.expectedTravelTime),
-                travelTime: route.expectedTravelTime,
-                distanceMeters: route.distance
+                arrivalAt: now.addingTimeInterval(sample.travelTime),
+                travelTime: sample.travelTime,
+                distanceMeters: sample.distanceMeters
             )
             cache[cacheKey] = CacheEntry(estimate: estimate, expiresAt: now.addingTimeInterval(estimateTTL))
             return estimate
         } catch {
-            await MapKitDirectionsLimiter.recordFailure(error)
-            cache[cacheKey] = CacheEntry(estimate: nil, expiresAt: now.addingTimeInterval(failureTTL))
             return nil
         }
     }
@@ -131,25 +136,66 @@ final class IntercampusTrafficETAResolver {
         cache = cache.filter { $0.value.expiresAt > now }
     }
 
+    /// Cache identity is keyed by trip + stop + vehicle, NOT the bus's current
+    /// position. The bus moves every refresh, so including position would make
+    /// almost every lookup a miss. The TTL handles staleness — once the entry
+    /// expires we recompute against the latest position.
     private struct CacheKey: Hashable {
         let tripId: String
         let stopId: String
         let vehicleId: String
-        let latitudeBucket: Int
-        let longitudeBucket: Int
 
         init?(arrival: IntercampusArrival) {
-            guard let location = arrival.vehicleLocation else { return nil }
+            guard arrival.vehicleLocation != nil else { return nil }
             self.tripId = arrival.tripId
             self.stopId = arrival.stopId
-            self.vehicleId = location.id ?? arrival.vehicleId ?? arrival.tripId
-            self.latitudeBucket = Int((location.latitude * 10_000).rounded())
-            self.longitudeBucket = Int((location.longitude * 10_000).rounded())
+            self.vehicleId = arrival.vehicleLocation?.id ?? arrival.vehicleId ?? arrival.tripId
         }
     }
 
     private struct CacheEntry {
         let estimate: IntercampusTrafficEstimate?
         let expiresAt: Date
+    }
+}
+
+struct MapKitIntercampusTrafficETAFetcher: IntercampusTrafficETAFetching {
+    func fetchEstimate(
+        from origin: (latitude: Double, longitude: Double),
+        to destination: (latitude: Double, longitude: Double),
+        departingAt: Date
+    ) async throws -> IntercampusTrafficETASample? {
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(
+            coordinate: CLLocationCoordinate2D(latitude: origin.latitude, longitude: origin.longitude)
+        ))
+        request.destination = MKMapItem(placemark: MKPlacemark(
+            coordinate: CLLocationCoordinate2D(latitude: destination.latitude, longitude: destination.longitude)
+        ))
+        request.transportType = .automobile
+        request.requestsAlternateRoutes = false
+        request.departureDate = departingAt
+
+        guard await MapKitDirectionsLimiter.waitForTurn() else {
+            throw CancellationError()
+        }
+
+        let directions = MKDirections(request: request)
+        do {
+            let response = try await directions.calculate()
+            guard let route = response.routes.first,
+                  route.distance.isFinite,
+                  route.expectedTravelTime.isFinite,
+                  route.expectedTravelTime >= 0,
+                  route.expectedTravelTime <= 2 * 60 * 60
+            else { return nil }
+            return IntercampusTrafficETASample(
+                travelTime: route.expectedTravelTime,
+                distanceMeters: route.distance
+            )
+        } catch {
+            await MapKitDirectionsLimiter.recordFailure(error)
+            return nil
+        }
     }
 }
