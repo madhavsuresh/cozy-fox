@@ -231,6 +231,15 @@ public final class CachedIntercampusArrival {
     public var delaySeconds: Int?
     public var isDelayed: Bool
     public var timeSourceRaw: String?
+    public var vehicleLatitude: Double?
+    public var vehicleLongitude: Double?
+    public var vehicleHeading: Int?
+    public var vehicleObservedAt: Date?
+    public var trafficGeneratedAt: Date?
+    public var trafficSourceArrivalAt: Date?
+    public var trafficArrivalAt: Date?
+    public var trafficTravelTime: TimeInterval?
+    public var trafficDistanceMeters: Double?
     public var fetchedAt: Date
 
     public init(arrival: IntercampusArrival, fetchedAt: Date) {
@@ -248,6 +257,15 @@ public final class CachedIntercampusArrival {
         self.delaySeconds = arrival.delaySeconds
         self.isDelayed = arrival.isDelayed
         self.timeSourceRaw = arrival.timeSource.rawValue
+        self.vehicleLatitude = arrival.vehicleLocation?.latitude
+        self.vehicleLongitude = arrival.vehicleLocation?.longitude
+        self.vehicleHeading = arrival.vehicleLocation?.heading
+        self.vehicleObservedAt = arrival.vehicleLocation?.observedAt
+        self.trafficGeneratedAt = arrival.trafficEstimate?.generatedAt
+        self.trafficSourceArrivalAt = arrival.trafficEstimate?.sourceArrivalAt
+        self.trafficArrivalAt = arrival.trafficEstimate?.arrivalAt
+        self.trafficTravelTime = arrival.trafficEstimate?.travelTime
+        self.trafficDistanceMeters = arrival.trafficEstimate?.distanceMeters
         self.fetchedAt = fetchedAt
     }
 
@@ -258,6 +276,36 @@ public final class CachedIntercampusArrival {
             : .liveMap
         let timeSource = timeSourceRaw
             .flatMap(IntercampusArrivalTimeSource.init(rawValue:)) ?? fallbackSource
+        let vehicleLocation: IntercampusVehicleLocation?
+        if let vehicleLatitude, let vehicleLongitude, let vehicleObservedAt {
+            vehicleLocation = IntercampusVehicleLocation(
+                id: vehicleId,
+                label: vehicleLabel,
+                latitude: vehicleLatitude,
+                longitude: vehicleLongitude,
+                heading: vehicleHeading,
+                observedAt: vehicleObservedAt
+            )
+        } else {
+            vehicleLocation = nil
+        }
+        let trafficEstimate: IntercampusTrafficEstimate?
+        if let trafficGeneratedAt,
+           let trafficSourceArrivalAt,
+           let trafficArrivalAt,
+           let trafficTravelTime,
+           let trafficDistanceMeters
+        {
+            trafficEstimate = IntercampusTrafficEstimate(
+                generatedAt: trafficGeneratedAt,
+                sourceArrivalAt: trafficSourceArrivalAt,
+                arrivalAt: trafficArrivalAt,
+                travelTime: trafficTravelTime,
+                distanceMeters: trafficDistanceMeters
+            )
+        } else {
+            trafficEstimate = nil
+        }
         return IntercampusArrival(
             id: id,
             routeId: routeId,
@@ -272,7 +320,9 @@ public final class CachedIntercampusArrival {
             arrivalAt: arrivalAt,
             delaySeconds: delaySeconds,
             isDelayed: isDelayed,
-            timeSource: timeSource
+            timeSource: timeSource,
+            vehicleLocation: vehicleLocation,
+            trafficEstimate: trafficEstimate
         )
     }
 }

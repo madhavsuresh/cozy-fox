@@ -270,7 +270,7 @@ private extension AccessTravelMode {
     }
 }
 
-private actor MapKitDirectionsLimiter {
+actor MapKitDirectionsLimiter {
     static let shared = MapKitDirectionsLimiter()
 
     private let windowSize: TimeInterval = 60

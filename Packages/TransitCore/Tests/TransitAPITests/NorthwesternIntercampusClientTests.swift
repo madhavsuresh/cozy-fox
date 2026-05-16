@@ -117,6 +117,47 @@ struct NorthwesternIntercampusClientTests {
         #expect(arrivals.first?.timeSource == .liveMap)
     }
 
+    @Test func attachesVehicleCoordinatesFromVehiclePositionFeed() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let tripId = "4afda0c4-b03b-4499-85f0-7137d34d8f24"
+        let stopId = "60e7b447-b29d-4812-bf93-7a77a1d5ae5b"
+        let stub = StubHTTPClient()
+        await stub.register(
+            path: "/v1/gtfs/realtime/tripUpdate",
+            data: FeedBuilder.feed([
+                FeedBuilder.tripUpdateEntity(
+                    entityId: "positioned",
+                    tripId: tripId,
+                    routeId: nil,
+                    stopId: stopId,
+                    arrivalAt: now.addingTimeInterval(300)
+                ),
+            ], timestamp: now)
+        )
+        await stub.register(
+            path: "/v1/gtfs/realtime/vehiclePosition",
+            data: FeedBuilder.vehiclePositionFeed(
+                tripId: tripId,
+                vehicleId: "vehicle-id",
+                vehicleLabel: "35007",
+                timestamp: now,
+                latitude: 41.895,
+                longitude: -87.619,
+                bearing: 181
+            )
+        )
+        let client = NorthwesternIntercampusClient(http: stub)
+
+        let arrivals = try await client.fetchArrivals(stopIds: [stopId], now: now)
+
+        let location = try #require(arrivals.first?.vehicleLocation)
+        #expect(location.label == "35007")
+        #expect(abs(location.latitude - 41.895) < 0.0001)
+        #expect(abs(location.longitude - -87.619) < 0.0001)
+        #expect(location.heading == 181)
+        #expect(location.observedAt == now)
+    }
+
     @Test func fallsBackToStaticScheduleWhenRealtimeHasNoStopPredictions() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Chicago")!
@@ -183,13 +224,25 @@ private enum FeedBuilder {
         tripId: String,
         vehicleId: String,
         vehicleLabel: String,
-        timestamp: Date
+        timestamp: Date,
+        latitude: Float? = nil,
+        longitude: Float? = nil,
+        bearing: Float? = nil
     ) -> Data {
         let trip = stringField(1, tripId)
         let vehicle = stringField(1, vehicleId) + stringField(2, vehicleLabel)
-        let vehiclePosition = bytesField(1, trip)
-            + varintField(5, UInt64(timestamp.timeIntervalSince1970))
-            + bytesField(8, vehicle)
+        var vehiclePosition = bytesField(1, trip)
+        if let latitude, let longitude {
+            var position = fixed32Field(1, latitude) + fixed32Field(2, longitude)
+            if let bearing {
+                position.append(fixed32Field(3, bearing))
+            }
+            vehiclePosition.append(bytesField(2, position))
+        }
+        vehiclePosition.append(
+            varintField(5, UInt64(timestamp.timeIntervalSince1970))
+                + bytesField(8, vehicle)
+        )
         return feed([
             stringField(1, "vehicle") + bytesField(4, vehiclePosition)
         ], timestamp: timestamp)
@@ -203,6 +256,15 @@ private enum FeedBuilder {
         var data = varint(UInt64(number << 3 | 2))
         data.append(varint(UInt64(value.count)))
         data.append(value)
+        return data
+    }
+
+    private static func fixed32Field(_ number: Int, _ value: Float) -> Data {
+        var data = varint(UInt64(number << 3 | 5))
+        var bits = value.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { buffer in
+            data.append(contentsOf: buffer)
+        }
         return data
     }
 
