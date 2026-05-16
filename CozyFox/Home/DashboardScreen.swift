@@ -2595,12 +2595,57 @@ struct DashboardScreen: View {
                         }
                     }
                 }
-                HeadwayDotStrip(
-                    arrivals: arrivals.prefix(8).map(\.arrivalAt),
-                    accent: intercampusAccent
+                if intercampusFavorsDotStrip(arrivals) {
+                    HeadwayDotStrip(
+                        arrivals: arrivals.prefix(8).map(\.arrivalAt),
+                        accent: intercampusAccent
+                    )
+                }
+                let scheduled = scheduledIntercampusArrivals(
+                    direction: choice.direction,
+                    stop: choice.stop
                 )
+                if !scheduled.isEmpty {
+                    VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                        sectionLabel("Schedule")
+                        IntercampusDepartureListView(
+                            arrivals: scheduled,
+                            accent: intercampusAccent
+                        )
+                    }
+                }
             }
         }
+    }
+
+    /// Pick the dot-strip when there are enough imminent live arrivals
+    /// for the strip's headway pattern to actually read. Threshold tuned
+    /// so that mid-day Intercampus (every 15–20 min) hides the strip and
+    /// peak (every 7–8 min) keeps it. The Schedule list below is always
+    /// shown either way.
+    private func intercampusFavorsDotStrip(_ arrivals: [IntercampusArrival]) -> Bool {
+        let now = Date.now
+        let cutoff = now.addingTimeInterval(30 * 60)
+        return arrivals.lazy.filter { $0.arrivalAt >= now && $0.arrivalAt <= cutoff }.count >= 3
+    }
+
+    /// Pulls the next handful of *scheduled* arrivals from the static
+    /// GTFS catalog for this stop + direction. Independent of the live
+    /// snapshot — the list is meant as a stable timetable the rider can
+    /// plan against, separate from the traffic-adjusted headline.
+    private func scheduledIntercampusArrivals(
+        direction: IntercampusDirection,
+        stop: IntercampusStop
+    ) -> [IntercampusArrival] {
+        IntercampusCatalog.scheduledArrivals(
+            stopIds: [stop.id],
+            after: .now,
+            generatedAt: .now,
+            lookaheadDays: 1
+        )
+        .filter { $0.direction == direction }
+        .prefix(5)
+        .map { $0 }
     }
 
     private func intercampusTimeSourceBadge(_ source: IntercampusArrivalTimeSource) -> some View {
