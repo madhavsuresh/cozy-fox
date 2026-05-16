@@ -77,6 +77,8 @@ struct DashboardScreen: View {
                             contextBanner
                         }
                         liveUpdatesBar
+                        DepartureLadderDebugCard()
+                            .environment(model)
                         headHomeCard
                         pleasantSurpriseCard
                         portfolioSection

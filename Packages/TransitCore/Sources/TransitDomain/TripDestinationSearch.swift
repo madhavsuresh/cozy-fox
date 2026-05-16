@@ -1,5 +1,6 @@
 import Foundation
 import MapKit
+import TransitModels
 
 /// A sendable summary of an `MKLocalSearchCompletion` so the UI layer never
 /// has to handle MapKit reference types across actors. We hold the underlying

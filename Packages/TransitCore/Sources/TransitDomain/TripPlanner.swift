@@ -2,21 +2,6 @@ import Foundation
 import MapKit
 import TransitModels
 
-/// A single coordinate pair, Sendable so the planner can stay isolated-free.
-public struct PlannerCoordinate: Sendable, Hashable {
-    public let latitude: Double
-    public let longitude: Double
-
-    public init(latitude: Double, longitude: Double) {
-        self.latitude = latitude
-        self.longitude = longitude
-    }
-
-    public var clLocationCoordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-    }
-}
-
 public struct TripLeg: Sendable, Hashable, Identifiable {
     public let id: UUID
     public let mode: TripLegMode
@@ -138,10 +123,16 @@ public struct TripPlanner: Sendable {
     ) async throws -> [TripPlan] {
         let request = MKDirections.Request()
         request.source = MKMapItem(
-            placemark: MKPlacemark(coordinate: origin.clLocationCoordinate)
+            placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(
+                latitude: origin.latitude,
+                longitude: origin.longitude
+            ))
         )
         request.destination = MKMapItem(
-            placemark: MKPlacemark(coordinate: destination.clLocationCoordinate)
+            placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(
+                latitude: destination.latitude,
+                longitude: destination.longitude
+            ))
         )
         request.transportType = .transit
         request.requestsAlternateRoutes = true
