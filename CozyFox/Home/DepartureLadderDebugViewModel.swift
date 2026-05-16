@@ -172,11 +172,23 @@ final class DepartureLadderDebugViewModel {
             let stationDist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (firstSegmentEnd.latitude, firstSegmentEnd.longitude))
             let inVehicle = stationToStationSeconds(meters: stationDist, modeSpeedMps: 12, stopPenaltyPerKm: 25)
 
-            let live = adapter.liveTrainDepartures(from: snapshot, line: attempt.line, stationId: boarding.id, now: now)
+            let live = adapter.liveTrainDeparturesTowardAlighting(
+                from: snapshot,
+                line: attempt.line,
+                boardingStation: boarding,
+                alightingStation: firstSegmentEnd,
+                now: now
+            )
             let feed = adapter.feedState(fetchedAt: snapshot.trainsFetchedAt, now: now)
 
             let transferLeg: LadderTransferLeg? = detected.map { d in
-                let live = adapter.liveTrainDepartures(from: snapshot, line: d.nextLine, stationId: d.intermediate.id, now: now)
+                let live = adapter.liveTrainDeparturesTowardAlighting(
+                    from: snapshot,
+                    line: d.nextLine,
+                    boardingStation: d.intermediate,
+                    alightingStation: d.finalAlighting,
+                    now: now
+                )
                 let feed = adapter.feedState(fetchedAt: snapshot.trainsFetchedAt, now: now)
                 return LadderTransferLeg(
                     transferWalkSeconds: d.transferWalkSeconds,

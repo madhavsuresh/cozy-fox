@@ -33,12 +33,76 @@ public struct DepartureLadderSnapshotAdapter: Sendable {
             }
     }
 
+    /// Filters live train arrivals at the boarding station to only those
+    /// whose destination station is in the geographic direction of the
+    /// alighting station — drops wrong-direction trains. Arrivals whose
+    /// destination name doesn't match a known station (e.g. "Loop"
+    /// composite destinations) are conservatively kept.
+    public func liveTrainDeparturesTowardAlighting(
+        from snapshot: TransitSnapshot,
+        line: LineColor,
+        boardingStation: LStation,
+        alightingStation: LStation,
+        catalog: [LStation] = LStationCatalog.all,
+        now: Date = .now
+    ) -> [LiveDeparture] {
+        let lookup = stationNameLookup(catalog: catalog)
+        let tripDeltaLat = alightingStation.latitude - boardingStation.latitude
+        let tripDeltaLon = alightingStation.longitude - boardingStation.longitude
+        return snapshot.trainArrivals
+            .filter { arrival in
+                arrival.line == line
+                && arrival.stationId == boardingStation.id
+                && arrival.arrivalAt >= now.addingTimeInterval(-30)
+                && !arrival.isFault
+                && isHeadingForward(
+                    destinationName: arrival.destinationName,
+                    boarding: boardingStation,
+                    tripDeltaLat: tripDeltaLat,
+                    tripDeltaLon: tripDeltaLon,
+                    lookup: lookup
+                )
+            }
+            .map { arrival in
+                LiveDeparture(
+                    arrivalAt: arrival.arrivalAt,
+                    isApproaching: arrival.isApproaching,
+                    isScheduled: arrival.isScheduled,
+                    toneHint: arrival.isApproaching ? .strong : (arrival.isDelayed ? .weak : .normal)
+                )
+            }
+    }
+
     public func feedState(
         from snapshot: TransitSnapshot,
         now: Date = .now,
         freshnessTtlSeconds: TimeInterval = 90
     ) -> FeedState {
         feedState(fetchedAt: snapshot.trainsFetchedAt, now: now, freshnessTtlSeconds: freshnessTtlSeconds)
+    }
+
+    private func stationNameLookup(catalog: [LStation]) -> [String: LStation] {
+        var lookup: [String: LStation] = [:]
+        for station in catalog {
+            lookup[station.name.lowercased()] = station
+        }
+        return lookup
+    }
+
+    private func isHeadingForward(
+        destinationName: String,
+        boarding: LStation,
+        tripDeltaLat: Double,
+        tripDeltaLon: Double,
+        lookup: [String: LStation]
+    ) -> Bool {
+        let key = destinationName.lowercased()
+        guard let destStation = lookup[key] else { return true }
+        if destStation.id == boarding.id { return true }
+        let destDeltaLat = destStation.latitude - boarding.latitude
+        let destDeltaLon = destStation.longitude - boarding.longitude
+        let dot = tripDeltaLat * destDeltaLat + tripDeltaLon * destDeltaLon
+        return dot > 0
     }
 
     public func feedState(
