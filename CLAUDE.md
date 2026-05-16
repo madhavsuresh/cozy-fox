@@ -17,6 +17,19 @@ open CozyFox.xcodeproj
 
 Live Activities, region monitoring, and motion don't work in the Simulator — use a real device with iOS 26+ for end-to-end testing.
 
+## Device install
+
+`scripts/deploy-device.sh` builds the app and installs it on a connected iPhone. It is **not** auto-run — installs disrupt whatever the user is doing on the phone, so they should be deliberate. Run it on demand when the user asks ("deploy", "install on the phone", "put it on the device", etc.):
+
+```bash
+./scripts/deploy-device.sh           # picks the single connected device
+./scripts/deploy-device.sh <UDID>    # if multiple are connected
+```
+
+The script regenerates `CozyFox.xcodeproj`, finds the connected UDID via `devicectl`, builds Debug into `./build`, and installs with `xcrun devicectl device install app`. Signing is automatic — `DEVELOPMENT_TEAM` is pinned in `project.yml` and provisioning profiles are already in `~/Library/Developer/Xcode/UserData/Provisioning Profiles/`.
+
+If the script fails: code-signing errors usually mean a profile expired (open the project in Xcode once to refresh); install errors usually mean Developer Mode is off (Settings → Privacy & Security → Developer Mode) or the dev cert isn't trusted (Settings → General → VPN & Device Management).
+
 ## Tests
 
 Two test suites with **different frameworks** — don't mix them up:
