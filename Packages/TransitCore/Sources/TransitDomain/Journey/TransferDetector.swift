@@ -139,3 +139,14 @@ public struct TransferDetector: Sendable {
         return homeToStation + stationToWork < homeToWork * pathDeviationTolerance
     }
 }
+
+func haversineMeters(from origin: (lat: Double, lon: Double), to dest: (lat: Double, lon: Double)) -> Double {
+    let R: Double = 6_371_000
+    let lat1 = origin.lat * .pi / 180
+    let lat2 = dest.lat * .pi / 180
+    let dLat = (dest.lat - origin.lat) * .pi / 180
+    let dLon = (dest.lon - origin.lon) * .pi / 180
+    let a = sin(dLat / 2) * sin(dLat / 2)
+        + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2)
+    return 2 * R * atan2(sqrt(a), sqrt(1 - a))
+}

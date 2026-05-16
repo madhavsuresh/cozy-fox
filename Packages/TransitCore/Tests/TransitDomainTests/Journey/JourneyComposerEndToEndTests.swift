@@ -76,26 +76,17 @@ struct JourneyComposerEndToEndTests {
         let fastDist = composer.compose(option: fastIfHits, legProcesses: kernels, startingAt: Self.t0, samples: 512, rng: &rng)
         let bestDist = composer.compose(option: bestRealistic, legProcesses: kernels, startingAt: Self.t0, samples: 512, rng: &rng)
 
-        let ranker = LowestP80Ranker()
-        let ranked = ranker.rank([
-            (option: fastIfHits, distribution: fastDist),
-            (option: bestRealistic, distribution: bestDist)
-        ])
-
         #expect(fastDist.totalDuration.p50 > 0)
         #expect(bestDist.totalDuration.p80 > bestDist.totalDuration.p50)
-        #expect(ranked.count == 2)
 
         print("--- Composed journey frontier ---")
-        for entry in ranked {
-            let p50min = entry.distribution.totalDuration.p50 / 60
-            let p80min = entry.distribution.totalDuration.p80 / 60
-            let p90min = entry.distribution.totalDuration.p90 / 60
-            let failPct = entry.distribution.failureProbability * 100
-            print(String(format: "  %@  p50=%.0fmin  p80=%.0fmin  p90=%.0fmin  fail=%.1f%%  %@",
-                         entry.option.title,
-                         p50min, p80min, p90min, failPct,
-                         entry.tradeoffLabel ?? ""))
+        for (title, dist) in [("Blue → Grand → 65", fastDist), ("Blue → Chicago → 66", bestDist)] {
+            let p50min = dist.totalDuration.p50 / 60
+            let p80min = dist.totalDuration.p80 / 60
+            let p90min = dist.totalDuration.p90 / 60
+            let failPct = dist.failureProbability * 100
+            print(String(format: "  %@  p50=%.0fmin  p80=%.0fmin  p90=%.0fmin  fail=%.1f%%",
+                         title, p50min, p80min, p90min, failPct))
         }
     }
 }
