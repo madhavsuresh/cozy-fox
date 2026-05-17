@@ -202,7 +202,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Bus prediction reliability")
             } footer: {
-                Text("Cozy Fox scores every CTA bus prediction against the live vehicle feed (DUE-but-far, schedule-only, expressed, etc.) and styles each dot in the headway strip accordingly: gold ? for soft uncertainty, red ! for likely-ghost, red X for positively wrong. Choose how much of that signal to surface here.")
+                Text("Cozy Fox scores every CTA bus prediction against the live vehicle feed (DUE-but-far, schedule-only, expressed, etc.) and styles each dot in the headway strip accordingly: green ✓ for confirmed, muted-green ✓ for tracked, gold ? for soft uncertainty, red ! for likely-ghost, red X for positively wrong. Choose how much of that signal to surface here.")
                     .font(.footnote)
             }
 

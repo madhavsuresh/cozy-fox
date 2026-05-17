@@ -20,6 +20,14 @@ import TransitModels
 /// clamped out. Caps at 6 dots to keep the strip from feeling busy.
 public struct HeadwayDotStrip: View {
     public enum Complication: Sendable, Hashable {
+        /// Strongest positive marker: every signal the scorer has lines
+        /// up. Renders as a saturated green checkmark.
+        case confirmed
+        /// Weaker positive marker: we have a tracked vehicle but at
+        /// least one signal is soft (mediumConfidence). Renders as a
+        /// muted-green checkmark so it reads as a step below
+        /// `.confirmed`.
+        case tracked
         case unconfirmed
         case likelyGhost
         case stale
@@ -302,6 +310,8 @@ public struct HeadwayDotStrip: View {
 
     private func complicationSymbol(_ complication: Complication) -> String {
         switch complication {
+        case .confirmed: "checkmark"
+        case .tracked: "checkmark"
         case .unconfirmed: "questionmark"
         case .likelyGhost: "exclamationmark"
         case .stale: "clock"
@@ -311,6 +321,13 @@ public struct HeadwayDotStrip: View {
 
     private func complicationColor(_ complication: Complication) -> Color {
         switch (style, complication) {
+        case (_, .confirmed):
+            ChicagoPalette.green
+        case (_, .tracked):
+            // Same hue as `.confirmed` but desaturated so a glance
+            // reads the ladder confirmed → tracked → unconfirmed
+            // without parsing the glyph.
+            ChicagoPalette.green.opacity(0.55)
         case (_, .likelyGhost):
             ChicagoPalette.starRed
         case (_, .unconfirmed):
@@ -331,7 +348,7 @@ public struct HeadwayDotStrip: View {
         switch complication {
         case .unconfirmed:
             ChicagoPalette.Gray.darkest
-        case .likelyGhost, .stale, .cancelled:
+        case .confirmed, .tracked, .likelyGhost, .stale, .cancelled:
             .white
         }
     }
