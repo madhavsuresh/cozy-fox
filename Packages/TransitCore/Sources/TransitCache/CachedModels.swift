@@ -182,6 +182,12 @@ public final class CachedVehiclePosition {
     public var heading: Int?
     public var destinationName: String?
     public var nextStopId: Int?
+    /// CTA `pid` — bus pattern variant the vehicle is currently running.
+    /// Default nil so the new field is backwards-compatible with cached
+    /// rows that predate phase 3.
+    public var patternId: Int?
+    /// CTA `pdist` — along-pattern distance in feet.
+    public var patternDistanceFeet: Double?
     public var observedAt: Date
     public var fetchedAt: Date
 
@@ -195,6 +201,8 @@ public final class CachedVehiclePosition {
         self.heading = position.heading
         self.destinationName = position.destinationName
         self.nextStopId = position.nextStopId
+        self.patternId = position.patternId
+        self.patternDistanceFeet = position.patternDistanceFeet
         self.observedAt = position.observedAt
         self.fetchedAt = fetchedAt
     }
@@ -210,7 +218,51 @@ public final class CachedVehiclePosition {
             heading: heading,
             destinationName: destinationName,
             nextStopId: nextStopId,
+            patternId: patternId,
+            patternDistanceFeet: patternDistanceFeet,
             observedAt: observedAt
+        )
+    }
+}
+
+@Model
+public final class CachedBusPattern {
+    @Attribute(.unique) public var id: Int
+    public var route: String
+    public var directionName: String
+    public var lengthFeet: Double?
+    public var detourId: String?
+    /// `[BusPatternPoint]` serialized as JSON. SwiftData persists arrays of
+    /// primitives, not arrays of nested structs, so points round-trip
+    /// through `JSONEncoder`/`Decoder`.
+    public var pointsJSON: String
+    public var fetchedAt: Date
+
+    public init(pattern: BusPattern, fetchedAt: Date) {
+        self.id = pattern.id
+        self.route = pattern.route
+        self.directionName = pattern.directionName
+        self.lengthFeet = pattern.lengthFeet
+        self.detourId = pattern.detourId
+        self.pointsJSON = (try? String(
+            data: JSONEncoder().encode(pattern.points),
+            encoding: .utf8
+        )) ?? "[]"
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: BusPattern {
+        let points: [BusPatternPoint] = (try? JSONDecoder().decode(
+            [BusPatternPoint].self,
+            from: Data(pointsJSON.utf8)
+        )) ?? []
+        return BusPattern(
+            id: id,
+            route: route,
+            directionName: directionName,
+            lengthFeet: lengthFeet,
+            detourId: detourId,
+            points: points
         )
     }
 }

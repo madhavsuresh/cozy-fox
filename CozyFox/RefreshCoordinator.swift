@@ -77,6 +77,15 @@ final class RefreshCoordinator {
     private var lastDetoursFetchedAt: Date?
     private static let detourRefreshInterval: TimeInterval = 5 * 60
 
+    /// Last successful pattern fetch and the route set that fetch covered.
+    /// Patterns change very rarely (on detour-version changes), so an
+    /// hourly cadence is plenty — and the set of pinned routes also rarely
+    /// changes, so we only re-fetch when *either* the hour passes or the
+    /// route set grows.
+    private var lastPatternsFetchedAt: Date?
+    private var lastPatternsRouteSet: Set<String> = []
+    private static let patternRefreshInterval: TimeInterval = 60 * 60
+
     /// Last-known live vehicle positions for the user's pinned line/route.
     /// Refreshed every cycle; exposed so the dashboard can draw a "where's
     /// my train" strip. Empty when no route is pinned.
@@ -219,6 +228,7 @@ final class RefreshCoordinator {
             }
             group.addTask { await self.refreshPositions(prefs: prefs) }
             group.addTask { await self.refreshDetoursIfNeeded(prefs: prefs) }
+            group.addTask { await self.refreshPatternsIfNeeded(prefs: prefs) }
         }
 
         // Phase 4: portfolio evaluation. Runs after the parallel
@@ -930,6 +940,41 @@ final class RefreshCoordinator {
             // detour list is better than no detour signal at all, and
             // `BusDetour.affects(...)` already filters out detours past
             // their `endsAt`.
+        }
+    }
+
+    /// Refresh CTA bus pattern geometry for the user's pinned/visible
+    /// routes. Patterns change rarely (only on detour-version changes), so
+    /// an hourly cadence is enough — but we re-fetch sooner whenever the
+    /// pinned-route set grows so a newly-tracked route still gets geometry
+    /// promptly.
+    private func refreshPatternsIfNeeded(prefs: UserRoutePreferences) async {
+        var routes: Set<String> = []
+        for pref in prefs.buses where prefs.isBusRouteVisible(pref.route) || prefs.pinnedBusRoute == pref.route {
+            routes.insert(pref.route)
+        }
+        if let pinned = prefs.pinnedBusRoute { routes.insert(pinned) }
+        routes.formUnion(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+
+        guard !routes.isEmpty else {
+            await store.replaceBusPatterns([])
+            lastPatternsFetchedAt = Date()
+            lastPatternsRouteSet = []
+            return
+        }
+
+        let now = Date()
+        let stale = lastPatternsFetchedAt.map { now.timeIntervalSince($0) >= Self.patternRefreshInterval } ?? true
+        let routesChanged = !routes.isSubset(of: lastPatternsRouteSet)
+        guard stale || routesChanged else { return }
+
+        do {
+            let patterns = try await busClient.fetchPatterns(routes: Array(routes))
+            await store.replaceBusPatterns(patterns)
+            lastPatternsFetchedAt = now
+            lastPatternsRouteSet = routes
+        } catch {
+            // Soft fail: stale geometry is better than none.
         }
     }
 

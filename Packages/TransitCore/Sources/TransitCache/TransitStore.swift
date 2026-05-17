@@ -98,6 +98,16 @@ public actor TransitStore {
         try? ctx.save()
     }
 
+    public func replaceBusPatterns(_ patterns: [BusPattern]) {
+        let now = Date()
+        let ctx = ModelContext(container)
+        try? ctx.delete(model: CachedBusPattern.self)
+        for pattern in patterns {
+            ctx.insert(CachedBusPattern(pattern: pattern, fetchedAt: now))
+        }
+        try? ctx.save()
+    }
+
     /// Append-only — historical snapshots for the future churn estimator. We
     /// also prune rows older than 14 days.
     public func recordStationSnapshots(_ stations: [BikeStation]) {

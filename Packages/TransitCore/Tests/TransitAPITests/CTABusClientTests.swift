@@ -49,4 +49,31 @@ struct CTABusClientTests {
         #expect(!lifted.isActive)
         #expect(!lifted.affects(route: "22", direction: "Northbound", at: Date()))
     }
+
+    @Test func decodesPatternsAndOrdersPoints() async throws {
+        let stub = StubHTTPClient()
+        await stub.register(
+            path: "/bustime/api/v2/getpatterns",
+            data: Fixture.load("cta_bus_patterns")
+        )
+        let client = CTABusClient(http: stub) { "stub-key" }
+        let patterns = try await client.fetchPatterns(routes: ["65"])
+
+        #expect(patterns.count == 1)
+        let pattern = try #require(patterns.first)
+        #expect(pattern.id == 4042)
+        #expect(pattern.route == "65")
+        #expect(pattern.directionName == "Westbound")
+        #expect(pattern.lengthFeet == 27410.5)
+        #expect(pattern.detourId == nil)
+        #expect(pattern.points.count == 5)
+        // Points round-trip sorted by sequence.
+        #expect(pattern.points.map(\.sequence) == [1, 2, 3, 4, 5])
+        // Stop and waypoint distinction.
+        #expect(pattern.points.first?.isStop == true)
+        #expect(pattern.points[1].isStop == false)
+        // Stop-by-id lookup.
+        #expect(pattern.patternDistanceForStop(457) == 1160.0)
+        #expect(pattern.patternDistanceForStop(99999) == nil)
+    }
 }

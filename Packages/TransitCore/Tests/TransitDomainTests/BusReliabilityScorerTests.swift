@@ -336,4 +336,200 @@ struct BusReliabilityScorerTests {
 
         #expect(!result.reasonCodes.contains(.detourActive))
     }
+
+    // MARK: - Pattern-aware scoring (phase 3a)
+
+    private static let testPattern = BusPattern(
+        id: 4042,
+        route: "65",
+        directionName: "Westbound",
+        lengthFeet: 3200,
+        detourId: nil,
+        points: [
+            BusPatternPoint(sequence: 1, latitude: 41.8919, longitude: -87.6182,
+                            patternDistanceFeet: 0, kindRaw: "S",
+                            stopId: 456, stopName: "Grand & McClurg"),
+            BusPatternPoint(sequence: 2, latitude: 41.8919, longitude: -87.6203,
+                            patternDistanceFeet: 580, kindRaw: "W",
+                            stopId: nil, stopName: nil),
+            BusPatternPoint(sequence: 3, latitude: 41.8919, longitude: -87.6225,
+                            patternDistanceFeet: 1160, kindRaw: "S",
+                            stopId: 457, stopName: "Grand & Columbus"),
+            BusPatternPoint(sequence: 4, latitude: 41.8919, longitude: -87.6260,
+                            patternDistanceFeet: 2050, kindRaw: "W",
+                            stopId: nil, stopName: nil),
+            BusPatternPoint(sequence: 5, latitude: 41.8919, longitude: -87.6300,
+                            patternDistanceFeet: 3200, kindRaw: "S",
+                            stopId: 458, stopName: "Grand & Michigan"),
+        ]
+    )
+
+    /// Prediction for the middle stop (Grand & Columbus, stpid 457). pdist
+    /// = 1160 ft on the test pattern; tests vary the vehicle's pdist
+    /// relative to that.
+    private func columbusPrediction(
+        etaSeconds: TimeInterval,
+        vehicleId: String = "1234"
+    ) -> BusPrediction {
+        BusPrediction(
+            id: "65-457-\(Int(etaSeconds))",
+            route: "65",
+            routeName: "65 Grand",
+            vehicleId: vehicleId,
+            stopId: 457,
+            stopName: "Grand & Columbus",
+            destinationName: "Grand/Nordica",
+            directionName: "Westbound",
+            generatedAt: Self.now.addingTimeInterval(-15),
+            arrivalAt: Self.now.addingTimeInterval(etaSeconds),
+            isDelayed: false,
+            isApproaching: etaSeconds <= 60
+        )
+    }
+
+    private func vehicleOnPattern(
+        patternDistance: Double,
+        patternId: Int? = 4042,
+        observedAgo: TimeInterval = 15
+    ) -> VehiclePosition {
+        // Lay vehicle at ~lat 41.8919, walking the longitude across the
+        // pattern in proportion to its pdist (0 ft = -87.6182, 3200 ft =
+        // -87.6300). Keeps the map-match honest.
+        let fraction = min(max(patternDistance / 3200, 0), 1)
+        let lon = -87.6182 + fraction * (-87.6300 - -87.6182)
+        return VehiclePosition(
+            id: "1234",
+            mode: .bus,
+            route: "65",
+            latitude: 41.8919,
+            longitude: lon,
+            heading: 270,
+            destinationName: "Grand/Nordica",
+            nextStopId: nil,
+            patternId: patternId,
+            patternDistanceFeet: patternDistance,
+            observedAt: Self.now.addingTimeInterval(-observedAgo)
+        )
+    }
+
+    @Test("Pattern-aware: vehicle past the stop along pattern → abstain")
+    func patternCrossedStopAbstains() {
+        let pred = columbusPrediction(etaSeconds: 60)
+        let veh = vehicleOnPattern(patternDistance: 2050)  // 890 ft past stop 457
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            patterns: [Self.testPattern],
+            now: Self.now
+        )
+
+        #expect(result.state == .doNotDisplay)
+        #expect(result.reasonCodes.contains(.pdistCrossedStop))
+        #expect(result.reasonCodes.contains(.patternMatch))
+    }
+
+    @Test("Pattern-aware: DUE but pdist says vehicle is still 1500 ft away → abstain")
+    func patternDueButFarAbstains() {
+        let pred = columbusPrediction(etaSeconds: 60)
+        // Stop 457 is at pdist 1160; vehicle at -500 ft means 1660 ft remaining.
+        let veh = vehicleOnPattern(patternDistance: -500 + 1160)
+        // Easier to set explicitly:
+        let vehExplicit = vehicleOnPattern(patternDistance: 0)  // 1160 ft upstream
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: vehExplicit,
+            stopLocation: Self.grandAndMcClurg,
+            patterns: [Self.testPattern],
+            now: Self.now
+        )
+
+        _ = veh
+        #expect(result.state == .doNotDisplay)
+        #expect(result.reasonCodes.contains(.dueButVehicleNotNearStop))
+        #expect(result.reasonCodes.contains(.patternMatch))
+        // The pattern path should NOT also trigger the haversine path.
+        #expect(result.reasonCodes.filter { $0 == .dueButVehicleNotNearStop }.count == 1)
+    }
+
+    @Test("Pattern-aware: DUE and pdist within 800 ft → high confidence boost")
+    func patternDueAndNearBoosts() {
+        let pred = columbusPrediction(etaSeconds: 60)
+        // Stop 457 at pdist 1160. Vehicle at 800 ft → 360 ft remaining.
+        let veh = vehicleOnPattern(patternDistance: 800)
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            patterns: [Self.testPattern],
+            now: Self.now
+        )
+
+        #expect(result.isDisplayable)
+        #expect(result.reasonCodes.contains(.vehicleNearStopAtDue))
+        #expect(result.reasonCodes.contains(.patternMatch))
+        #expect(result.state == .highConfidence)
+    }
+
+    @Test("Pattern-aware: GPS far off pattern downgrades reliability")
+    func patternGpsOffDowngrades() {
+        let pred = columbusPrediction(etaSeconds: 4 * 60)
+        // pdist within range but GPS placed 1000 m north of the pattern.
+        let off = VehiclePosition(
+            id: "1234", mode: .bus, route: "65",
+            latitude: 41.9009, longitude: -87.6225,
+            heading: 270, destinationName: "Grand/Nordica",
+            nextStopId: nil, patternId: 4042, patternDistanceFeet: 1000,
+            observedAt: Self.now.addingTimeInterval(-15)
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: off,
+            stopLocation: Self.grandAndMcClurg,
+            patterns: [Self.testPattern],
+            now: Self.now
+        )
+
+        #expect(result.reasonCodes.contains(.gpsOffExpectedPattern))
+    }
+
+    @Test("No patterns loaded → falls back to haversine path")
+    func noPatternsFallsBackToHaversine() {
+        let pred = columbusPrediction(etaSeconds: 60)
+        let veh = vehicleOnPattern(patternDistance: 800)
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            patterns: [],
+            now: Self.now
+        )
+
+        #expect(!result.reasonCodes.contains(.patternMatch))
+        // Haversine path uses meters threshold; still produces some
+        // assessment — should not crash.
+        _ = result.state
+    }
+
+    @Test("Patterns loaded but vehicle pid unknown → patternMismatch + haversine fallback")
+    func patternMismatchFallsBack() {
+        let pred = columbusPrediction(etaSeconds: 60)
+        let veh = vehicleOnPattern(patternDistance: 800, patternId: 7777)  // unknown pid
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            patterns: [Self.testPattern],
+            now: Self.now
+        )
+
+        #expect(result.reasonCodes.contains(.patternMismatch))
+        #expect(!result.reasonCodes.contains(.patternMatch))
+    }
 }

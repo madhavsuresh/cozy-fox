@@ -32,6 +32,11 @@ public struct BusArrivalReliability: Sendable, Hashable, Identifiable {
         case stopLocationUnknown = "STOP_LOCATION_UNKNOWN"
         case arrivalAlreadyPassed = "ARRIVAL_ALREADY_PASSED"
         case detourActive = "DETOUR_ACTIVE"
+        case patternMatch = "PATTERN_MATCH"
+        case patternMismatch = "PATTERN_MISMATCH"
+        case pdistCrossedStop = "PDIST_CROSSED_STOP"
+        case gpsOnExpectedPattern = "GPS_ON_EXPECTED_PATTERN"
+        case gpsOffExpectedPattern = "GPS_OFF_EXPECTED_PATTERN"
     }
 
     public let id: String
@@ -78,6 +83,24 @@ public struct BusReliabilityScorer: Sendable {
     public var dueWindow: TimeInterval
     public var nearStopMeters: Double
     public var farFromStopMeters: Double
+    /// Along-pattern distance under which a DUE prediction looks plausible.
+    /// 800 ft ≈ 2 short Chicago blocks. When pattern data is available,
+    /// this replaces the meter-based haversine check for the DUE-but-near
+    /// boost.
+    public var nearStopFeet: Double
+    /// Along-pattern distance over which a DUE prediction looks like a
+    /// ghost. 1000 ft ≈ 3 blocks. Pattern distance follows the route, so
+    /// it's much sharper than haversine: a bus 1000 ft *along the pattern*
+    /// is genuinely 1000 ft of stops-and-traffic away.
+    public var farFromStopFeet: Double
+    /// Negative remaining feet at which we treat the vehicle as having
+    /// already crossed the stop. Tiny slop because buses sometimes pull
+    /// up *just past* the sign.
+    public var crossedStopFeet: Double
+    /// Cross-track distance (meters) past which a vehicle's GPS is
+    /// considered off-pattern. The map-match still tries; we just
+    /// downgrade the prediction's reliability.
+    public var maxOnPatternCrossTrackMeters: Double
 
     public init(
         freshVehicleAge: TimeInterval = 60,
@@ -86,7 +109,11 @@ public struct BusReliabilityScorer: Sendable {
         stalePredictionAge: TimeInterval = 120,
         dueWindow: TimeInterval = 90,
         nearStopMeters: Double = 300,
-        farFromStopMeters: Double = 350
+        farFromStopMeters: Double = 350,
+        nearStopFeet: Double = 800,
+        farFromStopFeet: Double = 1_000,
+        crossedStopFeet: Double = -50,
+        maxOnPatternCrossTrackMeters: Double = 100
     ) {
         self.freshVehicleAge = freshVehicleAge
         self.staleVehicleAge = staleVehicleAge
@@ -95,6 +122,10 @@ public struct BusReliabilityScorer: Sendable {
         self.dueWindow = dueWindow
         self.nearStopMeters = nearStopMeters
         self.farFromStopMeters = farFromStopMeters
+        self.nearStopFeet = nearStopFeet
+        self.farFromStopFeet = farFromStopFeet
+        self.crossedStopFeet = crossedStopFeet
+        self.maxOnPatternCrossTrackMeters = maxOnPatternCrossTrackMeters
     }
 
     /// Score every prediction in `predictions` against the latest vehicles
@@ -105,6 +136,7 @@ public struct BusReliabilityScorer: Sendable {
         vehicles: [VehiclePosition],
         stopLocation: (BusPrediction) -> (lat: Double, lon: Double)?,
         activeDetours: [BusDetour] = [],
+        patterns: [BusPattern] = [],
         now: Date = .now
     ) -> [String: BusArrivalReliability] {
         let busVehicleById: [String: VehiclePosition] = Dictionary(
@@ -125,6 +157,7 @@ public struct BusReliabilityScorer: Sendable {
                 vehicle: busVehicleById[pred.vehicleId],
                 stopLocation: stopLocation(pred),
                 activeDetours: activeDetours,
+                patterns: patterns,
                 now: now
             )
             return (pred.id, reliability)
@@ -139,6 +172,7 @@ public struct BusReliabilityScorer: Sendable {
         from predictions: [BusPrediction],
         vehicles: [VehiclePosition],
         activeDetours: [BusDetour] = [],
+        patterns: [BusPattern] = [],
         scorer: BusReliabilityScorer = BusReliabilityScorer(),
         now: Date = .now
     ) -> [BusPrediction] {
@@ -146,6 +180,7 @@ public struct BusReliabilityScorer: Sendable {
             for: predictions,
             vehicles: vehicles,
             activeDetours: activeDetours,
+            patterns: patterns,
             now: now
         )
         return predictions.filter { assessments[$0.id]?.isDisplayable ?? true }
@@ -157,6 +192,7 @@ public struct BusReliabilityScorer: Sendable {
         for predictions: [BusPrediction],
         vehicles: [VehiclePosition],
         activeDetours: [BusDetour] = [],
+        patterns: [BusPattern] = [],
         now: Date = .now
     ) -> [String: BusArrivalReliability] {
         assessments(
@@ -168,6 +204,7 @@ public struct BusReliabilityScorer: Sendable {
                     .map { (lat: $0.latitude, lon: $0.longitude) }
             },
             activeDetours: activeDetours,
+            patterns: patterns,
             now: now
         )
     }
@@ -176,12 +213,16 @@ public struct BusReliabilityScorer: Sendable {
     /// observation for `prediction.vehicleId`, or nil when none is in the
     /// current feed (the ghost-bus case). `activeDetours` is the cached
     /// `getdetours` snapshot — pass an empty array when detour state is
-    /// unknown.
+    /// unknown. `patterns` is the cached `getpatterns` snapshot — when
+    /// the matching pattern is present and the vehicle has a `pdist`, the
+    /// scorer uses along-pattern distance for the DUE-but-far check and
+    /// can detect already-crossed-stop.
     public func assessment(
         for prediction: BusPrediction,
         vehicle: VehiclePosition?,
         stopLocation: (lat: Double, lon: Double)?,
         activeDetours: [BusDetour] = [],
+        patterns: [BusPattern] = [],
         now: Date = .now
     ) -> BusArrivalReliability {
         var reasons: [BusArrivalReliability.ReasonCode] = []
@@ -247,7 +288,74 @@ public struct BusReliabilityScorer: Sendable {
                 score -= 0.20
             }
 
-            if let stopLocation, vehicleAge <= staleVehicleAge {
+            // Pattern geometry (when available) gives a sharper signal
+            // than haversine because it follows the route, not crow-fly.
+            // We try pattern-based scoring first and fall back to
+            // haversine when patterns are missing or the vehicle has no
+            // pdist yet.
+            var patternResolved = false
+            let pattern = BusPatternGeometry.pattern(
+                for: vehicle.patternId,
+                route: vehicle.route,
+                directionName: prediction.directionName,
+                in: patterns
+            )
+
+            if let pattern, let remaining = BusPatternGeometry.remainingFeetAlongPattern(
+                vehiclePatternDistance: vehicle.patternDistanceFeet,
+                stopId: prediction.stopId,
+                pattern: pattern
+            ) {
+                patternResolved = true
+                reasons.append(.patternMatch)
+                score += 0.05
+
+                if let mapMatch = BusPatternGeometry.mapMatch(
+                    pattern,
+                    lat: vehicle.latitude,
+                    lon: vehicle.longitude
+                ) {
+                    if mapMatch.crossTrackMeters > maxOnPatternCrossTrackMeters {
+                        reasons.append(.gpsOffExpectedPattern)
+                        score -= 0.12
+                    } else {
+                        reasons.append(.gpsOnExpectedPattern)
+                        score += 0.04
+                    }
+                }
+
+                if remaining < crossedStopFeet {
+                    // Bus pdist is meaningfully past the stop's pdist.
+                    // Don't keep counting down to an arrival that already
+                    // happened — abstain. (`A` predictions only; `D`
+                    // departure-from-terminal predictions can sit past
+                    // the stop while a vehicle layovers.)
+                    reasons.append(.pdistCrossedStop)
+                    abstain = true
+                    score -= 0.55
+                } else if etaSeconds <= dueWindow, remaining > farFromStopFeet {
+                    // The pattern-aware version of the #65 case: CTA
+                    // says DUE but pdist says the vehicle is still well
+                    // upstream of the stop. Strong abstain.
+                    reasons.append(.dueButVehicleNotNearStop)
+                    abstain = true
+                    score -= 0.40
+                } else if etaSeconds <= dueWindow, remaining <= nearStopFeet {
+                    reasons.append(.vehicleNearStopAtDue)
+                    score += 0.15
+                }
+            } else if !patterns.isEmpty,
+                      vehicle.patternId != nil,
+                      pattern == nil {
+                // Patterns are loaded but none matched this vehicle's
+                // pid. Could be a detour variant we haven't cached yet
+                // or a stale pid. Note it but don't penalize hard —
+                // haversine fallback below picks up the load.
+                reasons.append(.patternMismatch)
+                score -= 0.06
+            }
+
+            if let stopLocation, vehicleAge <= staleVehicleAge, !patternResolved {
                 let distance = Distance.meters(
                     from: (vehicle.latitude, vehicle.longitude),
                     to: stopLocation
@@ -265,7 +373,7 @@ public struct BusReliabilityScorer: Sendable {
                     reasons.append(.vehicleNearStopAtDue)
                     score += 0.15
                 }
-            } else if stopLocation == nil {
+            } else if stopLocation == nil, !patternResolved {
                 reasons.append(.stopLocationUnknown)
             }
         } else {

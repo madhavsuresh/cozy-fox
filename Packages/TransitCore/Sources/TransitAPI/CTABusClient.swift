@@ -5,6 +5,7 @@ public protocol CTABusClientProtocol: Sendable {
     func fetchPredictions(route: String, stopId: Int, top: Int) async throws -> [BusPrediction]
     func fetchVehicles(routes: [String]) async throws -> [VehiclePosition]
     func fetchDetours(routes: [String]) async throws -> [BusDetour]
+    func fetchPatterns(routes: [String]) async throws -> [BusPattern]
 }
 
 /// CTA Bus Tracker API v2.
@@ -57,12 +58,49 @@ public actor CTABusClient: CTABusClientProtocol {
                     heading: Int(raw.hdg ?? ""),
                     destinationName: raw.des,
                     nextStopId: nil,
+                    patternId: raw.pid,
+                    patternDistanceFeet: raw.pdist.map(Double.init),
                     observedAt: Date()
                 )
             }
         } catch {
             throw APIError.decoding(String(describing: error))
         }
+    }
+
+    /// Pattern geometry (`pid`, points, distances) for one or more routes.
+    /// Used in phase 3 for along-pattern remaining-distance scoring and
+    /// already-crossed-stop detection. Patterns change rarely (only when
+    /// detours alter geometry), so callers should refresh hourly at most.
+    public func fetchPatterns(routes: [String]) async throws -> [BusPattern] {
+        guard let key = apiKeyProvider(), !key.isEmpty else { throw APIError.missingAPIKey }
+        guard !routes.isEmpty else { return [] }
+        var collected: [BusPattern] = []
+        // `getpatterns` accepts either a single `rt` or up to 10 `pid`.
+        // Single-route calls are simpler and stay well inside daily caps
+        // because the user's pinned set is small (typically < 10 routes).
+        for route in routes {
+            var comps = URLComponents(
+                url: Self.baseURL.appendingPathComponent("getpatterns"),
+                resolvingAgainstBaseURL: false
+            )!
+            comps.queryItems = [
+                URLQueryItem(name: "key", value: key),
+                URLQueryItem(name: "rt", value: route),
+                URLQueryItem(name: "format", value: "json"),
+            ]
+            guard let url = comps.url else { throw APIError.invalidURL }
+            let (data, response) = try await http.data(for: URLRequest(url: url))
+            guard (200..<300).contains(response.statusCode) else {
+                throw APIError.http(status: response.statusCode)
+            }
+            let feed = try JSONDecoder.cta.decode(BusPatternsEnvelope.self, from: data)
+            let patterns = (feed.bustimeResponse.ptr ?? []).compactMap {
+                BusPattern(raw: $0, route: route)
+            }
+            collected.append(contentsOf: patterns)
+        }
+        return collected
     }
 
     /// Active and recently canceled detours, optionally filtered to a set of
@@ -189,6 +227,84 @@ extension BusDetour {
     }
 }
 
+extension BusPattern {
+    init?(raw: BusPatternsEnvelope.Body.Pattern, route: String) {
+        let points: [BusPatternPoint] = (raw.pt ?? []).compactMap { p in
+            guard let lat = p.lat, let lon = p.lon, let pdist = p.pdist else { return nil }
+            let stopIdInt: Int?
+            switch p.stpid {
+            case .some(.int(let n)): stopIdInt = n
+            case .some(.string(let s)): stopIdInt = Int(s)
+            case .none: stopIdInt = nil
+            }
+            return BusPatternPoint(
+                sequence: p.seq ?? 0,
+                latitude: lat,
+                longitude: lon,
+                patternDistanceFeet: pdist,
+                kindRaw: p.typ,
+                stopId: stopIdInt,
+                stopName: p.stpnm
+            )
+        }
+        guard !points.isEmpty else { return nil }
+        self.init(
+            id: raw.pid,
+            route: route,
+            directionName: raw.rtdir ?? "",
+            lengthFeet: raw.ln,
+            detourId: raw.dtrid,
+            points: points.sorted { $0.sequence < $1.sequence }
+        )
+    }
+}
+
+struct BusPatternsEnvelope: Decodable {
+    let bustimeResponse: Body
+    enum CodingKeys: String, CodingKey { case bustimeResponse = "bustime-response" }
+
+    struct Body: Decodable {
+        let ptr: [Pattern]?
+        let error: [BusPredictionsEnvelope.Body.Err]?
+
+        struct Pattern: Decodable {
+            let pid: Int
+            let ln: Double?
+            let rtdir: String?
+            let dtrid: String?
+            let pt: [Point]?
+
+            struct Point: Decodable {
+                let seq: Int?
+                let lat: Double?
+                let lon: Double?
+                let typ: String?
+                let stpid: StringOrInt?
+                let stpnm: String?
+                let pdist: Double?
+            }
+        }
+    }
+}
+
+/// CTA's bus tracker mixes integer and string typings for stop IDs across
+/// endpoints; the patterns feed in particular sometimes returns integers
+/// where predictions returns strings. Single decoder handles both.
+enum StringOrInt: Decodable {
+    case int(Int)
+    case string(String)
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let i = try? c.decode(Int.self) { self = .int(i); return }
+        if let s = try? c.decode(String.self) { self = .string(s); return }
+        throw DecodingError.typeMismatch(
+            StringOrInt.self,
+            .init(codingPath: decoder.codingPath, debugDescription: "Expected Int or String")
+        )
+    }
+}
+
 struct BusDetoursEnvelope: Decodable {
     let bustimeResponse: Body
     enum CodingKeys: String, CodingKey { case bustimeResponse = "bustime-response" }
@@ -227,6 +343,8 @@ struct BusVehiclesEnvelope: Decodable {
             let lat: String?
             let lon: String?
             let hdg: String?
+            let pid: Int?
+            let pdist: Int?
             let rt: String
             let des: String?
             let spd: Int?

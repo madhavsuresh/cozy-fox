@@ -14,6 +14,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var nearbyFreeBikePicks: [NearestFreeBikePick]
     public var activeAlerts: [ServiceAlert]
     public var busDetours: [BusDetour]
+    public var busPatterns: [BusPattern]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
@@ -21,6 +22,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var bikesFetchedAt: Date?
     public var alertsFetchedAt: Date?
     public var busDetoursFetchedAt: Date?
+    public var busPatternsFetchedAt: Date?
 
     public init(
         trainArrivals: [Arrival] = [],
@@ -33,13 +35,15 @@ public struct TransitSnapshot: Sendable, Hashable {
         nearbyFreeBikePicks: [NearestFreeBikePick] = [],
         activeAlerts: [ServiceAlert] = [],
         busDetours: [BusDetour] = [],
+        busPatterns: [BusPattern] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
         intercampusFetchedAt: Date? = nil,
         bikesFetchedAt: Date? = nil,
         alertsFetchedAt: Date? = nil,
-        busDetoursFetchedAt: Date? = nil
+        busDetoursFetchedAt: Date? = nil,
+        busPatternsFetchedAt: Date? = nil
     ) {
         self.trainArrivals = trainArrivals
         self.busPredictions = busPredictions
@@ -51,6 +55,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.nearbyFreeBikePicks = nearbyFreeBikePicks
         self.activeAlerts = activeAlerts
         self.busDetours = busDetours
+        self.busPatterns = busPatterns
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt
@@ -58,6 +63,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.bikesFetchedAt = bikesFetchedAt
         self.alertsFetchedAt = alertsFetchedAt
         self.busDetoursFetchedAt = busDetoursFetchedAt
+        self.busPatternsFetchedAt = busPatternsFetchedAt
     }
 
     public static let empty = TransitSnapshot()

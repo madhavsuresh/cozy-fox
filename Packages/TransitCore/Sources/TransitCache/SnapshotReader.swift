@@ -25,6 +25,7 @@ public struct SnapshotReader: Sendable {
         let intercampusArrivals = (try? context.fetch(FetchDescriptor<CachedIntercampusArrival>())) ?? []
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
         let detours = (try? context.fetch(FetchDescriptor<CachedBusDetour>())) ?? []
+        let patterns = (try? context.fetch(FetchDescriptor<CachedBusPattern>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
         let nearestFreeBikes = (try? context.fetch(FetchDescriptor<CachedNearestFreeBike>())) ?? []
 
@@ -52,6 +53,7 @@ public struct SnapshotReader: Sendable {
             .filter { $0.isActive(at: now) }
 
         let busDetours = detours.map(\.asModel)
+        let busPatterns = patterns.map(\.asModel)
 
         let nearbyPicks = nearestBikes
             .sorted { $0.rank < $1.rank }
@@ -102,13 +104,15 @@ public struct SnapshotReader: Sendable {
             nearbyFreeBikePicks: nearbyFreePicks,
             activeAlerts: activeAlerts,
             busDetours: busDetours,
+            busPatterns: busPatterns,
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
             metraFetchedAt: metraPredictions.first?.fetchedAt,
             intercampusFetchedAt: intercampusArrivals.first?.fetchedAt,
             bikesFetchedAt: nearbyPicks.first?.computedAt ?? nearbyFreePicks.first?.computedAt,
             alertsFetchedAt: alerts.first?.fetchedAt,
-            busDetoursFetchedAt: detours.first?.fetchedAt
+            busDetoursFetchedAt: detours.first?.fetchedAt,
+            busPatternsFetchedAt: patterns.first?.fetchedAt
         )
     }
 
