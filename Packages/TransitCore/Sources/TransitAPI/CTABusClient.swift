@@ -4,6 +4,7 @@ import TransitModels
 public protocol CTABusClientProtocol: Sendable {
     func fetchPredictions(route: String, stopId: Int, top: Int) async throws -> [BusPrediction]
     func fetchVehicles(routes: [String]) async throws -> [VehiclePosition]
+    func fetchDetours(routes: [String]) async throws -> [BusDetour]
 }
 
 /// CTA Bus Tracker API v2.
@@ -59,6 +60,38 @@ public actor CTABusClient: CTABusClientProtocol {
                     observedAt: Date()
                 )
             }
+        } catch {
+            throw APIError.decoding(String(describing: error))
+        }
+    }
+
+    /// Active and recently canceled detours, optionally filtered to a set of
+    /// routes. CTA's `getdetours` accepts a comma-separated `rt` parameter
+    /// just like `getvehicles`; pass an empty array to receive everything.
+    ///
+    /// Docs: https://www.transitchicago.com/developers/bustracker/
+    public func fetchDetours(routes: [String]) async throws -> [BusDetour] {
+        guard let key = apiKeyProvider(), !key.isEmpty else { throw APIError.missingAPIKey }
+        var comps = URLComponents(
+            url: Self.baseURL.appendingPathComponent("getdetours"),
+            resolvingAgainstBaseURL: false
+        )!
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "key", value: key),
+            URLQueryItem(name: "format", value: "json"),
+        ]
+        if !routes.isEmpty {
+            items.append(URLQueryItem(name: "rt", value: routes.joined(separator: ",")))
+        }
+        comps.queryItems = items
+        guard let url = comps.url else { throw APIError.invalidURL }
+        let (data, response) = try await http.data(for: URLRequest(url: url))
+        guard (200..<300).contains(response.statusCode) else {
+            throw APIError.http(status: response.statusCode)
+        }
+        do {
+            let feed = try JSONDecoder.cta.decode(BusDetoursEnvelope.self, from: data)
+            return (feed.bustimeResponse.dtr ?? []).compactMap { BusDetour(raw: $0) }
         } catch {
             throw APIError.decoding(String(describing: error))
         }
@@ -124,7 +157,61 @@ enum CTABusFormatter {
         return f
     }()
 
-    static func parse(_ value: String) -> Date? { formatter.date(from: value) }
+    /// `getdetours` includes seconds on its `startdt` / `enddt` timestamps;
+    /// `getpredictions` does not.
+    static let formatterWithSeconds: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd HH:mm:ss"
+        f.timeZone = TimeZone(identifier: "America/Chicago")
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    static func parse(_ value: String) -> Date? {
+        formatterWithSeconds.date(from: value) ?? formatter.date(from: value)
+    }
+}
+
+extension BusDetour {
+    init?(raw: BusDetoursEnvelope.Body.Detour) {
+        let affected = (raw.rtdirs ?? []).map {
+            BusDetour.RouteDirection(route: $0.rt, directionName: $0.dir)
+        }
+        self.init(
+            id: raw.id,
+            version: raw.ver ?? 0,
+            isActive: (raw.st ?? 0) == 1,
+            summary: raw.desc ?? "",
+            affected: affected,
+            beginsAt: raw.startdt.flatMap(CTABusFormatter.parse),
+            endsAt: raw.enddt.flatMap(CTABusFormatter.parse)
+        )
+    }
+}
+
+struct BusDetoursEnvelope: Decodable {
+    let bustimeResponse: Body
+    enum CodingKeys: String, CodingKey { case bustimeResponse = "bustime-response" }
+
+    struct Body: Decodable {
+        let dtr: [Detour]?
+        let error: [BusPredictionsEnvelope.Body.Err]?
+
+        struct Detour: Decodable {
+            let id: String
+            let ver: Int?
+            let st: Int?
+            let desc: String?
+            let rtdirs: [RouteDirection]?
+            let startdt: String?
+            let enddt: String?
+
+            struct RouteDirection: Decodable {
+                let rt: String
+                let dir: String
+            }
+        }
+    }
 }
 
 struct BusVehiclesEnvelope: Decodable {

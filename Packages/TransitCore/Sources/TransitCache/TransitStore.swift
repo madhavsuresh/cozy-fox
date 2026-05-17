@@ -88,6 +88,16 @@ public actor TransitStore {
         try? ctx.save()
     }
 
+    public func replaceBusDetours(_ detours: [BusDetour]) {
+        let now = Date()
+        let ctx = ModelContext(container)
+        try? ctx.delete(model: CachedBusDetour.self)
+        for detour in detours {
+            ctx.insert(CachedBusDetour(detour: detour, fetchedAt: now))
+        }
+        try? ctx.save()
+    }
+
     /// Append-only — historical snapshots for the future churn estimator. We
     /// also prune rows older than 14 days.
     public func recordStationSnapshots(_ stations: [BikeStation]) {

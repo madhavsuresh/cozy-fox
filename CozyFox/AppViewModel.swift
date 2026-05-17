@@ -75,7 +75,8 @@ final class AppViewModel {
     var displayableBusPredictions: [BusPrediction] {
         BusReliabilityScorer.displayablePredictions(
             from: snapshot.busPredictions,
-            vehicles: vehiclePositions
+            vehicles: vehiclePositions,
+            activeDetours: snapshot.busDetours
         )
     }
 
@@ -84,7 +85,8 @@ final class AppViewModel {
     var busReliabilities: [String: BusArrivalReliability] {
         BusReliabilityScorer().catalogedAssessments(
             for: snapshot.busPredictions,
-            vehicles: vehiclePositions
+            vehicles: vehiclePositions,
+            activeDetours: snapshot.busDetours
         )
     }
 

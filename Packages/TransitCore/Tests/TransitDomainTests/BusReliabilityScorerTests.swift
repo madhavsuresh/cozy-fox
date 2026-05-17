@@ -234,4 +234,106 @@ struct BusReliabilityScorerTests {
         #expect(map["p1"]?.state == .highConfidence)
         #expect(map["p2"]?.reasonCodes.contains(.vehicleNotFound) == true)
     }
+
+    @Test("Active detour on the matching route+direction adds DETOUR_ACTIVE warn")
+    func activeDetourAddsWarning() {
+        let pred = prediction(etaSeconds: 4 * 60)
+        let veh = vehicle(nearby: true, observedAgo: 10)
+        let detour = BusDetour(
+            id: "DTR-1",
+            version: 1,
+            isActive: true,
+            summary: "Grand & Wabash closure",
+            affected: [.init(route: "65", directionName: "Westbound")],
+            beginsAt: Self.now.addingTimeInterval(-3600),
+            endsAt: Self.now.addingTimeInterval(3600)
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [detour],
+            now: Self.now
+        )
+
+        #expect(result.reasonCodes.contains(.detourActive))
+        // Detour is just a warning — still displayable.
+        #expect(result.isDisplayable)
+    }
+
+    @Test("Detour on a different direction does not affect the prediction")
+    func detourOnDifferentDirectionDoesNotApply() {
+        let pred = prediction(etaSeconds: 4 * 60)
+        let veh = vehicle(nearby: true, observedAgo: 10)
+        let detour = BusDetour(
+            id: "DTR-2",
+            version: 1,
+            isActive: true,
+            summary: "Eastbound closure only",
+            affected: [.init(route: "65", directionName: "Eastbound")],
+            beginsAt: Self.now.addingTimeInterval(-3600),
+            endsAt: Self.now.addingTimeInterval(3600)
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [detour],
+            now: Self.now
+        )
+
+        #expect(!result.reasonCodes.contains(.detourActive))
+    }
+
+    @Test("Cancelled (inactive) detour does not add a warning")
+    func inactiveDetourDoesNotApply() {
+        let pred = prediction(etaSeconds: 4 * 60)
+        let veh = vehicle(nearby: true, observedAgo: 10)
+        let detour = BusDetour(
+            id: "DTR-3",
+            version: 2,
+            isActive: false,
+            summary: "Detour already lifted",
+            affected: [.init(route: "65", directionName: "Westbound")],
+            beginsAt: Self.now.addingTimeInterval(-7200),
+            endsAt: Self.now.addingTimeInterval(-3600)
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [detour],
+            now: Self.now
+        )
+
+        #expect(!result.reasonCodes.contains(.detourActive))
+    }
+
+    @Test("Detour outside its begins-at/ends-at window does not apply")
+    func detourOutsideTimeWindowDoesNotApply() {
+        let pred = prediction(etaSeconds: 4 * 60)
+        let veh = vehicle(nearby: true, observedAgo: 10)
+        let detour = BusDetour(
+            id: "DTR-4",
+            version: 1,
+            isActive: true,
+            summary: "Tomorrow morning rush only",
+            affected: [.init(route: "65", directionName: "Westbound")],
+            beginsAt: Self.now.addingTimeInterval(24 * 3600),
+            endsAt: Self.now.addingTimeInterval(28 * 3600)
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [detour],
+            now: Self.now
+        )
+
+        #expect(!result.reasonCodes.contains(.detourActive))
+    }
 }

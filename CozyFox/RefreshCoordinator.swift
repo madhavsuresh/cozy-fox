@@ -71,6 +71,12 @@ final class RefreshCoordinator {
     /// changes get picked up.
     private var lastWalkingInvalidationDay: Date?
 
+    /// Last successful detour fetch. Throttles `refreshDetoursIfNeeded` so
+    /// we don't hit `getdetours` on every 30 s refresh cycle — detours
+    /// change on the order of hours, not seconds.
+    private var lastDetoursFetchedAt: Date?
+    private static let detourRefreshInterval: TimeInterval = 5 * 60
+
     /// Last-known live vehicle positions for the user's pinned line/route.
     /// Refreshed every cycle; exposed so the dashboard can draw a "where's
     /// my train" strip. Empty when no route is pinned.
@@ -212,6 +218,7 @@ final class RefreshCoordinator {
                 }
             }
             group.addTask { await self.refreshPositions(prefs: prefs) }
+            group.addTask { await self.refreshDetoursIfNeeded(prefs: prefs) }
         }
 
         // Phase 4: portfolio evaluation. Runs after the parallel
@@ -883,6 +890,46 @@ final class RefreshCoordinator {
             await store.replaceAlerts(alerts + (await metraAlerts))
         } catch {
             await store.replaceAlerts(await metraAlerts)
+        }
+    }
+
+    /// Refreshes the cached bus-detour list at most once every
+    /// `detourRefreshInterval`. Detours change on the order of hours, so
+    /// the 30 s refresh ticker would otherwise burn API budget repeating
+    /// itself. Scoped to the routes the user actually rides so we don't
+    /// download every detour citywide.
+    private func refreshDetoursIfNeeded(prefs: UserRoutePreferences) async {
+        let now = Date()
+        if let last = lastDetoursFetchedAt,
+           now.timeIntervalSince(last) < Self.detourRefreshInterval {
+            return
+        }
+
+        var routes: Set<String> = []
+        for pref in prefs.buses where prefs.isBusRouteVisible(pref.route) || prefs.pinnedBusRoute == pref.route {
+            routes.insert(pref.route)
+        }
+        if let pinned = prefs.pinnedBusRoute { routes.insert(pinned) }
+        routes.formUnion(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+
+        guard !routes.isEmpty else {
+            // No bus routes to monitor — clear any stale cached detours so
+            // the scorer doesn't trip on outdated state when the user
+            // un-pins everything.
+            await store.replaceBusDetours([])
+            lastDetoursFetchedAt = now
+            return
+        }
+
+        do {
+            let detours = try await busClient.fetchDetours(routes: Array(routes))
+            await store.replaceBusDetours(detours)
+            lastDetoursFetchedAt = now
+        } catch {
+            // Soft fail: keep the previous cached detours. A stale
+            // detour list is better than no detour signal at all, and
+            // `BusDetour.affects(...)` already filters out detours past
+            // their `endsAt`.
         }
     }
 

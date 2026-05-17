@@ -257,7 +257,8 @@ actor LiveActivityCoordinator {
         var predictions = BusReliabilityScorer
             .displayablePredictions(
                 from: snapshot.busPredictions,
-                vehicles: snapshot.vehiclePositions
+                vehicles: snapshot.vehiclePositions,
+                activeDetours: snapshot.busDetours
             )
             .filter { $0.route == route }
         if let direction = prefs.pinnedBusDirection {
@@ -296,7 +297,8 @@ actor LiveActivityCoordinator {
         var predictions = BusReliabilityScorer
             .displayablePredictions(
                 from: snapshot.busPredictions,
-                vehicles: snapshot.vehiclePositions
+                vehicles: snapshot.vehiclePositions,
+                activeDetours: snapshot.busDetours
             )
             .filter { $0.route == tripBus.route }
         if let direction = tripBus.directionLabel {
@@ -495,7 +497,8 @@ actor LiveActivityCoordinator {
         let sorted = BusReliabilityScorer
             .displayablePredictions(
                 from: snapshot.busPredictions,
-                vehicles: snapshot.vehiclePositions
+                vehicles: snapshot.vehiclePositions,
+                activeDetours: snapshot.busDetours
             )
             .filter { $0.route == route && $0.stopId == stopID && $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }

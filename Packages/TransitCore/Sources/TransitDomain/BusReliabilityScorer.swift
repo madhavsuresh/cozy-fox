@@ -31,6 +31,7 @@ public struct BusArrivalReliability: Sendable, Hashable, Identifiable {
         case delayedFlagged = "DLY_TRUE"
         case stopLocationUnknown = "STOP_LOCATION_UNKNOWN"
         case arrivalAlreadyPassed = "ARRIVAL_ALREADY_PASSED"
+        case detourActive = "DETOUR_ACTIVE"
     }
 
     public let id: String
@@ -103,6 +104,7 @@ public struct BusReliabilityScorer: Sendable {
         for predictions: [BusPrediction],
         vehicles: [VehiclePosition],
         stopLocation: (BusPrediction) -> (lat: Double, lon: Double)?,
+        activeDetours: [BusDetour] = [],
         now: Date = .now
     ) -> [String: BusArrivalReliability] {
         let busVehicleById: [String: VehiclePosition] = Dictionary(
@@ -122,6 +124,7 @@ public struct BusReliabilityScorer: Sendable {
                 for: pred,
                 vehicle: busVehicleById[pred.vehicleId],
                 stopLocation: stopLocation(pred),
+                activeDetours: activeDetours,
                 now: now
             )
             return (pred.id, reliability)
@@ -135,12 +138,14 @@ public struct BusReliabilityScorer: Sendable {
     public static func displayablePredictions(
         from predictions: [BusPrediction],
         vehicles: [VehiclePosition],
+        activeDetours: [BusDetour] = [],
         scorer: BusReliabilityScorer = BusReliabilityScorer(),
         now: Date = .now
     ) -> [BusPrediction] {
         let assessments = scorer.catalogedAssessments(
             for: predictions,
             vehicles: vehicles,
+            activeDetours: activeDetours,
             now: now
         )
         return predictions.filter { assessments[$0.id]?.isDisplayable ?? true }
@@ -151,6 +156,7 @@ public struct BusReliabilityScorer: Sendable {
     public func catalogedAssessments(
         for predictions: [BusPrediction],
         vehicles: [VehiclePosition],
+        activeDetours: [BusDetour] = [],
         now: Date = .now
     ) -> [String: BusArrivalReliability] {
         assessments(
@@ -161,17 +167,21 @@ public struct BusReliabilityScorer: Sendable {
                     .first(where: { $0.id == pred.stopId })
                     .map { (lat: $0.latitude, lon: $0.longitude) }
             },
+            activeDetours: activeDetours,
             now: now
         )
     }
 
     /// Score a single prediction. `vehicle` is the latest matched bus
     /// observation for `prediction.vehicleId`, or nil when none is in the
-    /// current feed (the ghost-bus case).
+    /// current feed (the ghost-bus case). `activeDetours` is the cached
+    /// `getdetours` snapshot — pass an empty array when detour state is
+    /// unknown.
     public func assessment(
         for prediction: BusPrediction,
         vehicle: VehiclePosition?,
         stopLocation: (lat: Double, lon: Double)?,
+        activeDetours: [BusDetour] = [],
         now: Date = .now
     ) -> BusArrivalReliability {
         var reasons: [BusArrivalReliability.ReasonCode] = []
@@ -189,6 +199,20 @@ public struct BusReliabilityScorer: Sendable {
                 score: 0,
                 reasonCodes: reasons
             )
+        }
+
+        // Active detour on the same (route, direction) — soft warn. We
+        // cannot tell from `getdetours` alone whether *this stop* is
+        // skipped; phase 3 adds stop-level granularity via enhanced
+        // detours. Until then, downgrade enough to drop a borderline
+        // high-confidence into medium so the rider's expectations are
+        // shaped.
+        let detourHit = activeDetours.contains { detour in
+            detour.affects(route: prediction.route, direction: prediction.directionName, at: now)
+        }
+        if detourHit {
+            reasons.append(.detourActive)
+            score -= 0.10
         }
 
         let predictionAge = max(0, now.timeIntervalSince(prediction.generatedAt))

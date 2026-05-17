@@ -13,12 +13,14 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var nearbyBikePicks: [NearestBikePick]
     public var nearbyFreeBikePicks: [NearestFreeBikePick]
     public var activeAlerts: [ServiceAlert]
+    public var busDetours: [BusDetour]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
     public var intercampusFetchedAt: Date?
     public var bikesFetchedAt: Date?
     public var alertsFetchedAt: Date?
+    public var busDetoursFetchedAt: Date?
 
     public init(
         trainArrivals: [Arrival] = [],
@@ -30,12 +32,14 @@ public struct TransitSnapshot: Sendable, Hashable {
         nearbyBikePicks: [NearestBikePick] = [],
         nearbyFreeBikePicks: [NearestFreeBikePick] = [],
         activeAlerts: [ServiceAlert] = [],
+        busDetours: [BusDetour] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
         intercampusFetchedAt: Date? = nil,
         bikesFetchedAt: Date? = nil,
-        alertsFetchedAt: Date? = nil
+        alertsFetchedAt: Date? = nil,
+        busDetoursFetchedAt: Date? = nil
     ) {
         self.trainArrivals = trainArrivals
         self.busPredictions = busPredictions
@@ -46,12 +50,14 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.nearbyBikePicks = nearbyBikePicks
         self.nearbyFreeBikePicks = nearbyFreeBikePicks
         self.activeAlerts = activeAlerts
+        self.busDetours = busDetours
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt
         self.intercampusFetchedAt = intercampusFetchedAt
         self.bikesFetchedAt = bikesFetchedAt
         self.alertsFetchedAt = alertsFetchedAt
+        self.busDetoursFetchedAt = busDetoursFetchedAt
     }
 
     public static let empty = TransitSnapshot()

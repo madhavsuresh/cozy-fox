@@ -460,6 +460,51 @@ public final class CachedNearestFreeBike {
 }
 
 @Model
+public final class CachedBusDetour {
+    @Attribute(.unique) public var id: String
+    public var version: Int
+    public var isActive: Bool
+    public var summary: String
+    /// `[BusDetour.RouteDirection]` serialized as JSON. SwiftData persists
+    /// arrays of primitive types but not arrays of nested structs, so we
+    /// encode here and decode in `asModel`.
+    public var affectedJSON: String
+    public var beginsAt: Date?
+    public var endsAt: Date?
+    public var fetchedAt: Date
+
+    public init(detour: BusDetour, fetchedAt: Date) {
+        self.id = detour.id
+        self.version = detour.version
+        self.isActive = detour.isActive
+        self.summary = detour.summary
+        self.affectedJSON = (try? String(
+            data: JSONEncoder().encode(detour.affected),
+            encoding: .utf8
+        )) ?? "[]"
+        self.beginsAt = detour.beginsAt
+        self.endsAt = detour.endsAt
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: BusDetour {
+        let affected: [BusDetour.RouteDirection] = (try? JSONDecoder().decode(
+            [BusDetour.RouteDirection].self,
+            from: Data(affectedJSON.utf8)
+        )) ?? []
+        return BusDetour(
+            id: id,
+            version: version,
+            isActive: isActive,
+            summary: summary,
+            affected: affected,
+            beginsAt: beginsAt,
+            endsAt: endsAt
+        )
+    }
+}
+
+@Model
 public final class CachedAlert {
     @Attribute(.unique) public var id: String
     public var headline: String

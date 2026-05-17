@@ -15,6 +15,7 @@ public extension ModelContainer {
             CachedNearestBike.self,
             CachedNearestFreeBike.self,
             CachedAlert.self,
+            CachedBusDetour.self,
         ])
         let groupURL = AppGroup.containerURL
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -39,6 +40,7 @@ public extension ModelContainer {
             CachedNearestBike.self,
             CachedNearestFreeBike.self,
             CachedAlert.self,
+            CachedBusDetour.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
