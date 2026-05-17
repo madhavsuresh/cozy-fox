@@ -14,7 +14,7 @@ struct CTABusClientTests {
         let client = CTABusClient(http: stub) { "stub-key" }
         let predictions = try await client.fetchPredictions(route: "22", stopId: 1234)
 
-        #expect(predictions.count == 2)
+        #expect(predictions.count == 3)
         let first = try #require(predictions.first)
         #expect(first.route == "22")
         #expect(first.stopId == 1234)
@@ -22,6 +22,25 @@ struct CTABusClientTests {
         #expect(first.destinationName == "Howard")
         #expect(!first.isApproaching, "prdctdn 3 is more than 1 min away")
         #expect(!first.isDelayed)
+        #expect(first.dynamicActionCode == 0, "explicit dyn=0 round-trips as zero, not nil")
+        #expect(!first.hasNonStandardDynamicAction)
+        #expect(!first.predictionCountdownIsUncertain)
+
+        // Second row omits `dyn` entirely — should decode as nil and
+        // count as standard.
+        let second = predictions[1]
+        #expect(second.dynamicActionCode == nil)
+        #expect(!second.hasNonStandardDynamicAction)
+
+        // Third row carries `prdctdn=DLY` plus a string-form `dyn=18`
+        // (the layover code). Verifies both new signals decode and that
+        // string-form ints behave like the vehicles feed.
+        let third = predictions[2]
+        #expect(third.predictionCountdownIsUncertain)
+        #expect(third.isDelayed, "dly=true round-trips into isDelayed")
+        #expect(third.dynamicActionCode == 18)
+        #expect(third.hasNonStandardDynamicAction)
+        #expect(!third.isApproaching, "DLY sentinel is not an approaching state")
     }
 
     @Test func decodesDetoursAndActiveFlag() async throws {

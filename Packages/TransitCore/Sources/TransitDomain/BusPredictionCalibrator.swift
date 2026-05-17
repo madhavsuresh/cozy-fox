@@ -106,7 +106,9 @@ public enum BusPredictionCalibrator {
                 generatedAt: prediction.generatedAt,
                 arrivalAt: prediction.arrivalAt.addingTimeInterval(match.q50Seconds),
                 isDelayed: prediction.isDelayed,
-                isApproaching: prediction.isApproaching
+                isApproaching: prediction.isApproaching,
+                dynamicActionCode: prediction.dynamicActionCode,
+                predictionCountdownIsUncertain: prediction.predictionCountdownIsUncertain
             )
             return CalibrationResult(
                 prediction: shifted,
