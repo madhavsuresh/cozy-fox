@@ -113,4 +113,36 @@ struct CTABusClientTests {
         #expect(untouched.removedByDetourIds.isEmpty)
         #expect(untouched.addedByDetourIds.isEmpty)
     }
+
+    @Test("Vehicles decoder accepts pid/pdist as either string or int")
+    func decodesVehiclesWithFlexiblePidAndPdist() async throws {
+        // Regression for the post-phase-3a bug where every imminent bus
+        // prediction got hidden because the strict `Int?` declaration on
+        // `pid` / `pdist` threw `typeMismatch` whenever CTA returned
+        // them as JSON strings — wiping out the entire vehicle list
+        // and forcing the scorer's `vehicleNotFound` abstain on every
+        // DUE prediction.
+        let stub = StubHTTPClient()
+        await stub.register(
+            path: "/bustime/api/v2/getvehicles",
+            data: Fixture.load("cta_bus_vehicles")
+        )
+        let client = CTABusClient(http: stub) { "stub-key" }
+        let vehicles = try await client.fetchVehicles(routes: ["65"])
+
+        #expect(vehicles.count == 3)
+
+        // Vehicle 1234 has pid/pdist as strings → must parse cleanly.
+        let stringForm = try #require(vehicles.first { $0.id == "1234" })
+        #expect(stringForm.patternId == 4042)
+        #expect(stringForm.patternDistanceFeet == 1234)
+        // Vehicle 5678 has pid/pdist as numbers → unchanged behavior.
+        let intForm = try #require(vehicles.first { $0.id == "5678" })
+        #expect(intForm.patternId == 4043)
+        #expect(intForm.patternDistanceFeet == 9876)
+        // Vehicle 9999 omits pid/pdist → nil, no failure.
+        let absent = try #require(vehicles.first { $0.id == "9999" })
+        #expect(absent.patternId == nil)
+        #expect(absent.patternDistanceFeet == nil)
+    }
 }
