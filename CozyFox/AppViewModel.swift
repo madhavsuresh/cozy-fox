@@ -65,6 +65,29 @@ final class AppViewModel {
     /// Whether the 30 s ticker should actually run right now.
     var liveUpdatesActive: Bool { liveUpdatesEnabled && !isLowPowerMode }
 
+    /// Bus predictions filtered through `BusReliabilityScorer`. Ghost
+    /// predictions (no matching vehicle for an imminent ETA, DUE-but-far,
+    /// already-passed, etc.) are dropped before any dashboard surface sees
+    /// them. See `docs/BUS_RELIABILITY.md` for the scoring contract.
+    ///
+    /// Computed each access from `snapshot.busPredictions` and
+    /// `vehiclePositions`; `@Observable` tracks the inputs.
+    var displayableBusPredictions: [BusPrediction] {
+        BusReliabilityScorer.displayablePredictions(
+            from: snapshot.busPredictions,
+            vehicles: vehiclePositions
+        )
+    }
+
+    /// Per-prediction reliability assessments keyed by `BusPrediction.id`.
+    /// Available for debug surfaces and styling (mute low-confidence).
+    var busReliabilities: [String: BusArrivalReliability] {
+        BusReliabilityScorer().catalogedAssessments(
+            for: snapshot.busPredictions,
+            vehicles: vehiclePositions
+        )
+    }
+
     /// In-memory suppression for the head-home tile. When non-nil and
     /// in the future, the tile stays hidden even if
     /// `HomewardSuggester.shouldSurface` would otherwise pass its gates.

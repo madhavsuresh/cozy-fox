@@ -1088,7 +1088,7 @@ struct DashboardScreen: View {
 
     private func tripBusRow(_ bus: PlannedTripPin.BusLeg) -> some View {
         let alerts = alerts(forBusRoute: bus.route)
-        let predictions = model.snapshot.busPredictions
+        let predictions = model.displayableBusPredictions
             .filter { $0.route == bus.route }
             .filter { bus.stopId == nil || $0.stopId == bus.stopId }
             .filter { bus.directionLabel == nil || $0.directionName == bus.directionLabel }
@@ -3389,7 +3389,7 @@ struct DashboardScreen: View {
     @ViewBuilder
     private func busProgressStrip(toStop stop: BusStop, route: String) -> some View {
         let stopCoord = (lat: stop.latitude, lon: stop.longitude)
-        let stopPredictions = model.snapshot.busPredictions
+        let stopPredictions = model.displayableBusPredictions
             .filter { $0.route == route && $0.stopId == stop.id }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let nextVid = stopPredictions.first?.vehicleId
@@ -3809,7 +3809,7 @@ struct DashboardScreen: View {
             destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: stop.id),
             directDistanceMeters: distance
         )
-        let predictions = model.snapshot.busPredictions
+        let predictions = model.displayableBusPredictions
             .filter { $0.route == route && $0.stopId == stop.id }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let first = predictions.first
@@ -4827,7 +4827,7 @@ struct DashboardScreen: View {
     }
 
     private func predictions(for stop: BusStop, limit: Int = 3) -> [BusPrediction] {
-        model.snapshot.busPredictions
+        model.displayableBusPredictions
             .filter { $0.stopId == stop.id && $0.route == stop.route }
             .sorted { $0.arrivalAt < $1.arrivalAt }
             .prefix(limit)
