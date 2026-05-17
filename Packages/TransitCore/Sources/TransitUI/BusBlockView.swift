@@ -10,22 +10,25 @@ public extension BusArrivalReliability {
     /// `GhostTrainAssessment.headwayComplication` for parity between
     /// the train and bus surfaces.
     ///
-    /// Visual contract:
-    /// - `.highConfidence` / `.mediumConfidence`: no complication, dot
-    ///   renders with its accent color at full opacity.
-    /// - `.lowConfidence`: gold ring + `?` badge — soft uncertainty
-    ///   (e.g. CTA `dyn` flag on a tracked vehicle, or no vehicle on
-    ///   a far-out prediction).
-    /// - `.unreliable`: red ring + `!` badge — strong uncertainty,
-    ///   matches the "scheduled-only" buses Google Maps marks red.
-    /// - `.doNotDisplay`: red ring + `X` badge — positively-wrong row
+    /// Visual contract — saturated → desaturated → gold → red ladder:
+    /// - `.highConfidence`: green `✓` badge — strongest positive.
+    /// - `.mediumConfidence`: muted-green `✓` badge — observed but a
+    ///   step below confirmed.
+    /// - `.lowConfidence`: gold `?` badge — soft uncertainty (e.g.
+    ///   CTA `dyn` flag on a tracked vehicle, or no vehicle on a
+    ///   far-out prediction).
+    /// - `.unreliable`: red `!` badge — strong uncertainty, matches
+    ///   the "scheduled-only" buses Google Maps marks red.
+    /// - `.doNotDisplay`: red `X` badge — positively-wrong row
     ///   (already passed, stop removed by detour, due-but-far, etc.).
     ///   Normally filtered out before the strip sees it; only renders
     ///   when the filter level is set to "Show everything."
     var headwayComplication: HeadwayDotStrip.Complication? {
         switch state {
-        case .highConfidence, .mediumConfidence:
-            nil
+        case .highConfidence:
+            .confirmed
+        case .mediumConfidence:
+            .tracked
         case .lowConfidence:
             .unconfirmed
         case .unreliable:
