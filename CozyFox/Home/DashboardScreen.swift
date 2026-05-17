@@ -1032,10 +1032,12 @@ struct DashboardScreen: View {
             .filter { train.stationId == nil || $0.stationId == train.stationId }
             .filter { train.destinationName == nil || $0.destinationName == train.destinationName }
             .sorted { $0.arrivalAt < $1.arrivalAt }
-        let first = arrivals.first
+        let displayableArrivals = model.filteredDisplayableTrainArrivals(arrivals)
+        let first = displayableArrivals.first
         let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
-        let assessments = ghostAssessments(for: arrivals)
-        let firstAssessment = first.flatMap { assessments[$0.id] }
+        let reliabilities = trainReliabilities(for: displayableArrivals)
+        let topReliability = first.flatMap { reliabilities[$0.id] }
+        let suppressBigNumber = topReliability?.needsMutedStyling ?? false
         let targetKey: TargetFetchKey? = train.stationId.map { .train(stationId: $0) }
         let isFresh: Bool = targetKey.map(model.hasFreshFetch(forTarget:)) ?? model.hasFreshFetch(for: .trains)
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
@@ -1053,33 +1055,37 @@ struct DashboardScreen: View {
                 pinAlertInlineSummary(alerts)
             }
             if let minutes, let first {
-                let isGhostLikely = firstAssessment?.isGhostLikely == true
-                HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
-                    BigNumber(
-                        minutes,
-                        unit: "min",
-                        size: .md,
-                        tone: first.isDelayed || isGhostLikely ? .alert : .primary,
-                        accessibilityLabel: "\(minutes) minutes to next \(train.line.displayName) train"
-                    )
-                    Text("→ \(first.destinationName)")
-                        .font(ChicagoTypography.body(.regular, relativeTo: .caption))
-                        .foregroundStyle(ChicagoPalette.Gray.medium)
-                        .lineLimit(1)
-                }
-                if let badge = GhostTrainBadge(firstAssessment) {
-                    badge
+                if !suppressBigNumber {
+                    HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
+                        BigNumber(
+                            minutes,
+                            unit: "min",
+                            size: .md,
+                            tone: first.isDelayed ? .alert : .primary,
+                            accessibilityLabel: "\(minutes) minutes to next \(train.line.displayName) train"
+                        )
+                        Text("→ \(first.destinationName)")
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .lineLimit(1)
+                    }
                 }
                 let tripTrainUrgencies = train.stationId.map {
-                    departureUrgencies(forStationId: $0, arrivals: arrivals.prefix(8))
+                    departureUrgencies(forStationId: $0, arrivals: displayableArrivals.prefix(8))
                 } ?? []
-                HeadwayDotStrip(arrivals: arrivals.prefix(8).map(\.arrivalAt),
+                HeadwayDotStrip(arrivals: displayableArrivals.prefix(8).map(\.arrivalAt),
                                 accent: train.line.swiftUIColor,
-                                complications: ghostComplications(
-                                    for: arrivals.prefix(8),
-                                    assessments: assessments
+                                complications: trainReliabilityComplications(
+                                    for: displayableArrivals.prefix(8),
+                                    reliabilities: reliabilities
                                 ),
                                 urgencies: tripTrainUrgencies)
+                if model.showTrainReliabilityDebug {
+                    TrainReliabilityDebugOverlay(
+                        arrivals: Array(displayableArrivals.prefix(4)),
+                        reliabilities: reliabilities
+                    )
+                }
             } else {
                 Text(isFresh ? "No upcoming arrivals." : "Fetching arrivals…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -3229,10 +3235,11 @@ struct DashboardScreen: View {
             let base = model.snapshot.trainArrivals
                 .filter { $0.line == line && $0.stationId == station.id }
                 .sorted { $0.arrivalAt < $1.arrivalAt }
+            let filtered = model.filteredDisplayableTrainArrivals(base)
             if let pinned = pinnedTrainDestinations {
-                return base.filter { pinned.contains($0.destinationName) }
+                return filtered.filter { pinned.contains($0.destinationName) }
             }
-            return base
+            return filtered
         }()
         let targetKey: TargetFetchKey = .train(stationId: station.id)
         // Subtle freshness chip — fixed-width row so the layout never reflows
@@ -3267,9 +3274,9 @@ struct DashboardScreen: View {
                     let sortedTimes = times.sorted(by: { $0.arrivalAt < $1.arrivalAt })
                     let first = sortedTimes.first!
                     let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
-                    let assessments = ghostAssessments(for: sortedTimes)
-                    let firstAssessment = assessments[first.id]
-                    let isGhostLikely = firstAssessment?.isGhostLikely == true
+                    let reliabilities = trainReliabilities(for: sortedTimes)
+                    let topReliability = reliabilities[first.id]
+                    let suppressBigNumber = topReliability?.needsMutedStyling ?? false
                     let biasCorrection = headlineBiasCorrection(for: sortedTimes)
                     let bunching = bunchingHint(for: sortedTimes)
                     // Destination label: every unique destination in
@@ -3286,49 +3293,54 @@ struct DashboardScreen: View {
                         Text("→ \(destinationLabel)")
                             .font(ChicagoTypography.body(.medium, relativeTo: .caption))
                             .foregroundStyle(ChicagoPalette.bahama)
-                        HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
-                            BigNumber(
-                                minutes,
-                                unit: "min",
-                                size: .lg,
-                                tone: first.isDelayed || isGhostLikely ? .alert : .primary,
-                                accessibilityLabel: "\(minutes) minutes to next \(destinationLabel) train"
-                            )
-                            if first.isDelayed || isGhostLikely {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(ChicagoPalette.starRed)
-                                    .accessibilityLabel(isGhostLikely ? "Likely ghost train" : "Delayed")
+                        if !suppressBigNumber {
+                            HStack(alignment: .lastTextBaseline, spacing: ChicagoSpacing.sm) {
+                                BigNumber(
+                                    minutes,
+                                    unit: "min",
+                                    size: .lg,
+                                    tone: first.isDelayed ? .alert : .primary,
+                                    accessibilityLabel: "\(minutes) minutes to next \(destinationLabel) train"
+                                )
+                                if first.isDelayed {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(ChicagoPalette.starRed)
+                                        .accessibilityLabel("Delayed")
+                                }
                             }
-                        }
-                        if let badge = GhostTrainBadge(firstAssessment) {
-                            badge
-                        }
-                        if let biasCorrection {
-                            Text(biasCorrection.displayText)
-                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                                .foregroundStyle(ChicagoPalette.Gray.medium)
-                                .lineLimit(1)
-                                .accessibilityLabel(biasCorrection.accessibilityLabel)
-                        }
-                        if let bunching {
-                            Text("+ another in \(bunching.minutes)m")
-                                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
-                                .foregroundStyle(ChicagoPalette.Gray.medium)
-                                .lineLimit(1)
-                                .accessibilityLabel("Another \(destinationLabel) train in \(bunching.minutes) minutes")
+                            if let biasCorrection {
+                                Text(biasCorrection.displayText)
+                                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                                    .lineLimit(1)
+                                    .accessibilityLabel(biasCorrection.accessibilityLabel)
+                            }
+                            if let bunching {
+                                Text("+ another in \(bunching.minutes)m")
+                                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                                    .lineLimit(1)
+                                    .accessibilityLabel("Another \(destinationLabel) train in \(bunching.minutes) minutes")
+                            }
                         }
                         HeadwayDotStrip(
                             arrivals: sortedTimes.prefix(8).map(\.arrivalAt),
                             accent: line.swiftUIColor,
-                            complications: ghostComplications(
+                            complications: trainReliabilityComplications(
                                 for: sortedTimes.prefix(8),
-                                assessments: assessments
+                                reliabilities: reliabilities
                             ),
                             urgencies: departureUrgencies(
                                 forStationId: first.stationId,
                                 arrivals: sortedTimes.prefix(8)
                             )
                         )
+                        if model.showTrainReliabilityDebug {
+                            TrainReliabilityDebugOverlay(
+                                arrivals: Array(sortedTimes.prefix(4)),
+                                reliabilities: reliabilities
+                            )
+                        }
                     }
                 }
             }
@@ -4756,23 +4768,23 @@ struct DashboardScreen: View {
         model.vehiclePositions.isEmpty ? model.snapshot.vehiclePositions : model.vehiclePositions
     }
 
-    private func ghostAssessments(
+    private func trainReliabilities(
         for arrivals: [Arrival],
         now: Date = .now
-    ) -> [String: GhostTrainAssessment] {
-        GhostTrainDetector().assessments(
+    ) -> [String: TrainArrivalReliability] {
+        TrainReliabilityScorer().catalogedAssessments(
             for: arrivals,
             vehiclePositions: trainVehiclePositions,
-            arrivalsFetchedAt: model.snapshot.trainsFetchedAt,
+            alerts: model.snapshot.activeAlerts,
             now: now
         )
     }
 
-    private func ghostComplications(
+    private func trainReliabilityComplications(
         for arrivals: ArraySlice<Arrival>,
-        assessments: [String: GhostTrainAssessment]
+        reliabilities: [String: TrainArrivalReliability]
     ) -> [HeadwayDotStrip.Complication?] {
-        arrivals.map { assessments[$0.id]?.headwayComplication }
+        arrivals.map { reliabilities[$0.id]?.headwayComplication }
     }
 
     /// Look up a confident bias correction for the first arrival in

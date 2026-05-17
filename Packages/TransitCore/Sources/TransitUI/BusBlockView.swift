@@ -7,7 +7,7 @@ public extension BusArrivalReliability {
     /// Map the per-prediction reliability state onto the dot-strip
     /// complication vocabulary so each dot styles itself according to
     /// how much we trust the underlying arrival. Mirrors
-    /// `GhostTrainAssessment.headwayComplication` for parity between
+    /// `TrainArrivalReliability.headwayComplication` for parity between
     /// the train and bus surfaces.
     ///
     /// Visual contract — saturated → desaturated → gold → red ladder:

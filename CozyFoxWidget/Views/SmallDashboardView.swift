@@ -15,13 +15,14 @@ struct SmallDashboardView: View {
             let line = arrival.line
             let displayedArrivals = displayedTrainArrivals
             let upcoming = displayedArrivals.prefix(8).map(\.arrivalAt)
-            let assessments = GhostTrainDetector().assessments(
+            let reliabilities = TrainReliabilityScorer().catalogedAssessments(
                 for: displayedArrivals,
                 vehiclePositions: entry.snapshot.vehiclePositions,
-                arrivalsFetchedAt: entry.snapshot.trainsFetchedAt,
+                alerts: entry.snapshot.activeAlerts,
                 now: entry.date
             )
-            let firstAssessment = assessments[arrival.id]
+            let topReliability = reliabilities[arrival.id]
+            let suppressBigNumber = topReliability?.needsMutedStyling ?? false
             let minutes = max(0, Int((arrival.arrivalAt.timeIntervalSince(entry.date) / 60).rounded()))
             let hasAlert = entry.snapshot.activeAlerts.contains {
                 $0.impactedLineColors.contains(line)
@@ -42,22 +43,21 @@ struct SmallDashboardView: View {
                     .foregroundStyle(ChicagoPalette.Gray.medium)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                BigNumber(
-                    minutes,
-                    unit: "min",
-                    size: .lg,
-                    tone: arrival.isDelayed || firstAssessment?.isGhostLikely == true ? .alert : .primary,
-                    accessibilityLabel: "\(minutes) minutes to next \(line.displayName) train"
-                )
-                if let badge = GhostTrainBadge(firstAssessment) {
-                    badge
+                if !suppressBigNumber {
+                    BigNumber(
+                        minutes,
+                        unit: "min",
+                        size: .lg,
+                        tone: arrival.isDelayed ? .alert : .primary,
+                        accessibilityLabel: "\(minutes) minutes to next \(line.displayName) train"
+                    )
                 }
                 HeadwayDotStrip(
                     arrivals: Array(upcoming),
                     accent: line.swiftUIColor,
                     now: entry.date,
                     complications: displayedArrivals.prefix(8).map {
-                        assessments[$0.id]?.headwayComplication
+                        reliabilities[$0.id]?.headwayComplication
                     },
                     urgencies: trainUrgencies(
                         arrivals: displayedArrivals.prefix(8),

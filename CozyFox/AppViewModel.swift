@@ -107,6 +107,14 @@ final class AppViewModel {
     /// dashboard surfaces re-render the debug overlay immediately on
     /// toggle.
     var showBusReliabilityDebug: Bool = false
+    /// Mirror of `UserRoutePreferences.trainPredictionFilterLevel`.
+    /// Same shape and lifecycle as `busPredictionFilterLevel`; the two
+    /// are independent knobs because train and bus reliability have
+    /// different distributions and a rider may want to trust one feed
+    /// more than the other.
+    var trainPredictionFilterLevel: TrainPredictionFilterLevel = .default
+    /// Mirror of `UserRoutePreferences.showTrainReliabilityDebug`.
+    var showTrainReliabilityDebug: Bool = false
 
     /// Whether the 30 s ticker should actually run right now.
     var liveUpdatesActive: Bool { liveUpdatesEnabled && !isLowPowerMode }
@@ -182,6 +190,35 @@ final class AppViewModel {
         )
     }
 
+    /// Per-arrival reliability assessments keyed by `Arrival.id`.
+    /// Mirror of `busReliabilities`. Cheap to compute (the scorer is a
+    /// pure function over snapshot state) so we don't memoize; SwiftUI's
+    /// `@Observable` tracking re-renders only when the inputs change.
+    var trainReliabilities: [String: TrainArrivalReliability] {
+        TrainReliabilityScorer().catalogedAssessments(
+            for: snapshot.trainArrivals,
+            vehiclePositions: vehiclePositions,
+            alerts: snapshot.activeAlerts
+        )
+    }
+
+    /// Apply the user's train reliability filter to `arrivals`. Use
+    /// from dashboard surfaces that have already filtered by line /
+    /// station / destination upstream, since we only want the
+    /// reliability filter to act on rows the user otherwise asked for.
+    /// Mirror of the bus side's `displayableBusPredictions`, but as a
+    /// function so each surface can apply it after its own upstream
+    /// filtering. Train arrivals are stored uncalibrated — no Phase 4
+    /// residual quantile binning yet, so the filter is the only
+    /// step needed.
+    func filteredDisplayableTrainArrivals(_ arrivals: [Arrival]) -> [Arrival] {
+        TrainPredictionFilter.filter(
+            arrivals,
+            reliabilities: trainReliabilities,
+            level: trainPredictionFilterLevel
+        )
+    }
+
     /// In-memory suppression for the head-home tile. When non-nil and
     /// in the future, the tile stays hidden even if
     /// `HomewardSuggester.shouldSurface` would otherwise pass its gates.
@@ -248,6 +285,8 @@ final class AppViewModel {
         liveUpdatesEnabled = initialPrefs.liveUpdatesEnabled
         busPredictionFilterLevel = initialPrefs.busPredictionFilterLevel
         showBusReliabilityDebug = initialPrefs.showBusReliabilityDebug
+        trainPredictionFilterLevel = initialPrefs.trainPredictionFilterLevel
+        showTrainReliabilityDebug = initialPrefs.showTrainReliabilityDebug
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
         migrateMobilityProfileIfNeeded()
@@ -313,6 +352,23 @@ final class AppViewModel {
         showBusReliabilityDebug = enabled
         var prefs = preferences.loadRoutePreferences()
         prefs.showBusReliabilityDebug = enabled
+        preferences.saveRoutePreferences(prefs)
+    }
+
+    /// Persist the user's train-arrival filter level. Mirrors
+    /// `setBusPredictionFilterLevel`.
+    func setTrainPredictionFilterLevel(_ level: TrainPredictionFilterLevel) {
+        trainPredictionFilterLevel = level
+        var prefs = preferences.loadRoutePreferences()
+        prefs.trainPredictionFilterLevel = level
+        preferences.saveRoutePreferences(prefs)
+    }
+
+    /// Persist the user's train debug-overlay toggle.
+    func setShowTrainReliabilityDebug(_ enabled: Bool) {
+        showTrainReliabilityDebug = enabled
+        var prefs = preferences.loadRoutePreferences()
+        prefs.showTrainReliabilityDebug = enabled
         preferences.saveRoutePreferences(prefs)
     }
 
@@ -406,6 +462,10 @@ final class AppViewModel {
             snapshot: snapshot,
             vehiclePositions: vehiclePositions,
             busVehicleHistory: busVehicleHistory
+        )
+        TrainReliabilityDebugLogger.log(
+            snapshot: snapshot,
+            vehiclePositions: vehiclePositions
         )
     }
 
