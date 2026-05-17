@@ -210,6 +210,57 @@ Sized for one weekend each except where noted.
 - **Compaction policy.** When does the raw `BusPredictionResidual` row get deleted after its aggregate update lands? After N days, or after the bin's `n` crosses a threshold? Probably 30 days + minimum-N safety: keep the raw row until the bin has ≥ 30 samples or 30 days pass, whichever comes first.
 - **Storage budget.** Estimated: ~5–10 active routes × ~10 stops × ~5 horizon bins × 168 hour-of-week bins ≈ 40k bins maximum; at ~80 bytes per bin row ≈ 3 MB. Raw residuals at ~150 bytes × maybe 5k rows in a 30-day window ≈ 1 MB. Comfortably under any reasonable budget.
 
+## Future work
+
+### Temporal confidence telemetry (TODO)
+
+> Captured 2026-05-17 during dogfooding. Trigger: watching the debug overlay live and noticing a single prediction's score visibly oscillate over consecutive 30 s refresh ticks — for example, dropping from `H 0.81` to `M 0.62` and back to `H 0.77` as the matched vehicle's age crosses freshness thresholds, the prediction's `generatedAt` ages past its own staleness cutoff, then a new prediction snapshot arrives.
+
+> ⚠️ **The proposals below are sketches, not designs.** Hysteresis vs. memoryful scoring vs. per-stop priors are three different bets with very different implementation costs, edge cases, and failure modes — and the `expected_volatility ∝ (1 − stop_pdist_fraction)` toy model in the route-position sub-section is a guess, not a calibrated relationship. Don't implement any of them yet. The only thing that should land before serious design work is the **logger** (sample payload + bounded sink). Once we have weeks of real trajectories, the data picks the fix; until then these notes are captured thinking, not a plan.
+
+You'd expect confidence in a given arrival to be *monotonic* over time. As the bus gets closer to the stop and we accumulate more observations, our certainty should only go up (or stay flat). In practice that's not what the scorer produces. Real-world causes I've already seen:
+
+- **Vehicle observation aging out and refreshing.** `VEHICLE_FRESH` (+0.18) flips to `VEHICLE_STALE` (−0.30) at the 120 s threshold; the next `getvehicles` poll brings the row back to fresh. A 0.48-point oscillation on a single threshold crossing.
+- **Prediction `generatedAt` aging similarly.** `PREDICTION_FRESH` (+0.06) → `PREDICTION_STALE` (−0.18) at the same cadence, slightly out of phase with the vehicle.
+- **`dyn` state flipping mid-trip.** A bus enters layover (`dyn=18`) at a transfer point, then exits; the scorer downgrades by 0.25 and then restores it.
+- **Pattern match becoming available.** Until the matching `BusPattern` is cached for the vehicle's `pid`, the scorer falls back to haversine; once the pattern lands, the reason codes shift from haversine-based to pattern-based, and the score moves accordingly.
+- **DUE-but-far flipping near the boundary.** The 350 m / 1000 ft thresholds are knife-edge — a vehicle hovering near the cutoff can toggle the abstain repeatedly until it clearly enters or exits.
+
+Some of this is *correct* — a layover genuinely *should* drop confidence, and pattern match becoming available genuinely *should* raise it — but a lot of it is **threshold flicker**: the score crosses a discrete reason-code boundary in a way that's noisy rather than informative. A monotonic (or at least monotone-with-justified-exceptions) score is the right target. Getting there probably requires:
+
+- **Smoothing thresholds via hysteresis or soft transitions.** Replace the freshness step function with a smooth decay (e.g. `max(0, 1 - age/staleAge)`-shaped weight) so the score doesn't jump at a single tick.
+- **Memoryful scoring.** Instead of re-deriving the score from scratch each tick, track `(min, max, last)` over the prediction's lifetime so the surfaced state can't regress past evidence we previously had. The user mostly cares about "do we still believe in this bus?" — a temporarily-stale GPS shouldn't reset our prior confidence.
+- **Per-reason-code monotonicity rules.** Some signals are inherently monotonic: `PDIST_CROSSED_STOP` only ever goes from false→true. Others (`VEHICLE_FRESH`) shouldn't be allowed to *raise* confidence after they previously *lowered* it on the same prediction — once stale, the scorer has been told the upstream isn't perfectly tracking; pretending otherwise is the failure mode.
+
+Before any of that, we need data. A logger:
+
+- **Trigger.** Every refresh tick where `displayableBusPredictions` is computed.
+- **Sink.** Local SwiftData table (`BusReliabilityScoreSample`?) keyed by `(predictionId, sampledAt)`. Bounded — only retain samples for predictions whose `arrivalAt` is within the last hour or two, then drop. Pruned aggressively because this is observability, not training data.
+- **Payload.** `(predictionId, sampledAt, state, score, reasonCodes, etaSecondsAtSample)`. Maybe also matched-vehicle id + observation age so the cause of state changes is reconstructible without a second join.
+- **Surface.** A new debug screen (or a long-press affordance on the dot strip) that picks a single prediction and renders its score trajectory as a sparkline over time, with reason-code transitions annotated. Same invisible-predictions rule applies — this is debug, never user-facing copy.
+- **Composes with `BusReliabilityDebugLogger`.** That one logs to `os_log` per-cycle for live tailing; this one persists per-prediction for after-the-fact analysis. The two coexist.
+
+Acceptance: after one week of dogfooding, the trajectory view should reveal whether oscillations are dominated by threshold flicker (smoothing wins) or by genuine bus-state changes (memoryful scoring wins). The fix follows the data.
+
+### Stop position along the route is the missing covariate
+
+A prediction's expected confidence trajectory is **not the same shape at every stop**, and the scorer currently treats all stops uniformly. Two extreme cases on the same route:
+
+- **The 66 at Navy Pier / Grand & McClurg** — within ~500 ft of the route's eastern terminal. A westbound bus appearing here has 99% of the route's variance still ahead of it; the upstream history of *this* trip is essentially the layover. The "DUE-but-far" check is also weird at terminals: the bus is *supposed* to be sitting near the stop with the engine off.
+- **A 66 stop at Halsted or further west** — already absorbed 3+ miles of mid-route traffic, signal cycles, and dwell variance. The scorer has a long observation history to draw on, and the prediction's stability should reflect "we've already seen how this trip is running."
+
+**Prior performance along the route is the right covariate.** Stops near the route's `pdist=0` have essentially no upstream signal, so the scorer should lean more on schedule + route-level priors and be tolerant of higher trajectory volatility. Stops at high `pdist` have a long upstream trace and should be intolerant of *new* state changes — if the bus has been confidently tracked for 4 miles, a single stale GPS sample two stops before the user's stop shouldn't drag the score back to `lowConfidence`.
+
+Concretely, what the telemetry should capture and what the eventual scorer should consume:
+
+- **Sample payload extension.** Record `stop_pdist_fraction` (the stop's `pdist` divided by the pattern's `lengthFeet`) on every `BusReliabilityScoreSample` row, alongside the absolute `stop_pdist_feet`. Cheap — both are already in `BusPattern` / `BusPatternGeometry`.
+- **Per-stop trajectory aggregates.** Once we have ~weeks of samples per stop, compute the distribution of (`score_min`, `score_max`, `score_swing`, `transition_count`) for predictions confirmed at that stop. That's the empirical prior for "how volatile should the trajectory look here." Bin by `(route, stopId, hourOfWeek)` — same dimensions as the existing residual quantile bins so the two can compose.
+- **Distinct from residual calibration.** Phase 4's `BusResidualQuantileBin` captures *how wrong* CTA's prediction was on average. The trajectory aggregates capture *how stable* our confidence in the prediction was over its lifetime. A stop can be low-residual but high-volatility (CTA gets the time right but our scorer flip-flops about whether to trust it) or vice versa. Both are useful; neither subsumes the other.
+- **Connection to position along route.** At first cut, the simplest model: `expected_trajectory_volatility ∝ (1 - stop_pdist_fraction)` — terminals are noisy, downstream stops are calmer. Refine with empirical data once it exists. This becomes a prior that the scorer multiplies into the freshness/staleness penalties, so a 120 s GPS gap at McClurg costs less confidence than the same gap at a downstream stop where the trip's been observed for miles.
+- **Pulls the scorer toward "use route history."** Today's scorer treats each refresh as independent. With per-(route, stop) trajectory priors plus memoryful per-prediction state (above), the scorer can answer "is this prediction behaving like other predictions at this stop have behaved?" rather than just "what do the current signals say in isolation."
+
+This composes with the threshold-smoothing / memoryful-scoring fixes above: those handle *within-prediction* noise, this handles *between-stop* expectations. Both stories want the same logger as a starting point — `stop_pdist_fraction` is just one more column on the same sample row.
+
 ## Connection to existing pieces
 
 - **[CONFIDENCE_INTERVALS.md](docs/CONFIDENCE_INTERVALS.md)** — bus prediction CI is one of the named intervals this work is judged against. Phase 4's residual quantiles *are* the per-bus version of the prediction CI. The reliability scorer is what keeps that CI honest: when evidence is weak, abstain rather than emit a confident wrong number.
