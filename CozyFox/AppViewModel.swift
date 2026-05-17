@@ -72,6 +72,25 @@ final class AppViewModel {
         feedFetchStates.hasFreshFetch(for: feed)
     }
 
+    /// Per-target variant — prefer this on pinned cards so a sibling
+    /// target's success can't trick the UI into saying "no upcoming X"
+    /// when the pinned target's own call failed.
+    func hasFreshFetch(forTarget key: TargetFetchKey) -> Bool {
+        feedFetchStates.hasFreshFetch(forTarget: key)
+    }
+
+    /// Age of the last successful fetch for a specific pinned target, in
+    /// seconds. Nil if no successful fetch has been recorded yet.
+    func age(forTarget key: TargetFetchKey) -> TimeInterval? {
+        feedFetchStates.age(forTarget: key)
+    }
+
+    /// Bucketed staleness for the indicator dot/label. Re-derived on each
+    /// observation, so a 30 s ticker tick is enough to age the display.
+    func staleness(forTarget key: TargetFetchKey, now: Date = .now) -> Staleness {
+        Staleness.from(age: feedFetchStates.age(forTarget: key, now: now))
+    }
+
     /// User-controlled toggle for the 30 s ticker. Persisted to prefs.
     /// Observable so the dashboard switch reflects state instantly.
     var liveUpdatesEnabled: Bool = true

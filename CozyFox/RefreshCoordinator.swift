@@ -578,17 +578,22 @@ final class RefreshCoordinator {
         // Fetch every target in parallel so a single slow upstream call
         // (or its retry) doesn't block the rest. Each task captures the
         // actor reference and returns its own result; failures collapse to
-        // an empty array but are tracked separately for fetch-state.
+        // an empty array but are tracked separately for fetch-state. The
+        // outcome carries the originating station id so the UI can show
+        // per-target staleness instead of one feed-level rollup that lies
+        // when a sibling target succeeds while the pinned one fails.
         let client = trainClient
         let outcomes: [TrainFetchOutcome] = await withTaskGroup(
             of: TrainFetchOutcome.self,
             returning: [TrainFetchOutcome].self
         ) { group in
             for target in targets {
+                let mapId = target.mapId
+                let stopId = target.stopId
                 group.addTask {
                     do {
                         let result: [Arrival]
-                        if let stopId = target.stopId {
+                        if let stopId {
                             // stopId queries return one platform's arrivals
                             // (one direction) — 4 is plenty.
                             result = try await client.fetchArrivals(stopId: stopId, max: 4)
@@ -599,11 +604,11 @@ final class RefreshCoordinator {
                             // a couple of arrivals. At Belmont's 3 lines × 2
                             // directions = 6 pairs, 12 keeps both directions
                             // visible.
-                            result = try await client.fetchArrivals(mapId: target.mapId, max: 12)
+                            result = try await client.fetchArrivals(mapId: mapId, max: 12)
                         }
-                        return .succeeded(result)
+                        return .succeeded(mapId: mapId, arrivals: result)
                     } catch {
-                        return .failed
+                        return .failed(mapId: mapId)
                     }
                 }
             }
@@ -616,6 +621,12 @@ final class RefreshCoordinator {
 
         let collected = outcomes.flatMap(\.arrivals)
         let anySucceeded = outcomes.contains(where: \.didSucceed)
+        let now = Date()
+        for outcome in outcomes {
+            if case .succeeded(let mapId, _) = outcome {
+                feedFetchStates.recordSuccess(.train(stationId: mapId), at: now)
+            }
+        }
         if anySucceeded {
             recordFeedSuccess(.trains)
         } else {
@@ -633,11 +644,11 @@ final class RefreshCoordinator {
     }
 
     private enum TrainFetchOutcome: Sendable {
-        case succeeded([Arrival])
-        case failed
+        case succeeded(mapId: Int, arrivals: [Arrival])
+        case failed(mapId: Int)
 
         var arrivals: [Arrival] {
-            if case .succeeded(let value) = self { return value }
+            if case .succeeded(_, let value) = self { return value }
             return []
         }
         var didSucceed: Bool {
@@ -723,14 +734,16 @@ final class RefreshCoordinator {
             returning: [BusFetchOutcome].self
         ) { group in
             for target in targets {
+                let route = target.route
+                let stopId = target.stopId
                 group.addTask {
                     do {
                         let result = try await client.fetchPredictions(
-                            route: target.route, stopId: target.stopId, top: 4
+                            route: route, stopId: stopId, top: 4
                         )
-                        return .succeeded(result)
+                        return .succeeded(route: route, stopId: stopId, predictions: result)
                     } catch {
-                        return .failed
+                        return .failed(route: route, stopId: stopId)
                     }
                 }
             }
@@ -743,6 +756,12 @@ final class RefreshCoordinator {
 
         let collected = outcomes.flatMap(\.predictions)
         let anySucceeded = outcomes.contains(where: \.didSucceed)
+        let now = Date()
+        for outcome in outcomes {
+            if case .succeeded(let route, let stopId, _) = outcome {
+                feedFetchStates.recordSuccess(.bus(route: route, stopId: stopId), at: now)
+            }
+        }
         if anySucceeded {
             recordFeedSuccess(.buses)
         } else {
@@ -759,11 +778,11 @@ final class RefreshCoordinator {
     }
 
     private enum BusFetchOutcome: Sendable {
-        case succeeded([BusPrediction])
-        case failed
+        case succeeded(route: String, stopId: Int, predictions: [BusPrediction])
+        case failed(route: String, stopId: Int)
 
         var predictions: [BusPrediction] {
-            if case .succeeded(let value) = self { return value }
+            if case .succeeded(_, _, let value) = self { return value }
             return []
         }
         var didSucceed: Bool {
@@ -849,12 +868,13 @@ final class RefreshCoordinator {
         }
 
         var collected: [MetraPrediction] = []
+        let metraNow = Date()
         for target in targets {
             let scheduled = MetraScheduleCatalog.upcomingDepartures(
                 stationId: target.stationId,
                 routeId: target.routeId,
                 directionId: target.directionId,
-                now: .now,
+                now: metraNow,
                 limit: 4
             )
             collected.append(contentsOf: scheduled.map { prediction in
@@ -864,6 +884,13 @@ final class RefreshCoordinator {
                 }
                 return prediction.applying(latest)
             })
+            // Schedule lookup is always available, so each target gets a
+            // definitive answer this tick — record per-target success even
+            // if the live trip-update merge contributed nothing.
+            feedFetchStates.recordSuccess(
+                .metra(routeId: target.routeId, stationId: target.stationId),
+                at: metraNow
+            )
         }
 
         var seen: Set<String> = []
@@ -893,6 +920,8 @@ final class RefreshCoordinator {
         guard shouldFetchNearby || prefs.pinnedIntercampusStopId != nil || !plannedStopIds.isEmpty else {
             await store.replaceIntercampusArrivals([])
             recordFeedSuccess(.intercampus)
+            // If the user explicitly pinned an intercampus stop we'd never
+            // hit this branch — there's nothing pinned to mark fresh.
             return
         }
 
@@ -945,6 +974,14 @@ final class RefreshCoordinator {
             )
             await store.replaceIntercampusArrivals(trafficAdjusted)
             recordFeedSuccess(.intercampus)
+            // TripShot answers every requested stop id in a single request,
+            // so a successful response means every stop in the batch is
+            // fresh — including the user's pinned one.
+            let intercampusNow = Date()
+            feedFetchStates.recordSuccesses(
+                targetStopIds.map { TargetFetchKey.intercampus(stopId: $0) },
+                at: intercampusNow
+            )
         } catch {
             // Leave the previous cache in place on transient TripShot failures.
             recordFeedFailure(.intercampus)
