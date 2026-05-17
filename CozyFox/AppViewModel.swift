@@ -105,7 +105,9 @@ final class AppViewModel {
     var busPredictionFilterLevel: BusPredictionFilterLevel = .default
     /// Mirror of `UserRoutePreferences.showBusReliabilityDebug` so
     /// dashboard surfaces re-render the debug overlay immediately on
-    /// toggle.
+    /// toggle. Single flag governs both bus and train overlays — the
+    /// storage key is bus-named for backwards compat with preferences
+    /// blobs from before train reliability landed.
     var showBusReliabilityDebug: Bool = false
     /// Mirror of `UserRoutePreferences.trainPredictionFilterLevel`.
     /// Same shape and lifecycle as `busPredictionFilterLevel`; the two
@@ -113,8 +115,6 @@ final class AppViewModel {
     /// different distributions and a rider may want to trust one feed
     /// more than the other.
     var trainPredictionFilterLevel: TrainPredictionFilterLevel = .default
-    /// Mirror of `UserRoutePreferences.showTrainReliabilityDebug`.
-    var showTrainReliabilityDebug: Bool = false
 
     /// Whether the 30 s ticker should actually run right now.
     var liveUpdatesActive: Bool { liveUpdatesEnabled && !isLowPowerMode }
@@ -286,7 +286,6 @@ final class AppViewModel {
         busPredictionFilterLevel = initialPrefs.busPredictionFilterLevel
         showBusReliabilityDebug = initialPrefs.showBusReliabilityDebug
         trainPredictionFilterLevel = initialPrefs.trainPredictionFilterLevel
-        showTrainReliabilityDebug = initialPrefs.showTrainReliabilityDebug
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
         migrateMobilityProfileIfNeeded()
@@ -361,14 +360,6 @@ final class AppViewModel {
         trainPredictionFilterLevel = level
         var prefs = preferences.loadRoutePreferences()
         prefs.trainPredictionFilterLevel = level
-        preferences.saveRoutePreferences(prefs)
-    }
-
-    /// Persist the user's train debug-overlay toggle.
-    func setShowTrainReliabilityDebug(_ enabled: Bool) {
-        showTrainReliabilityDebug = enabled
-        var prefs = preferences.loadRoutePreferences()
-        prefs.showTrainReliabilityDebug = enabled
         preferences.saveRoutePreferences(prefs)
     }
 

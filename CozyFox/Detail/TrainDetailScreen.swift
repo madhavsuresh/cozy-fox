@@ -60,7 +60,7 @@ struct TrainDetailScreen: View {
                                         reliabilities[$0.id]?.headwayComplication
                                     }
                                 )
-                                if model.showTrainReliabilityDebug {
+                                if model.showBusReliabilityDebug {
                                     TrainReliabilityDebugOverlay(
                                         arrivals: Array(items.prefix(4)),
                                         reliabilities: reliabilities

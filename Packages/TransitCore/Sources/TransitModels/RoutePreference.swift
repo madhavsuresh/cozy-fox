@@ -536,19 +536,16 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// existed — so older preferences blobs migrate cleanly.
     public var busPredictionFilterLevel: BusPredictionFilterLevel
     /// When true, the dashboard renders a tiny debug line under each
-    /// bus prediction showing the reliability state, score, and top
-    /// few reason codes. Off by default. Power-user/debug surface;
-    /// no one but the developer is expected to enable it.
+    /// bus prediction *and* each train arrival showing the reliability
+    /// state, score, and top few reason codes. Single toggle for both
+    /// modes — the storage key is bus-named for backwards compat with
+    /// preferences blobs from before train reliability landed.
     public var showBusReliabilityDebug: Bool
     /// Aggressiveness of the train-arrival reliability filter. See
     /// `TrainPredictionFilterLevel` and `TrainPredictionFilter`.
     /// Defaults to `.inclusive` — the behavior shipped before this
     /// setting existed.
     public var trainPredictionFilterLevel: TrainPredictionFilterLevel
-    /// When true, the dashboard renders a tiny debug line under each
-    /// train arrival showing the reliability state, score, and top
-    /// few reason codes. Off by default.
-    public var showTrainReliabilityDebug: Bool
 
     public init(
         trains: [TrainPreference] = [],
@@ -586,8 +583,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         portfolios: [RoutePortfolio] = [],
         busPredictionFilterLevel: BusPredictionFilterLevel = .default,
         showBusReliabilityDebug: Bool = false,
-        trainPredictionFilterLevel: TrainPredictionFilterLevel = .default,
-        showTrainReliabilityDebug: Bool = false
+        trainPredictionFilterLevel: TrainPredictionFilterLevel = .default
     ) {
         self.trains = trains
         self.buses = buses
@@ -625,7 +621,6 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.busPredictionFilterLevel = busPredictionFilterLevel
         self.showBusReliabilityDebug = showBusReliabilityDebug
         self.trainPredictionFilterLevel = trainPredictionFilterLevel
-        self.showTrainReliabilityDebug = showTrainReliabilityDebug
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
@@ -692,8 +687,6 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.trainPredictionFilterLevel =
             (try? c.decode(TrainPredictionFilterLevel.self, forKey: .trainPredictionFilterLevel))
             ?? .default
-        self.showTrainReliabilityDebug =
-            (try? c.decode(Bool.self, forKey: .showTrainReliabilityDebug)) ?? false
     }
 
     public static let empty = UserRoutePreferences()

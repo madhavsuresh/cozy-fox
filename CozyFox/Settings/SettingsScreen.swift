@@ -195,10 +195,6 @@ struct SettingsScreen: View {
                 Text(model.busPredictionFilterLevel.summary)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Toggle("Show reliability scores", isOn: Binding(
-                    get: { model.showBusReliabilityDebug },
-                    set: { model.setShowBusReliabilityDebug($0) }
-                ))
             } header: {
                 Text("Bus prediction reliability")
             } footer: {
@@ -218,14 +214,20 @@ struct SettingsScreen: View {
                 Text(model.trainPredictionFilterLevel.summary)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Toggle("Show reliability scores", isOn: Binding(
-                    get: { model.showTrainReliabilityDebug },
-                    set: { model.setShowTrainReliabilityDebug($0) }
-                ))
             } header: {
                 Text("Train arrival reliability")
             } footer: {
                 Text("Same scoring shape as buses, against the CTA train positions feed (isApp, isSch, isFlt, ghost run, due-but-far, etc.) and line-level service alerts. Dots use the same vocabulary: green ✓ confirmed, muted-green ✓ tracked, gold ? soft uncertainty, red ! likely-ghost, red X positively wrong.")
+                    .font(.footnote)
+            }
+
+            Section {
+                Toggle("Show reliability scores", isOn: Binding(
+                    get: { model.showBusReliabilityDebug },
+                    set: { model.setShowBusReliabilityDebug($0) }
+                ))
+            } footer: {
+                Text("Power-user debug overlay. Renders a tiny monospaced line under each bus and train block with the reliability state, score, and top reason codes.")
                     .font(.footnote)
             }
 
