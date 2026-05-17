@@ -211,6 +211,20 @@ extension BusPrediction {
             let generated = CTABusFormatter.parse(raw.tmstmp),
             let arrival = CTABusFormatter.parse(raw.prdtm)
         else { return nil }
+        // CTA's `prdctdn` is mostly a number-as-string ("3", "11"), but
+        // can also be "DUE" (≤1 min) or "DLY" (delayed / uncertain).
+        // `Int(raw.prdctdn)` succeeds only for numeric values, so a
+        // failed parse is meaningful — distinguish "DLY" from "DUE" by
+        // looking at the literal.
+        let countdown = raw.prdctdn.trimmingCharacters(in: .whitespacesAndNewlines)
+        let countdownUpper = countdown.uppercased()
+        let parsedMinutes = Int(countdown)
+        let isApproachingValue: Bool
+        if let m = parsedMinutes {
+            isApproachingValue = m <= 1
+        } else {
+            isApproachingValue = (countdownUpper == "DUE")
+        }
         self.init(
             id: "\(raw.vid)-\(raw.stpid)-\(raw.prdtm)",
             route: raw.rt,
@@ -223,7 +237,9 @@ extension BusPrediction {
             generatedAt: generated,
             arrivalAt: arrival,
             isDelayed: raw.dly ?? false,
-            isApproaching: (Int(raw.prdctdn) ?? 99) <= 1
+            isApproaching: isApproachingValue,
+            dynamicActionCode: raw.dyn,
+            predictionCountdownIsUncertain: countdownUpper == "DLY"
         )
     }
 }
@@ -491,6 +507,40 @@ struct BusPredictionsEnvelope: Decodable {
             let prdtm: String
             let dly: Bool?
             let prdctdn: String
+            /// CTA "dynamic action" code. Documented in the BusTime
+            /// Developer Guide as an integer; in real responses it can
+            /// arrive as a JSON number or a JSON string depending on
+            /// version, like several other Bus Tracker fields. We accept
+            /// both. `nil` and `0` mean a standard real-time prediction.
+            let dyn: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case tmstmp, typ, stpnm, stpid, vid, dstp, rt, rtdir
+                case des, prdtm, dly, prdctdn, dyn
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                tmstmp = try c.decode(String.self, forKey: .tmstmp)
+                typ = try c.decode(String.self, forKey: .typ)
+                stpnm = try c.decode(String.self, forKey: .stpnm)
+                stpid = try c.decode(String.self, forKey: .stpid)
+                vid = try c.decode(String.self, forKey: .vid)
+                dstp = try c.decodeIfPresent(Int.self, forKey: .dstp)
+                rt = try c.decode(String.self, forKey: .rt)
+                rtdir = try c.decode(String.self, forKey: .rtdir)
+                des = try c.decode(String.self, forKey: .des)
+                prdtm = try c.decode(String.self, forKey: .prdtm)
+                dly = try c.decodeIfPresent(Bool.self, forKey: .dly)
+                prdctdn = try c.decode(String.self, forKey: .prdctdn)
+                if let i = try? c.decodeIfPresent(Int.self, forKey: .dyn) {
+                    dyn = i
+                } else if let s = try? c.decodeIfPresent(String.self, forKey: .dyn) {
+                    dyn = Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
+                } else {
+                    dyn = nil
+                }
+            }
         }
 
         struct Err: Decodable {

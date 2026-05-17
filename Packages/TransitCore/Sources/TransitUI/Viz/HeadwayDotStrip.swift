@@ -23,6 +23,15 @@ public struct HeadwayDotStrip: View {
         case unconfirmed
         case likelyGhost
         case stale
+        /// Stronger than `.likelyGhost`: we have evidence this row is
+        /// positively wrong (CTA's `dyn` flagged it, the stop is on a
+        /// removed-by-detour list, the vehicle's already crossed the
+        /// stop, etc.). Renders as a red X — distinct glyph from
+        /// `likelyGhost`'s `!`. Surfaces only when the user has set
+        /// the bus-prediction filter level to "Show everything";
+        /// `inclusive` (default) and stricter levels filter these out
+        /// before the strip sees them.
+        case cancelled
     }
 
     public enum Style: Sendable {
@@ -296,6 +305,7 @@ public struct HeadwayDotStrip: View {
         case .unconfirmed: "questionmark"
         case .likelyGhost: "exclamationmark"
         case .stale: "clock"
+        case .cancelled: "xmark"
         }
     }
 
@@ -309,6 +319,11 @@ public struct HeadwayDotStrip: View {
             ChicagoPalette.Gray.medium
         case (.onDark, .stale):
             ChicagoPalette.OnDarkSafe.tertiary
+        case (_, .cancelled):
+            // Same hue as likelyGhost so the family reads as
+            // "warning" at a glance; the `X` glyph (vs `!`) escalates
+            // to "positively wrong."
+            ChicagoPalette.starRed
         }
     }
 
@@ -316,7 +331,7 @@ public struct HeadwayDotStrip: View {
         switch complication {
         case .unconfirmed:
             ChicagoPalette.Gray.darkest
-        case .likelyGhost, .stale:
+        case .likelyGhost, .stale, .cancelled:
             .white
         }
     }

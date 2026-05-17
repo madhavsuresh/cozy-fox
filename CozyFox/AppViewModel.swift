@@ -98,14 +98,24 @@ final class AppViewModel {
     /// `NSProcessInfoPowerStateDidChange` so toggling Low Power Mode in
     /// Settings.app immediately pauses/resumes the ticker.
     var isLowPowerMode: Bool = false
+    /// Mirror of `UserRoutePreferences.busPredictionFilterLevel` so
+    /// SwiftUI observers re-render the dashboard immediately when the
+    /// setting changes. Hydrated at init and rewritten by
+    /// `setBusPredictionFilterLevel(_:)`.
+    var busPredictionFilterLevel: BusPredictionFilterLevel = .default
+    /// Mirror of `UserRoutePreferences.showBusReliabilityDebug` so
+    /// dashboard surfaces re-render the debug overlay immediately on
+    /// toggle.
+    var showBusReliabilityDebug: Bool = false
 
     /// Whether the 30 s ticker should actually run right now.
     var liveUpdatesActive: Bool { liveUpdatesEnabled && !isLowPowerMode }
 
-    /// Bus predictions filtered through `BusReliabilityScorer`. Ghost
-    /// predictions (no matching vehicle for an imminent ETA, DUE-but-far,
-    /// already-passed, etc.) are dropped before any dashboard surface sees
-    /// them. See `docs/BUS_RELIABILITY.md` for the scoring contract.
+    /// Bus predictions filtered through `BusReliabilityScorer` and the
+    /// user's chosen `BusPredictionFilterLevel`. By default
+    /// (`inclusive`) ghost predictions are dropped before any dashboard
+    /// surface sees them; the user can opt into stricter levels or
+    /// "show everything" via Settings. See `docs/BUS_RELIABILITY.md`.
     ///
     /// Computed each access from `snapshot.busPredictions` and
     /// `vehiclePositions`; `@Observable` tracks the inputs.
@@ -115,6 +125,7 @@ final class AppViewModel {
         let patterns = snapshot.busPatterns
         let vehicles = vehiclePositions
         let history = busVehicleHistory
+        let level = busPredictionFilterLevel
         let now = Date()
 
         // For medium/high-confidence rows: phase 3b geometry blend first
@@ -152,9 +163,11 @@ final class AppViewModel {
                 return pred
             }
         }
-        return processed.filter {
-            reliabilities[$0.id]?.isDisplayable ?? true
-        }
+        return BusPredictionFilter.filter(
+            processed,
+            reliabilities: reliabilities,
+            level: level
+        )
     }
 
     /// Per-prediction reliability assessments keyed by `BusPrediction.id`.
@@ -231,7 +244,10 @@ final class AppViewModel {
         let arrivalBiasHydration = Task { await arrivalBiasStore.hydrateFromDiskIfNeeded() }
         let bikeRouteHydration = Task { await bikeRouteStore.hydrateFromDiskIfNeeded() }
         let suppressionHydration = Task { await suggestionSuppression.hydrateFromDiskIfNeeded() }
-        liveUpdatesEnabled = preferences.loadRoutePreferences().liveUpdatesEnabled
+        let initialPrefs = preferences.loadRoutePreferences()
+        liveUpdatesEnabled = initialPrefs.liveUpdatesEnabled
+        busPredictionFilterLevel = initialPrefs.busPredictionFilterLevel
+        showBusReliabilityDebug = initialPrefs.showBusReliabilityDebug
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         registerPowerStateObserver()
         migrateMobilityProfileIfNeeded()
@@ -280,6 +296,24 @@ final class AppViewModel {
         prefs.liveUpdatesEnabled = enabled
         preferences.saveRoutePreferences(prefs)
         reconcileRefreshTicker()
+    }
+
+    /// Persist the user's bus-prediction filter level. Updates the
+    /// `@Observable` mirror so any view reading
+    /// `displayableBusPredictions` re-renders immediately.
+    func setBusPredictionFilterLevel(_ level: BusPredictionFilterLevel) {
+        busPredictionFilterLevel = level
+        var prefs = preferences.loadRoutePreferences()
+        prefs.busPredictionFilterLevel = level
+        preferences.saveRoutePreferences(prefs)
+    }
+
+    /// Persist the user's debug-overlay toggle.
+    func setShowBusReliabilityDebug(_ enabled: Bool) {
+        showBusReliabilityDebug = enabled
+        var prefs = preferences.loadRoutePreferences()
+        prefs.showBusReliabilityDebug = enabled
+        preferences.saveRoutePreferences(prefs)
     }
 
     private func reconcileRefreshTicker() {

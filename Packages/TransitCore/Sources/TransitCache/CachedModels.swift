@@ -73,6 +73,13 @@ public final class CachedBusPrediction {
     public var arrivalAt: Date
     public var isDelayed: Bool
     public var isApproaching: Bool
+    /// CTA `dyn` (dynamic action) code. Optional/default-nil so rows
+    /// cached before this field existed migrate cleanly — same pattern
+    /// as `patternId` on `CachedVehiclePosition`.
+    public var dynamicActionCode: Int?
+    /// CTA `prdctdn=="DLY"` sentinel. Defaults to false for back-compat
+    /// with older cached rows.
+    public var predictionCountdownIsUncertain: Bool = false
     public var fetchedAt: Date
 
     public init(prediction: BusPrediction, fetchedAt: Date) {
@@ -88,6 +95,8 @@ public final class CachedBusPrediction {
         self.arrivalAt = prediction.arrivalAt
         self.isDelayed = prediction.isDelayed
         self.isApproaching = prediction.isApproaching
+        self.dynamicActionCode = prediction.dynamicActionCode
+        self.predictionCountdownIsUncertain = prediction.predictionCountdownIsUncertain
         self.fetchedAt = fetchedAt
     }
 
@@ -104,7 +113,9 @@ public final class CachedBusPrediction {
             generatedAt: generatedAt,
             arrivalAt: arrivalAt,
             isDelayed: isDelayed,
-            isApproaching: isApproaching
+            isApproaching: isApproaching,
+            dynamicActionCode: dynamicActionCode,
+            predictionCountdownIsUncertain: predictionCountdownIsUncertain
         )
     }
 }

@@ -10,12 +10,17 @@ struct BusDetailScreen: View {
     @Environment(AppViewModel.self) private var model
 
     var predictions: [BusPrediction] {
-        model.snapshot.busPredictions
+        let raw = model.snapshot.busPredictions
             .filter {
                 ($0.route == route || route.isEmpty)
                 && ($0.stopId == stopId || stopId == 0)
             }
             .sorted { $0.arrivalAt < $1.arrivalAt }
+        return BusPredictionFilter.filter(
+            raw,
+            reliabilities: model.busReliabilities,
+            level: model.busPredictionFilterLevel
+        )
     }
 
     var body: some View {
@@ -41,10 +46,20 @@ struct BusDetailScreen: View {
                                     tone: first.isDelayed ? .alert : .primary,
                                     accessibilityLabel: "\(minutes) minutes to next bus"
                                 )
+                                let detailReliabilities = model.busReliabilities
                                 HeadwayDotStrip(
                                     arrivals: predictions.prefix(8).map(\.arrivalAt),
-                                    accent: ChicagoPalette.Mode.bus
+                                    accent: ChicagoPalette.Mode.bus,
+                                    complications: predictions.prefix(8).map {
+                                        detailReliabilities[$0.id]?.headwayComplication
+                                    }
                                 )
+                                if model.showBusReliabilityDebug {
+                                    BusReliabilityDebugOverlay(
+                                        predictions: Array(predictions.prefix(6)),
+                                        reliabilities: detailReliabilities
+                                    )
+                                }
                                 Rectangle()
                                     .fill(ChicagoPalette.Gray.light.opacity(0.28))
                                     .frame(height: ChicagoSpacing.Stroke.hairline)

@@ -13,7 +13,8 @@
         "des": "Howard",
         "prdtm": "20260513 08:26",
         "dly": false,
-        "prdctdn": "3"
+        "prdctdn": "3",
+        "dyn": 0
       },
       {
         "tmstmp": "20260513 08:23",
@@ -28,6 +29,21 @@
         "prdtm": "20260513 08:34",
         "dly": false,
         "prdctdn": "11"
+      },
+      {
+        "tmstmp": "20260513 08:23",
+        "typ": "A",
+        "stpnm": "Clark & Division",
+        "stpid": "1234",
+        "vid": "1604",
+        "dstp": 3000,
+        "rt": "22",
+        "rtdir": "Northbound",
+        "des": "Howard",
+        "prdtm": "20260513 08:42",
+        "dly": true,
+        "prdctdn": "DLY",
+        "dyn": "18"
       }
     ]
   }

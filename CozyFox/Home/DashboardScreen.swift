@@ -1156,9 +1156,19 @@ struct DashboardScreen: View {
                 let tripBusUrgencies = bus.stopId.map {
                     departureUrgencies(forBusStopId: $0, predictions: predictions.prefix(8))
                 } ?? []
+                let tripBusReliabilities = model.busReliabilities
                 HeadwayDotStrip(arrivals: predictions.prefix(8).map(\.arrivalAt),
                                 accent: ChicagoPalette.Mode.bus,
+                                complications: predictions.prefix(8).map {
+                                    tripBusReliabilities[$0.id]?.headwayComplication
+                                },
                                 urgencies: tripBusUrgencies)
+                if model.showBusReliabilityDebug {
+                    BusReliabilityDebugOverlay(
+                        predictions: Array(predictions.prefix(4)),
+                        reliabilities: tripBusReliabilities
+                    )
+                }
             } else {
                 Text(isFresh ? "No upcoming buses." : "Fetching predictions…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -3907,14 +3917,24 @@ struct DashboardScreen: View {
                         .lineLimit(1)
                         .accessibilityLabel("Another bus in \(bunching.minutes) minutes")
                 }
+                let nearbyBusReliabilities = model.busReliabilities
                 HeadwayDotStrip(
                     arrivals: predictions.prefix(8).map(\.arrivalAt),
                     accent: ChicagoPalette.Mode.bus,
+                    complications: predictions.prefix(8).map {
+                        nearbyBusReliabilities[$0.id]?.headwayComplication
+                    },
                     urgencies: departureUrgencies(
                         forBusStopId: stop.id,
                         predictions: predictions.prefix(8)
                     )
                 )
+                if model.showBusReliabilityDebug {
+                    BusReliabilityDebugOverlay(
+                        predictions: Array(predictions.prefix(4)),
+                        reliabilities: nearbyBusReliabilities
+                    )
+                }
             }
             busProgressStrip(toStop: stop, route: route)
         }

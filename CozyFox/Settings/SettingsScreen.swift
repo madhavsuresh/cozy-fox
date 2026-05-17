@@ -183,6 +183,29 @@ struct SettingsScreen: View {
                 }
             }
 
+            Section {
+                Picker("Show predictions", selection: Binding(
+                    get: { model.busPredictionFilterLevel },
+                    set: { model.setBusPredictionFilterLevel($0) }
+                )) {
+                    ForEach(BusPredictionFilterLevel.allCases, id: \.self) { level in
+                        Text(level.displayName).tag(level)
+                    }
+                }
+                Text(model.busPredictionFilterLevel.summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("Show reliability scores", isOn: Binding(
+                    get: { model.showBusReliabilityDebug },
+                    set: { model.setShowBusReliabilityDebug($0) }
+                ))
+            } header: {
+                Text("Bus prediction reliability")
+            } footer: {
+                Text("Cozy Fox scores every CTA bus prediction against the live vehicle feed (DUE-but-far, schedule-only, expressed, etc.) and styles each dot in the headway strip accordingly: gold ? for soft uncertainty, red ! for likely-ghost, red X for positively wrong. Choose how much of that signal to surface here.")
+                    .font(.footnote)
+            }
+
             Section("Privacy") {
                 Text("Cozy Fox has no backend. Trains, buses, and Divvy data come from public Chicago APIs directly. Your API keys live in the iOS Keychain. Location is only used for region monitoring around home/work plus one-shot foreground reads.")
                     .font(.footnote)

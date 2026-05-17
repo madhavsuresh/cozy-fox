@@ -124,7 +124,9 @@ public enum BusGeometryBlender {
             generatedAt: prediction.generatedAt,
             arrivalAt: now.addingTimeInterval(max(0, blendedEta)),
             isDelayed: prediction.isDelayed,
-            isApproaching: prediction.isApproaching
+            isApproaching: prediction.isApproaching,
+            dynamicActionCode: prediction.dynamicActionCode,
+            predictionCountdownIsUncertain: prediction.predictionCountdownIsUncertain
         )
 
         return Result(

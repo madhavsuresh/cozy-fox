@@ -38,6 +38,16 @@ public struct BusArrivalReliability: Sendable, Hashable, Identifiable {
         case pdistCrossedStop = "PDIST_CROSSED_STOP"
         case gpsOnExpectedPattern = "GPS_ON_EXPECTED_PATTERN"
         case gpsOffExpectedPattern = "GPS_OFF_EXPECTED_PATTERN"
+        /// CTA marked this prediction with a non-zero `dyn` (dynamic
+        /// action) code — cancelled, expressed, layover/garage pullout,
+        /// invalidated trip, etc. We deliberately don't fork on specific
+        /// codes yet; any non-zero value drops confidence. See
+        /// `docs/BUS_RELIABILITY.md` and `BusPrediction.dynamicActionCode`.
+        case dynamicActionNonStandard = "DYN_NON_STANDARD"
+        /// CTA's `prdctdn` came back as the literal `"DLY"` — their
+        /// "delayed, no confident ETA" sentinel. Soft downgrade; the
+        /// bus is still expected to arrive, just not when claimed.
+        case predictionCountdownUncertain = "PREDICTION_COUNTDOWN_UNCERTAIN"
     }
 
     public let id: String
@@ -62,10 +72,15 @@ public struct BusArrivalReliability: Sendable, Hashable, Identifiable {
     /// True when the prediction should appear on the rider's screen at all.
     public var isDisplayable: Bool { state != .doNotDisplay }
 
-    /// True when the prediction should appear but in a muted style — caller
-    /// decides what "muted" means visually.
+    /// True when the prediction is visible but its headline number
+    /// shouldn't be trusted — caller decides what "muted" means
+    /// visually. Includes `.doNotDisplay` so that when the user opts
+    /// into showing every prediction (filter level "Show everything")
+    /// those rows still suppress the BigNumber; the dot strip's
+    /// `.cancelled` complication is the only confidence-bearing
+    /// signal for that row.
     public var needsMutedStyling: Bool {
-        state == .lowConfidence || state == .unreliable
+        state == .lowConfidence || state == .unreliable || state == .doNotDisplay
     }
 }
 
@@ -291,6 +306,32 @@ public struct BusReliabilityScorer: Sendable {
         if prediction.isDelayed {
             reasons.append(.delayedFlagged)
             score -= 0.04
+        }
+
+        // CTA flagged this prediction with a non-zero `dyn` (dynamic
+        // action) code. The BusTime Developer Guide enumerates the codes
+        // — cancelled, expressed, invalidated, layover/garage-pullout,
+        // etc. — but a first pass treats them uniformly: any non-zero
+        // value means "not a standard real-time prediction" and pulls
+        // confidence down enough to put a no-vehicle prediction firmly
+        // into `unreliable` while still allowing a tracked-and-nearby
+        // vehicle to lift the row back into `lowConfidence`. The dot
+        // strip differentiates visually; nothing is hidden by this
+        // signal alone. Splitting per-code (e.g. dyn=18 layover vs
+        // dyn=12 expressed) is a future refinement once we see live
+        // data — see `docs/BUS_RELIABILITY.md`.
+        if prediction.hasNonStandardDynamicAction {
+            reasons.append(.dynamicActionNonStandard)
+            score -= 0.25
+        }
+
+        // CTA's `prdctdn=="DLY"` sentinel: the trip is delayed and CTA
+        // can't give a confident countdown. Softer than the `dyn`
+        // downgrade — the bus is still expected, just not when the
+        // `prdtm` field claims.
+        if prediction.predictionCountdownIsUncertain {
+            reasons.append(.predictionCountdownUncertain)
+            score -= 0.15
         }
 
         if let vehicle {

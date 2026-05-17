@@ -530,6 +530,16 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// evaluator runs only when this is non-empty for the current
     /// commute direction.
     public var portfolios: [RoutePortfolio]
+    /// Aggressiveness of the bus-prediction reliability filter. See
+    /// `BusPredictionFilterLevel` and `BusPredictionFilter`. Defaults
+    /// to `.inclusive` — the behavior shipped before this setting
+    /// existed — so older preferences blobs migrate cleanly.
+    public var busPredictionFilterLevel: BusPredictionFilterLevel
+    /// When true, the dashboard renders a tiny debug line under each
+    /// bus prediction showing the reliability state, score, and top
+    /// few reason codes. Off by default. Power-user/debug surface;
+    /// no one but the developer is expected to enable it.
+    public var showBusReliabilityDebug: Bool
 
     public init(
         trains: [TrainPreference] = [],
@@ -564,7 +574,9 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         lastAutoPinAt: Date? = nil,
         autoPinnedDirection: CommuteDirection? = nil,
         plannedTripPin: PlannedTripPin? = nil,
-        portfolios: [RoutePortfolio] = []
+        portfolios: [RoutePortfolio] = [],
+        busPredictionFilterLevel: BusPredictionFilterLevel = .default,
+        showBusReliabilityDebug: Bool = false
     ) {
         self.trains = trains
         self.buses = buses
@@ -599,6 +611,8 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.autoPinnedDirection = autoPinnedDirection
         self.plannedTripPin = plannedTripPin
         self.portfolios = portfolios
+        self.busPredictionFilterLevel = busPredictionFilterLevel
+        self.showBusReliabilityDebug = showBusReliabilityDebug
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
@@ -657,6 +671,11 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.autoPinnedDirection = try? c.decode(CommuteDirection.self, forKey: .autoPinnedDirection)
         self.plannedTripPin = try? c.decode(PlannedTripPin.self, forKey: .plannedTripPin)
         self.portfolios = (try? c.decode([RoutePortfolio].self, forKey: .portfolios)) ?? []
+        self.busPredictionFilterLevel =
+            (try? c.decode(BusPredictionFilterLevel.self, forKey: .busPredictionFilterLevel))
+            ?? .default
+        self.showBusReliabilityDebug =
+            (try? c.decode(Bool.self, forKey: .showBusReliabilityDebug)) ?? false
     }
 
     public static let empty = UserRoutePreferences()

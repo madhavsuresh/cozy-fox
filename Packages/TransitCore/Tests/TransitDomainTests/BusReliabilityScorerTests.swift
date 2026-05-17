@@ -14,7 +14,9 @@ struct BusReliabilityScorerTests {
         vehicleId: String = "1234",
         generatedAgo: TimeInterval = 15,
         etaSeconds: TimeInterval,
-        delayed: Bool = false
+        delayed: Bool = false,
+        dynamicActionCode: Int? = nil,
+        predictionCountdownIsUncertain: Bool = false
     ) -> BusPrediction {
         BusPrediction(
             id: id,
@@ -28,7 +30,9 @@ struct BusReliabilityScorerTests {
             generatedAt: Self.now.addingTimeInterval(-generatedAgo),
             arrivalAt: Self.now.addingTimeInterval(etaSeconds),
             isDelayed: delayed,
-            isApproaching: etaSeconds <= 60
+            isApproaching: etaSeconds <= 60,
+            dynamicActionCode: dynamicActionCode,
+            predictionCountdownIsUncertain: predictionCountdownIsUncertain
         )
     }
 
@@ -622,5 +626,113 @@ struct BusReliabilityScorerTests {
 
         #expect(result.reasonCodes.contains(.patternMismatch))
         #expect(!result.reasonCodes.contains(.patternMatch))
+    }
+
+    // MARK: - dyn / DLY signals
+
+    @Test("dyn=0 and absent dyn both read as standard — no reason code, no penalty")
+    func standardDynYieldsNoReasonCode() {
+        let withZero = prediction(etaSeconds: 5 * 60, dynamicActionCode: 0)
+        let withNil = prediction(etaSeconds: 5 * 60, dynamicActionCode: nil)
+        let veh = vehicle(nearby: true, observedAgo: 15)
+        let scorer = BusReliabilityScorer()
+
+        let resultZero = scorer.assessment(
+            for: withZero, vehicle: veh,
+            stopLocation: Self.grandAndMcClurg, now: Self.now
+        )
+        let resultNil = scorer.assessment(
+            for: withNil, vehicle: veh,
+            stopLocation: Self.grandAndMcClurg, now: Self.now
+        )
+
+        #expect(!resultZero.reasonCodes.contains(.dynamicActionNonStandard))
+        #expect(!resultNil.reasonCodes.contains(.dynamicActionNonStandard))
+        // Either value should leave the scorer in its happy state for
+        // an otherwise-strong row.
+        #expect(resultZero.state == .highConfidence)
+        #expect(resultNil.state == .highConfidence)
+    }
+
+    @Test("Non-zero dyn with tracked vehicle drops a strong row into lowConfidence")
+    func dynNonZeroWithTrackedVehicleDowngrades() {
+        // dyn=18 is the BusTime "layover/garage pullout" code. With a
+        // fresh nearby tracked vehicle we'd normally land in
+        // highConfidence; the dyn penalty should pull this row down to
+        // lowConfidence (gold ring in the dot strip) without abstaining.
+        let pred = prediction(etaSeconds: 5 * 60, dynamicActionCode: 18)
+        let veh = vehicle(nearby: true, observedAgo: 15)
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            now: Self.now
+        )
+
+        #expect(result.reasonCodes.contains(.dynamicActionNonStandard))
+        #expect(result.isDisplayable, "non-standard dyn alone never abstains")
+        #expect(result.state == .lowConfidence)
+    }
+
+    @Test("Non-zero dyn with no tracked vehicle reads as schedule-only ghost")
+    func dynNonZeroWithoutVehicleIsUnreliable() {
+        // This is the shape the user wants caught: CTA emits a
+        // schedule-fallback prediction with a non-zero dyn and no
+        // matching vehicle in getvehicles. We want it visible but
+        // visually flagged so the rider can tell it's not real-time.
+        let pred = prediction(etaSeconds: 8 * 60, dynamicActionCode: 1)
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: nil,
+            stopLocation: Self.grandAndMcClurg,
+            now: Self.now
+        )
+
+        #expect(result.reasonCodes.contains(.dynamicActionNonStandard))
+        #expect(result.reasonCodes.contains(.vehicleNotFound))
+        #expect(result.isDisplayable, "still visible — just visually flagged")
+        #expect(result.state == .unreliable)
+    }
+
+    @Test("prdctdn=DLY downgrades but doesn't abstain")
+    func dlySentinelDowngrades() {
+        let pred = prediction(
+            etaSeconds: 5 * 60,
+            predictionCountdownIsUncertain: true
+        )
+        let veh = vehicle(nearby: true, observedAgo: 15)
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            now: Self.now
+        )
+
+        #expect(result.reasonCodes.contains(.predictionCountdownUncertain))
+        #expect(result.isDisplayable)
+        // DLY is a softer downgrade than dyn-non-standard; a strong
+        // base row stays in mediumConfidence rather than dropping to
+        // lowConfidence.
+        #expect(result.state == .mediumConfidence)
+    }
+
+    @Test("Reliability state maps to dot-strip complications as expected")
+    func reliabilityToComplicationMapping() {
+        // Sanity check that the mapping used by BusBlockView matches
+        // the contract documented on the extension. (The extension
+        // itself lives in TransitUI; this test only covers the
+        // visible API.)
+        func mark(_ state: BusArrivalReliability.State) -> BusArrivalReliability {
+            BusArrivalReliability(id: "x", state: state, score: 0, reasonCodes: [])
+        }
+        #expect(mark(.highConfidence).needsMutedStyling == false)
+        #expect(mark(.mediumConfidence).needsMutedStyling == false)
+        #expect(mark(.lowConfidence).needsMutedStyling == true)
+        #expect(mark(.unreliable).needsMutedStyling == true)
+        #expect(mark(.doNotDisplay).needsMutedStyling == true)
+        #expect(mark(.doNotDisplay).isDisplayable == false)
     }
 }
