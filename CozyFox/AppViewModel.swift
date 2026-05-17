@@ -31,6 +31,10 @@ final class AppViewModel {
     /// by the dashboard's progress strip. Refreshed each cycle from
     /// `RefreshCoordinator.latestPositions`.
     var vehiclePositions: [VehiclePosition] = []
+    /// Per-bus rolling history (last ~8 obs per vehicle) mirrored from
+    /// `RefreshCoordinator.latestBusVehicleHistory`. Drives the geometry
+    /// blender's speed estimate in phase 3b.
+    var busVehicleHistory: [String: [BusVehicleHistorySample]] = [:]
     /// In-memory mirror of `RefreshCoordinator.latestBikeInventory`, observed
     /// by the dashboard's trip-pin Divvy chips. Held here (not in
     /// `TransitSnapshot`) so the persistent cache never sees the full station
@@ -74,18 +78,40 @@ final class AppViewModel {
     /// `vehiclePositions`; `@Observable` tracks the inputs.
     var displayableBusPredictions: [BusPrediction] {
         let reliabilities = busReliabilities
-        // Phase 4b: shift the displayed minutes by the per-bin q50 residual
-        // *before* filtering. Only medium/high-confidence rows get
-        // calibration — low-confidence/unreliable already mute the
-        // BigNumber, and shifting them would just paper over the
-        // uncertainty.
         let bins = snapshot.busResidualBins
-        let calibrated: [BusPrediction] = snapshot.busPredictions.map { pred in
+        let patterns = snapshot.busPatterns
+        let vehicles = vehiclePositions
+        let history = busVehicleHistory
+        let now = Date()
+
+        // For medium/high-confidence rows: phase 3b geometry blend first
+        // (uses pdist + recent speed to produce an independent ETA, then
+        // blends with CTA), then phase 4b residual calibration on top of
+        // that. Low-confidence/unreliable rows pass through uncalibrated
+        // — they already mute the BigNumber, and shifting them would just
+        // paper over the uncertainty.
+        let processed: [BusPrediction] = snapshot.busPredictions.map { pred in
             guard let reliability = reliabilities[pred.id] else { return pred }
             switch reliability.state {
             case .highConfidence, .mediumConfidence:
+                let matchedVehicle = vehicles.first {
+                    $0.mode == .bus && $0.id == pred.vehicleId
+                }
+                let matchedPattern = BusPatternGeometry.pattern(
+                    for: matchedVehicle?.patternId,
+                    route: pred.route,
+                    directionName: pred.directionName,
+                    in: patterns
+                )
+                let blended = BusGeometryBlender.blend(
+                    prediction: pred,
+                    matchedPattern: matchedPattern,
+                    latestVehicle: matchedVehicle,
+                    history: history[pred.vehicleId] ?? [],
+                    now: now
+                ).prediction
                 return BusPredictionCalibrator.calibrate(
-                    pred,
+                    blended,
                     using: bins,
                     calendar: .currentChicago
                 ).prediction
@@ -93,7 +119,7 @@ final class AppViewModel {
                 return pred
             }
         }
-        return calibrated.filter {
+        return processed.filter {
             reliabilities[$0.id]?.isDisplayable ?? true
         }
     }
@@ -296,6 +322,7 @@ final class AppViewModel {
         vehiclePositions = refreshCoordinator.latestPositions.isEmpty
             ? snapshot.vehiclePositions
             : refreshCoordinator.latestPositions
+        busVehicleHistory = refreshCoordinator.latestBusVehicleHistory
         bikeInventory = refreshCoordinator.latestBikeInventory
         portfolioEvaluations = refreshCoordinator.latestPortfolioEvaluations
         portfolioRecommendations = refreshCoordinator.latestPortfolioRecommendations

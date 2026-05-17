@@ -91,6 +91,14 @@ final class RefreshCoordinator {
     /// my train" strip. Empty when no route is pinned.
     private(set) var latestPositions: [VehiclePosition] = []
 
+    /// Per-bus rolling history of along-pattern observations. Phase 3b's
+    /// geometry blender reads this to compute a robust median speed. Kept
+    /// in memory only — ~8 entries per active bus is enough, and we
+    /// don't need it to persist across launches.
+    private(set) var latestBusVehicleHistory: [String: [BusVehicleHistorySample]] = [:]
+    private static let busHistoryEntriesPerVehicle: Int = 8
+    private static let busHistoryTTL: TimeInterval = 12 * 60
+
     /// Latest Divvy GBFS station + free-bike snapshot, held in memory only.
     /// The dashboard's trip-pin Divvy chips read directly from this — the
     /// full station list never goes through SwiftData. Empty until the
@@ -863,6 +871,7 @@ final class RefreshCoordinator {
             }
         }
         latestPositions = collected
+        appendBusVehicleHistory(from: collected)
         // Phase 2: feed the snapshot to the grader so it can resolve any
         // pending grades against this snapshot's `nextStopId` transitions
         // before the store overwrite. Either order is correct (the grader
@@ -870,6 +879,35 @@ final class RefreshCoordinator {
         // keeps the pre/post-store-write boundary readable.
         await arrivalGrader.ingestPositions(collected)
         await store.replaceVehiclePositions(collected)
+    }
+
+    /// Append the latest bus observations to the per-vehicle history ring
+    /// buffer used by `BusGeometryBlender`. Trims old samples and caps
+    /// the per-vehicle window so the dictionary stays bounded.
+    private func appendBusVehicleHistory(from positions: [VehiclePosition]) {
+        let cutoff = Date().addingTimeInterval(-Self.busHistoryTTL)
+        for vehicle in positions where vehicle.mode == .bus {
+            var history = latestBusVehicleHistory[vehicle.id] ?? []
+            // Avoid duplicate samples when the same observation lands twice
+            // in a single refresh (e.g. two pinned routes that share a bus).
+            if history.last?.observedAt == vehicle.observedAt { continue }
+            history.append(BusVehicleHistorySample(
+                vehicleId: vehicle.id,
+                observedAt: vehicle.observedAt,
+                patternId: vehicle.patternId,
+                patternDistanceFeet: vehicle.patternDistanceFeet
+            ))
+            history.removeAll { $0.observedAt < cutoff }
+            if history.count > Self.busHistoryEntriesPerVehicle {
+                history.removeFirst(history.count - Self.busHistoryEntriesPerVehicle)
+            }
+            latestBusVehicleHistory[vehicle.id] = history
+        }
+        // Evict whole vehicles that haven't appeared in a refresh in the
+        // TTL window. Bounds the dictionary growth across a long session.
+        latestBusVehicleHistory = latestBusVehicleHistory.filter {
+            $0.value.last?.observedAt ?? .distantPast >= cutoff
+        }
     }
 
     private func refreshAlerts(prefs: UserRoutePreferences) async {
