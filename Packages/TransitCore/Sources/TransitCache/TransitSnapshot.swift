@@ -20,6 +20,11 @@ public struct TransitSnapshot: Sendable, Hashable {
     /// a personal q50 shift to displayed bus minutes. Phase 4a writes;
     /// phase 4b reads.
     public var busResidualBins: [BusResidualQuantileBin]
+    /// Per-stop detour-membership state (which detour IDs add/remove
+    /// each stop). Phase 2b reads this to abstain on
+    /// stop-removed-by-detour predictions. Empty when no pinned stops
+    /// have detour state.
+    public var busStopDetourStates: [BusStopDetourState]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
@@ -42,6 +47,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         busDetours: [BusDetour] = [],
         busPatterns: [BusPattern] = [],
         busResidualBins: [BusResidualQuantileBin] = [],
+        busStopDetourStates: [BusStopDetourState] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
@@ -63,6 +69,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.busDetours = busDetours
         self.busPatterns = busPatterns
         self.busResidualBins = busResidualBins
+        self.busStopDetourStates = busStopDetourStates
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt

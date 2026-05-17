@@ -1,0 +1,28 @@
+{
+  "bustime-response": {
+    "stops": [
+      {
+        "stpid": "456",
+        "stpnm": "Grand & McClurg",
+        "lat": 41.8919,
+        "lon": -87.6182,
+        "dtradd": [],
+        "dtrrem": ["DTR-5621"]
+      },
+      {
+        "stpid": 999,
+        "stpnm": "Replacement Stop",
+        "lat": 41.892,
+        "lon": -87.62,
+        "dtradd": ["DTR-5621"],
+        "dtrrem": []
+      },
+      {
+        "stpid": "1000",
+        "stpnm": "Unaffected Stop",
+        "lat": 41.890,
+        "lon": -87.615
+      }
+    ]
+  }
+}

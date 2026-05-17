@@ -260,6 +260,7 @@ actor LiveActivityCoordinator {
                 vehicles: snapshot.vehiclePositions,
                 activeDetours: snapshot.busDetours,
                 patterns: snapshot.busPatterns,
+                stopDetourStates: snapshot.busStopDetourStates,
                 bins: snapshot.busResidualBins
             )
             .filter { $0.route == route }
@@ -302,6 +303,7 @@ actor LiveActivityCoordinator {
                 vehicles: snapshot.vehiclePositions,
                 activeDetours: snapshot.busDetours,
                 patterns: snapshot.busPatterns,
+                stopDetourStates: snapshot.busStopDetourStates,
                 bins: snapshot.busResidualBins
             )
             .filter { $0.route == tripBus.route }
@@ -504,6 +506,7 @@ actor LiveActivityCoordinator {
                 vehicles: snapshot.vehiclePositions,
                 activeDetours: snapshot.busDetours,
                 patterns: snapshot.busPatterns,
+                stopDetourStates: snapshot.busStopDetourStates,
                 bins: snapshot.busResidualBins
             )
             .filter { $0.route == route && $0.stopId == stopID && $0.arrivalAt > now }

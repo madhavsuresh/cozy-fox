@@ -516,6 +516,97 @@ struct BusReliabilityScorerTests {
         _ = result.state
     }
 
+    // MARK: - Stop-removed-by-detour abstain (phase 2b)
+
+    @Test("Stop removed by active detour → abstain regardless of other evidence")
+    func stopRemovedByDetourAbstains() {
+        // Strong positive evidence otherwise — fresh vehicle right at the
+        // stop — but the stop is removed by an active detour. The scorer
+        // must still abstain so the rider doesn't wait for a bus that's
+        // been routed around them.
+        let pred = prediction(etaSeconds: 60)
+        let veh = vehicle(nearby: true, observedAgo: 15)
+        let detour = BusDetour(
+            id: "DTR-9000", version: 1, isActive: true,
+            summary: "Stop closed for construction",
+            affected: [.init(route: "65", directionName: "Westbound")],
+            beginsAt: Self.now.addingTimeInterval(-3600),
+            endsAt: Self.now.addingTimeInterval(3600)
+        )
+        let stopState = BusStopDetourState(
+            stopId: 456,
+            addedByDetourIds: [],
+            removedByDetourIds: ["DTR-9000"]
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [detour],
+            stopDetourState: stopState,
+            now: Self.now
+        )
+
+        #expect(result.state == .doNotDisplay)
+        #expect(result.reasonCodes.contains(.stopRemovedByDetour))
+    }
+
+    @Test("Stop removed by an *inactive* detour → no abstain")
+    func stopRemovedOnlyByInactiveDetourDoesNotAbstain() {
+        let pred = prediction(etaSeconds: 4 * 60)
+        let veh = vehicle(nearby: true, observedAgo: 15)
+        let inactive = BusDetour(
+            id: "DTR-OLD", version: 1, isActive: false,
+            summary: "Resolved yesterday", affected: [],
+            beginsAt: nil, endsAt: nil
+        )
+        let stopState = BusStopDetourState(
+            stopId: 456,
+            addedByDetourIds: [],
+            removedByDetourIds: ["DTR-OLD"]
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [inactive],
+            stopDetourState: stopState,
+            now: Self.now
+        )
+
+        #expect(!result.reasonCodes.contains(.stopRemovedByDetour))
+        #expect(result.isDisplayable)
+    }
+
+    @Test("Stop in `addedByDetourIds` is not abstained")
+    func stopAddedByDetourDoesNotAbstain() {
+        let pred = prediction(etaSeconds: 4 * 60)
+        let veh = vehicle(nearby: true, observedAgo: 15)
+        let active = BusDetour(
+            id: "DTR-ADD", version: 1, isActive: true, summary: "",
+            affected: [], beginsAt: nil, endsAt: nil
+        )
+        let stopState = BusStopDetourState(
+            stopId: 456,
+            addedByDetourIds: ["DTR-ADD"],
+            removedByDetourIds: []
+        )
+
+        let result = BusReliabilityScorer().assessment(
+            for: pred,
+            vehicle: veh,
+            stopLocation: Self.grandAndMcClurg,
+            activeDetours: [active],
+            stopDetourState: stopState,
+            now: Self.now
+        )
+
+        #expect(!result.reasonCodes.contains(.stopRemovedByDetour))
+        #expect(result.isDisplayable)
+    }
+
     @Test("Patterns loaded but vehicle pid unknown → patternMismatch + haversine fallback")
     func patternMismatchFallsBack() {
         let pred = columbusPrediction(etaSeconds: 60)

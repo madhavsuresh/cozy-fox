@@ -27,6 +27,7 @@ public struct SnapshotReader: Sendable {
         let detours = (try? context.fetch(FetchDescriptor<CachedBusDetour>())) ?? []
         let patterns = (try? context.fetch(FetchDescriptor<CachedBusPattern>())) ?? []
         let residualBins = (try? context.fetch(FetchDescriptor<CachedBusResidualQuantileBin>())) ?? []
+        let stopDetourStates = (try? context.fetch(FetchDescriptor<CachedBusStopDetourState>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
         let nearestFreeBikes = (try? context.fetch(FetchDescriptor<CachedNearestFreeBike>())) ?? []
 
@@ -56,6 +57,7 @@ public struct SnapshotReader: Sendable {
         let busDetours = detours.map(\.asModel)
         let busPatterns = patterns.map(\.asModel)
         let busResidualBins = residualBins.compactMap(\.asModel)
+        let busStopDetourStates = stopDetourStates.map(\.asModel)
 
         let nearbyPicks = nearestBikes
             .sorted { $0.rank < $1.rank }
@@ -108,6 +110,7 @@ public struct SnapshotReader: Sendable {
             busDetours: busDetours,
             busPatterns: busPatterns,
             busResidualBins: busResidualBins,
+            busStopDetourStates: busStopDetourStates,
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
             metraFetchedAt: metraPredictions.first?.fetchedAt,

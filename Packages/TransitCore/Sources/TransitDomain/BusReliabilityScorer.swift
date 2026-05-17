@@ -32,6 +32,7 @@ public struct BusArrivalReliability: Sendable, Hashable, Identifiable {
         case stopLocationUnknown = "STOP_LOCATION_UNKNOWN"
         case arrivalAlreadyPassed = "ARRIVAL_ALREADY_PASSED"
         case detourActive = "DETOUR_ACTIVE"
+        case stopRemovedByDetour = "STOP_REMOVED_BY_DETOUR"
         case patternMatch = "PATTERN_MATCH"
         case patternMismatch = "PATTERN_MISMATCH"
         case pdistCrossedStop = "PDIST_CROSSED_STOP"
@@ -137,6 +138,7 @@ public struct BusReliabilityScorer: Sendable {
         stopLocation: (BusPrediction) -> (lat: Double, lon: Double)?,
         activeDetours: [BusDetour] = [],
         patterns: [BusPattern] = [],
+        stopDetourStates: [BusStopDetourState] = [],
         now: Date = .now
     ) -> [String: BusArrivalReliability] {
         let busVehicleById: [String: VehiclePosition] = Dictionary(
@@ -158,6 +160,7 @@ public struct BusReliabilityScorer: Sendable {
                 stopLocation: stopLocation(pred),
                 activeDetours: activeDetours,
                 patterns: patterns,
+                stopDetourState: stopDetourStates.first { $0.stopId == pred.stopId },
                 now: now
             )
             return (pred.id, reliability)
@@ -173,6 +176,7 @@ public struct BusReliabilityScorer: Sendable {
         vehicles: [VehiclePosition],
         activeDetours: [BusDetour] = [],
         patterns: [BusPattern] = [],
+        stopDetourStates: [BusStopDetourState] = [],
         scorer: BusReliabilityScorer = BusReliabilityScorer(),
         now: Date = .now
     ) -> [BusPrediction] {
@@ -181,6 +185,7 @@ public struct BusReliabilityScorer: Sendable {
             vehicles: vehicles,
             activeDetours: activeDetours,
             patterns: patterns,
+            stopDetourStates: stopDetourStates,
             now: now
         )
         return predictions.filter { assessments[$0.id]?.isDisplayable ?? true }
@@ -193,6 +198,7 @@ public struct BusReliabilityScorer: Sendable {
         vehicles: [VehiclePosition],
         activeDetours: [BusDetour] = [],
         patterns: [BusPattern] = [],
+        stopDetourStates: [BusStopDetourState] = [],
         now: Date = .now
     ) -> [String: BusArrivalReliability] {
         assessments(
@@ -205,6 +211,7 @@ public struct BusReliabilityScorer: Sendable {
             },
             activeDetours: activeDetours,
             patterns: patterns,
+            stopDetourStates: stopDetourStates,
             now: now
         )
     }
@@ -223,6 +230,7 @@ public struct BusReliabilityScorer: Sendable {
         stopLocation: (lat: Double, lon: Double)?,
         activeDetours: [BusDetour] = [],
         patterns: [BusPattern] = [],
+        stopDetourState: BusStopDetourState? = nil,
         now: Date = .now
     ) -> BusArrivalReliability {
         var reasons: [BusArrivalReliability.ReasonCode] = []
@@ -242,10 +250,25 @@ public struct BusReliabilityScorer: Sendable {
             )
         }
 
+        // Phase 2b: stop-removed-by-detour is a hard abstain. The CTA
+        // server's predictions usually disappear once a detour engages,
+        // but in the transition window they can hang around — and a
+        // rider standing at a removed stop is one of the worst failure
+        // modes we can hide.
+        if let stopDetourState, stopDetourState.isRemovedBy(activeDetours: activeDetours) {
+            reasons.append(.stopRemovedByDetour)
+            return BusArrivalReliability(
+                id: prediction.id,
+                state: .doNotDisplay,
+                score: 0,
+                reasonCodes: reasons
+            )
+        }
+
         // Active detour on the same (route, direction) — soft warn. We
-        // cannot tell from `getdetours` alone whether *this stop* is
-        // skipped; phase 3 adds stop-level granularity via enhanced
-        // detours. Until then, downgrade enough to drop a borderline
+        // can know from `getdetours` that the route is detoured, but
+        // (absent the stop-detour state above) we don't know whether
+        // *this stop* is skipped. Downgrade enough to drop a borderline
         // high-confidence into medium so the rider's expectations are
         // shaped.
         let detourHit = activeDetours.contains { detour in

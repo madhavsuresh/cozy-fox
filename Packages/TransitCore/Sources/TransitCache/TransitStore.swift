@@ -108,6 +108,16 @@ public actor TransitStore {
         try? ctx.save()
     }
 
+    public func replaceBusStopDetourStates(_ states: [BusStopDetourState]) {
+        let now = Date()
+        let ctx = ModelContext(container)
+        try? ctx.delete(model: CachedBusStopDetourState.self)
+        for state in states {
+            ctx.insert(CachedBusStopDetourState(state: state, fetchedAt: now))
+        }
+        try? ctx.save()
+    }
+
     /// Records a single raw residual and recomputes the corresponding
     /// `BusResidualQuantileBin`. Cheap at one user's volume (each bin holds
     /// tens of samples) so we recompute on every write rather than

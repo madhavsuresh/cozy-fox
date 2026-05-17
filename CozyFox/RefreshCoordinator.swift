@@ -985,6 +985,35 @@ final class RefreshCoordinator {
             // `BusDetour.affects(...)` already filters out detours past
             // their `endsAt`.
         }
+
+        // Phase 2b: alongside the route-level detour set, fetch per-stop
+        // detour membership for the stops the user is tracking. This is
+        // the v3 surface — small targeted call, same 5-min cadence.
+        var stopIds: Set<Int> = []
+        for pref in prefs.buses where prefs.isBusRouteVisible(pref.route) || prefs.pinnedBusRoute == pref.route {
+            stopIds.insert(pref.stopId)
+        }
+        if let pinnedStop = prefs.pinnedBusStopId { stopIds.insert(pinnedStop) }
+        for tripBus in prefs.plannedTripPin?.busLegs ?? [] {
+            if let stopId = tripBus.stopId { stopIds.insert(stopId) }
+        }
+        guard !stopIds.isEmpty else {
+            await store.replaceBusStopDetourStates([])
+            return
+        }
+        do {
+            let states = try await busClient.fetchStopDetourStates(stopIds: Array(stopIds))
+            // Only persist rows that actually carry detour info — the
+            // CTA response includes every requested stop, but most have
+            // empty `dtradd`/`dtrrem`. Skipping those keeps the cache
+            // small and the scorer's filter cheap.
+            let withDetourInfo = states.filter {
+                !$0.addedByDetourIds.isEmpty || !$0.removedByDetourIds.isEmpty
+            }
+            await store.replaceBusStopDetourStates(withDetourInfo)
+        } catch {
+            // Soft fail like the detour list above.
+        }
     }
 
     /// Refresh CTA bus pattern geometry for the user's pinned/visible

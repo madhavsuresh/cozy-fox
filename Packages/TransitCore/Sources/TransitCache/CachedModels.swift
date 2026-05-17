@@ -649,6 +649,43 @@ public final class CachedBusResidualQuantileBin {
 }
 
 @Model
+public final class CachedBusStopDetourState {
+    @Attribute(.unique) public var stopId: Int
+    public var addedByDetourIdsJSON: String
+    public var removedByDetourIdsJSON: String
+    public var fetchedAt: Date
+
+    public init(state: BusStopDetourState, fetchedAt: Date) {
+        self.stopId = state.stopId
+        self.addedByDetourIdsJSON = (try? String(
+            data: JSONEncoder().encode(state.addedByDetourIds),
+            encoding: .utf8
+        )) ?? "[]"
+        self.removedByDetourIdsJSON = (try? String(
+            data: JSONEncoder().encode(state.removedByDetourIds),
+            encoding: .utf8
+        )) ?? "[]"
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: BusStopDetourState {
+        let added = (try? JSONDecoder().decode(
+            [String].self,
+            from: Data(addedByDetourIdsJSON.utf8)
+        )) ?? []
+        let removed = (try? JSONDecoder().decode(
+            [String].self,
+            from: Data(removedByDetourIdsJSON.utf8)
+        )) ?? []
+        return BusStopDetourState(
+            stopId: stopId,
+            addedByDetourIds: added,
+            removedByDetourIds: removed
+        )
+    }
+}
+
+@Model
 public final class CachedAlert {
     @Attribute(.unique) public var id: String
     public var headline: String

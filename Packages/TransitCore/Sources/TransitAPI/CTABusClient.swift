@@ -6,13 +6,20 @@ public protocol CTABusClientProtocol: Sendable {
     func fetchVehicles(routes: [String]) async throws -> [VehiclePosition]
     func fetchDetours(routes: [String]) async throws -> [BusDetour]
     func fetchPatterns(routes: [String]) async throws -> [BusPattern]
+    func fetchStopDetourStates(stopIds: [Int]) async throws -> [BusStopDetourState]
 }
 
-/// CTA Bus Tracker API v2.
+/// CTA Bus Tracker API v2 (with one phase 2b call against v3 for the
+/// per-stop `dtradd` / `dtrrem` fields that v2 doesn't expose).
 ///
 /// Docs: https://www.transitchicago.com/developers/bustracker/
 public actor CTABusClient: CTABusClientProtocol {
     public static let baseURL = URL(string: "https://ctabustracker.com/bustime/api/v2")!
+    /// v3 surface, used today only for `getstops` so we can read each
+    /// stop's `dtradd` / `dtrrem` detour-membership arrays. The rest of
+    /// the client stays on v2 — switching the whole client over is a
+    /// separate cleanup.
+    public static let v3BaseURL = URL(string: "https://ctabustracker.com/bustime/api/v3")!
 
     private let http: HTTPClient
     private let apiKeyProvider: @Sendable () -> String?
@@ -99,6 +106,42 @@ public actor CTABusClient: CTABusClientProtocol {
                 BusPattern(raw: $0, route: route)
             }
             collected.append(contentsOf: patterns)
+        }
+        return collected
+    }
+
+    /// Per-stop detour membership for `stopIds` (up to 10 per call; the
+    /// implementation chunks larger lists). Reads CTA v3 `getstops` and
+    /// extracts the `dtradd` / `dtrrem` arrays — phase 2b needs these to
+    /// know which stops a currently-active detour actually skips.
+    public func fetchStopDetourStates(stopIds: [Int]) async throws -> [BusStopDetourState] {
+        guard let key = apiKeyProvider(), !key.isEmpty else { throw APIError.missingAPIKey }
+        guard !stopIds.isEmpty else { return [] }
+        // CTA caps `stpid` at 10 per call.
+        let chunks = stride(from: 0, to: stopIds.count, by: 10).map {
+            Array(stopIds[$0..<min($0 + 10, stopIds.count)])
+        }
+        var collected: [BusStopDetourState] = []
+        for chunk in chunks {
+            var comps = URLComponents(
+                url: Self.v3BaseURL.appendingPathComponent("getstops"),
+                resolvingAgainstBaseURL: false
+            )!
+            comps.queryItems = [
+                URLQueryItem(name: "key", value: key),
+                URLQueryItem(name: "stpid", value: chunk.map(String.init).joined(separator: ",")),
+                URLQueryItem(name: "format", value: "json"),
+            ]
+            guard let url = comps.url else { throw APIError.invalidURL }
+            let (data, response) = try await http.data(for: URLRequest(url: url))
+            guard (200..<300).contains(response.statusCode) else {
+                throw APIError.http(status: response.statusCode)
+            }
+            let feed = try JSONDecoder.cta.decode(BusStopsEnvelope.self, from: data)
+            let states = (feed.bustimeResponse.stops ?? []).compactMap {
+                BusStopDetourState(raw: $0)
+            }
+            collected.append(contentsOf: states)
         }
         return collected
     }
@@ -302,6 +345,41 @@ enum StringOrInt: Decodable {
             StringOrInt.self,
             .init(codingPath: decoder.codingPath, debugDescription: "Expected Int or String")
         )
+    }
+}
+
+extension BusStopDetourState {
+    init?(raw: BusStopsEnvelope.Body.Stop) {
+        let stpidString: String
+        switch raw.stpid {
+        case .int(let n): stpidString = String(n)
+        case .string(let s): stpidString = s
+        }
+        guard let stopId = Int(stpidString) else { return nil }
+        self.init(
+            stopId: stopId,
+            addedByDetourIds: raw.dtradd ?? [],
+            removedByDetourIds: raw.dtrrem ?? []
+        )
+    }
+}
+
+struct BusStopsEnvelope: Decodable {
+    let bustimeResponse: Body
+    enum CodingKeys: String, CodingKey { case bustimeResponse = "bustime-response" }
+
+    struct Body: Decodable {
+        let stops: [Stop]?
+        let error: [BusPredictionsEnvelope.Body.Err]?
+
+        struct Stop: Decodable {
+            let stpid: StringOrInt
+            let stpnm: String?
+            let lat: Double?
+            let lon: Double?
+            let dtradd: [String]?
+            let dtrrem: [String]?
+        }
     }
 }
 

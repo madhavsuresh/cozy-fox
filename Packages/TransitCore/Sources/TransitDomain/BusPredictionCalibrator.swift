@@ -147,6 +147,7 @@ public enum BusPredictionCalibrator {
         vehicles: [VehiclePosition],
         activeDetours: [BusDetour] = [],
         patterns: [BusPattern] = [],
+        stopDetourStates: [BusStopDetourState] = [],
         bins: [BusResidualQuantileBin] = [],
         scorer: BusReliabilityScorer = BusReliabilityScorer(),
         calendar: Calendar = .currentChicago,
@@ -158,6 +159,7 @@ public enum BusPredictionCalibrator {
             vehicles: vehicles,
             activeDetours: activeDetours,
             patterns: patterns,
+            stopDetourStates: stopDetourStates,
             now: now
         )
         return predictions.compactMap { pred -> BusPrediction? in

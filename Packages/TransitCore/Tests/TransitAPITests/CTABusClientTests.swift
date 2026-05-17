@@ -76,4 +76,41 @@ struct CTABusClientTests {
         #expect(pattern.patternDistanceForStop(457) == 1160.0)
         #expect(pattern.patternDistanceForStop(99999) == nil)
     }
+
+    @Test func decodesStopDetourStateFromV3GetStops() async throws {
+        let stub = StubHTTPClient()
+        await stub.register(
+            path: "/bustime/api/v3/getstops",
+            data: Fixture.load("cta_bus_stops_v3")
+        )
+        let client = CTABusClient(http: stub) { "stub-key" }
+        let states = try await client.fetchStopDetourStates(stopIds: [456, 999, 1000])
+
+        #expect(states.count == 3)
+        let removed = try #require(states.first { $0.stopId == 456 })
+        #expect(removed.removedByDetourIds == ["DTR-5621"])
+        #expect(removed.addedByDetourIds.isEmpty)
+        // isRemovedBy with an active detour matching the id → true.
+        let activeDtr = BusDetour(
+            id: "DTR-5621", version: 1, isActive: true, summary: "",
+            affected: [], beginsAt: nil, endsAt: nil
+        )
+        #expect(removed.isRemovedBy(activeDetours: [activeDtr]))
+
+        // Same detour but inactive → not removed.
+        let inactiveDtr = BusDetour(
+            id: "DTR-5621", version: 1, isActive: false, summary: "",
+            affected: [], beginsAt: nil, endsAt: nil
+        )
+        #expect(!removed.isRemovedBy(activeDetours: [inactiveDtr]))
+
+        let added = try #require(states.first { $0.stopId == 999 })
+        #expect(added.addedByDetourIds == ["DTR-5621"])
+        #expect(added.removedByDetourIds.isEmpty)
+        #expect(!added.isRemovedBy(activeDetours: [activeDtr]))
+
+        let untouched = try #require(states.first { $0.stopId == 1000 })
+        #expect(untouched.removedByDetourIds.isEmpty)
+        #expect(untouched.addedByDetourIds.isEmpty)
+    }
 }

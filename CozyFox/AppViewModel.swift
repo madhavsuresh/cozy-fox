@@ -131,7 +131,8 @@ final class AppViewModel {
             for: snapshot.busPredictions,
             vehicles: vehiclePositions,
             activeDetours: snapshot.busDetours,
-            patterns: snapshot.busPatterns
+            patterns: snapshot.busPatterns,
+            stopDetourStates: snapshot.busStopDetourStates
         )
     }
 
