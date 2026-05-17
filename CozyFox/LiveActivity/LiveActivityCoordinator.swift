@@ -254,12 +254,13 @@ actor LiveActivityCoordinator {
         }
 
         guard let route = prefs.pinnedBusRoute else { return nil }
-        var predictions = BusReliabilityScorer
-            .displayablePredictions(
+        var predictions = BusPredictionCalibrator
+            .displayableCalibratedPredictions(
                 from: snapshot.busPredictions,
                 vehicles: snapshot.vehiclePositions,
                 activeDetours: snapshot.busDetours,
-                patterns: snapshot.busPatterns
+                patterns: snapshot.busPatterns,
+                bins: snapshot.busResidualBins
             )
             .filter { $0.route == route }
         if let direction = prefs.pinnedBusDirection {
@@ -295,12 +296,13 @@ actor LiveActivityCoordinator {
         snapshot: TransitSnapshot,
         biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.BusLeg? {
-        var predictions = BusReliabilityScorer
-            .displayablePredictions(
+        var predictions = BusPredictionCalibrator
+            .displayableCalibratedPredictions(
                 from: snapshot.busPredictions,
                 vehicles: snapshot.vehiclePositions,
                 activeDetours: snapshot.busDetours,
-                patterns: snapshot.busPatterns
+                patterns: snapshot.busPatterns,
+                bins: snapshot.busResidualBins
             )
             .filter { $0.route == tripBus.route }
         if let direction = tripBus.directionLabel {
@@ -496,12 +498,13 @@ actor LiveActivityCoordinator {
         guard case .bus(let route) = leg.transit?.resolution else { return nil }
         guard case .bus(let stopID) = leg.fromStopID else { return nil }
         let now = Date()
-        let sorted = BusReliabilityScorer
-            .displayablePredictions(
+        let sorted = BusPredictionCalibrator
+            .displayableCalibratedPredictions(
                 from: snapshot.busPredictions,
                 vehicles: snapshot.vehiclePositions,
                 activeDetours: snapshot.busDetours,
-                patterns: snapshot.busPatterns
+                patterns: snapshot.busPatterns,
+                bins: snapshot.busResidualBins
             )
             .filter { $0.route == route && $0.stopId == stopID && $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }

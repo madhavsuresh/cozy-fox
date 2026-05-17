@@ -15,6 +15,11 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var activeAlerts: [ServiceAlert]
     public var busDetours: [BusDetour]
     public var busPatterns: [BusPattern]
+    /// Aggregated per-(route, direction, stop, horizon, hour-of-week)
+    /// residual quantile bins. Read by `BusPredictionCalibrator` to apply
+    /// a personal q50 shift to displayed bus minutes. Phase 4a writes;
+    /// phase 4b reads.
+    public var busResidualBins: [BusResidualQuantileBin]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
@@ -36,6 +41,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         activeAlerts: [ServiceAlert] = [],
         busDetours: [BusDetour] = [],
         busPatterns: [BusPattern] = [],
+        busResidualBins: [BusResidualQuantileBin] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
@@ -56,6 +62,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.activeAlerts = activeAlerts
         self.busDetours = busDetours
         self.busPatterns = busPatterns
+        self.busResidualBins = busResidualBins
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt

@@ -73,12 +73,29 @@ final class AppViewModel {
     /// Computed each access from `snapshot.busPredictions` and
     /// `vehiclePositions`; `@Observable` tracks the inputs.
     var displayableBusPredictions: [BusPrediction] {
-        BusReliabilityScorer.displayablePredictions(
-            from: snapshot.busPredictions,
-            vehicles: vehiclePositions,
-            activeDetours: snapshot.busDetours,
-            patterns: snapshot.busPatterns
-        )
+        let reliabilities = busReliabilities
+        // Phase 4b: shift the displayed minutes by the per-bin q50 residual
+        // *before* filtering. Only medium/high-confidence rows get
+        // calibration — low-confidence/unreliable already mute the
+        // BigNumber, and shifting them would just paper over the
+        // uncertainty.
+        let bins = snapshot.busResidualBins
+        let calibrated: [BusPrediction] = snapshot.busPredictions.map { pred in
+            guard let reliability = reliabilities[pred.id] else { return pred }
+            switch reliability.state {
+            case .highConfidence, .mediumConfidence:
+                return BusPredictionCalibrator.calibrate(
+                    pred,
+                    using: bins,
+                    calendar: .currentChicago
+                ).prediction
+            case .lowConfidence, .unreliable, .doNotDisplay:
+                return pred
+            }
+        }
+        return calibrated.filter {
+            reliabilities[$0.id]?.isDisplayable ?? true
+        }
     }
 
     /// Per-prediction reliability assessments keyed by `BusPrediction.id`.
