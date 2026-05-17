@@ -427,6 +427,45 @@ struct BusVehiclesEnvelope: Decodable {
             let des: String?
             let spd: Int?
             let dly: Bool?
+
+            // CTA Bus Tracker v2 returns `pid` and `pdist` as JSON
+            // strings for some endpoints/versions, JSON numbers for
+            // others. Decoding either as a strict `Int?` killed the
+            // whole envelope decode whenever CTA chose strings, which
+            // wiped out every bus vehicle and caused phase 1's
+            // `vehicleNotFound` abstain to hide every imminent
+            // prediction. The custom init falls back through both
+            // types and strips whitespace before parsing strings.
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                vid = try c.decode(String.self, forKey: .vid)
+                lat = try c.decodeIfPresent(String.self, forKey: .lat)
+                lon = try c.decodeIfPresent(String.self, forKey: .lon)
+                hdg = try c.decodeIfPresent(String.self, forKey: .hdg)
+                pid = Self.decodeFlexibleInt(c, forKey: .pid)
+                pdist = Self.decodeFlexibleInt(c, forKey: .pdist)
+                rt = try c.decode(String.self, forKey: .rt)
+                des = try c.decodeIfPresent(String.self, forKey: .des)
+                spd = try c.decodeIfPresent(Int.self, forKey: .spd)
+                dly = try c.decodeIfPresent(Bool.self, forKey: .dly)
+            }
+
+            private static func decodeFlexibleInt(
+                _ container: KeyedDecodingContainer<CodingKeys>,
+                forKey key: CodingKeys
+            ) -> Int? {
+                if let i = try? container.decodeIfPresent(Int.self, forKey: key) {
+                    return i
+                }
+                if let s = try? container.decodeIfPresent(String.self, forKey: key) {
+                    return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                return nil
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case vid, lat, lon, hdg, pid, pdist, rt, des, spd, dly
+            }
         }
     }
 }

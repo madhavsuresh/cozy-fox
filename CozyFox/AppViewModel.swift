@@ -343,6 +343,17 @@ final class AppViewModel {
         portfolioRecommendations = refreshCoordinator.latestPortfolioRecommendations
         portfolioRevision = refreshCoordinator.portfolioRevision
         feedFetchStates = refreshCoordinator.feedFetchStates
+
+        // One-shot diagnostic line for the bus reliability pipeline.
+        // Stream live via:
+        //     log stream --predicate 'subsystem == "net.thoughtbison.cozyfox"' --info --debug
+        // or use Console.app with the same predicate. See
+        // `BusReliabilityDebugLogger` for the field shape.
+        BusReliabilityDebugLogger.log(
+            snapshot: snapshot,
+            vehiclePositions: vehiclePositions,
+            busVehicleHistory: busVehicleHistory
+        )
     }
 
     func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {

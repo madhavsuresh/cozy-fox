@@ -1,0 +1,43 @@
+{
+  "bustime-response": {
+    "vehicle": [
+      {
+        "vid": "1234",
+        "tmstmp": "20260517 18:00",
+        "lat": "41.8919",
+        "lon": "-87.6182",
+        "hdg": "270",
+        "pid": "4042",
+        "pdist": "1234",
+        "rt": "65",
+        "des": "Grand/Nordica",
+        "spd": 12,
+        "dly": false
+      },
+      {
+        "vid": "5678",
+        "tmstmp": "20260517 18:00",
+        "lat": "41.892",
+        "lon": "-87.620",
+        "hdg": "90",
+        "pid": 4043,
+        "pdist": 9876,
+        "rt": "65",
+        "des": "Grand/Nordica",
+        "spd": 18,
+        "dly": false
+      },
+      {
+        "vid": "9999",
+        "tmstmp": "20260517 18:00",
+        "lat": "41.893",
+        "lon": "-87.618",
+        "hdg": "180",
+        "rt": "65",
+        "des": "Grand/Nordica",
+        "spd": 0,
+        "dly": false
+      }
+    ]
+  }
+}
