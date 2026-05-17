@@ -20,6 +20,14 @@ public struct VehiclePosition: Codable, Sendable, Hashable, Identifiable {
     /// Next stop id for trains (`nextStpId`) or bus stop id reported by the
     /// bus tracker (`stopId`), if available.
     public let nextStopId: Int?
+    /// CTA Bus Tracker `pid`: the pattern variant the vehicle is currently
+    /// running. nil for trains and Metra (they have no equivalent), and
+    /// for buses when the response omits it.
+    public let patternId: Int?
+    /// CTA Bus Tracker `pdist`: along-pattern distance traveled in feet.
+    /// Used with `BusPattern` to compute remaining distance to a stop and
+    /// detect already-crossed stops without trusting lat/lon alone.
+    public let patternDistanceFeet: Double?
     public let observedAt: Date
 
     public init(
@@ -31,6 +39,8 @@ public struct VehiclePosition: Codable, Sendable, Hashable, Identifiable {
         heading: Int? = nil,
         destinationName: String? = nil,
         nextStopId: Int? = nil,
+        patternId: Int? = nil,
+        patternDistanceFeet: Double? = nil,
         observedAt: Date
     ) {
         self.id = id
@@ -41,6 +51,8 @@ public struct VehiclePosition: Codable, Sendable, Hashable, Identifiable {
         self.heading = heading
         self.destinationName = destinationName
         self.nextStopId = nextStopId
+        self.patternId = patternId
+        self.patternDistanceFeet = patternDistanceFeet
         self.observedAt = observedAt
     }
 }

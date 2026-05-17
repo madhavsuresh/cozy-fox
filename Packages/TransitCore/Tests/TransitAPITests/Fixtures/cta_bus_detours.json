@@ -1,0 +1,29 @@
+{
+  "bustime-response": {
+    "dtr": [
+      {
+        "id": "DTR-5621",
+        "ver": 3,
+        "st": 1,
+        "desc": "Grand & McClurg buses are rerouted via Illinois & Columbus while crews repair the bridge approach.",
+        "rtdirs": [
+          { "rt": "65", "dir": "Westbound" },
+          { "rt": "65", "dir": "Eastbound" }
+        ],
+        "startdt": "20260513 06:00:00",
+        "enddt": "20260520 23:59:00"
+      },
+      {
+        "id": "DTR-5500",
+        "ver": 1,
+        "st": 0,
+        "desc": "Resolved: short turn at Wabash & Lake.",
+        "rtdirs": [
+          { "rt": "22", "dir": "Northbound" }
+        ],
+        "startdt": "20260511 14:00:00",
+        "enddt": "20260512 02:00:00"
+      }
+    ]
+  }
+}

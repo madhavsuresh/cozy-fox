@@ -13,12 +13,26 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var nearbyBikePicks: [NearestBikePick]
     public var nearbyFreeBikePicks: [NearestFreeBikePick]
     public var activeAlerts: [ServiceAlert]
+    public var busDetours: [BusDetour]
+    public var busPatterns: [BusPattern]
+    /// Aggregated per-(route, direction, stop, horizon, hour-of-week)
+    /// residual quantile bins. Read by `BusPredictionCalibrator` to apply
+    /// a personal q50 shift to displayed bus minutes. Phase 4a writes;
+    /// phase 4b reads.
+    public var busResidualBins: [BusResidualQuantileBin]
+    /// Per-stop detour-membership state (which detour IDs add/remove
+    /// each stop). Phase 2b reads this to abstain on
+    /// stop-removed-by-detour predictions. Empty when no pinned stops
+    /// have detour state.
+    public var busStopDetourStates: [BusStopDetourState]
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
     public var intercampusFetchedAt: Date?
     public var bikesFetchedAt: Date?
     public var alertsFetchedAt: Date?
+    public var busDetoursFetchedAt: Date?
+    public var busPatternsFetchedAt: Date?
 
     public init(
         trainArrivals: [Arrival] = [],
@@ -30,12 +44,18 @@ public struct TransitSnapshot: Sendable, Hashable {
         nearbyBikePicks: [NearestBikePick] = [],
         nearbyFreeBikePicks: [NearestFreeBikePick] = [],
         activeAlerts: [ServiceAlert] = [],
+        busDetours: [BusDetour] = [],
+        busPatterns: [BusPattern] = [],
+        busResidualBins: [BusResidualQuantileBin] = [],
+        busStopDetourStates: [BusStopDetourState] = [],
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
         intercampusFetchedAt: Date? = nil,
         bikesFetchedAt: Date? = nil,
-        alertsFetchedAt: Date? = nil
+        alertsFetchedAt: Date? = nil,
+        busDetoursFetchedAt: Date? = nil,
+        busPatternsFetchedAt: Date? = nil
     ) {
         self.trainArrivals = trainArrivals
         self.busPredictions = busPredictions
@@ -46,12 +66,18 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.nearbyBikePicks = nearbyBikePicks
         self.nearbyFreeBikePicks = nearbyFreeBikePicks
         self.activeAlerts = activeAlerts
+        self.busDetours = busDetours
+        self.busPatterns = busPatterns
+        self.busResidualBins = busResidualBins
+        self.busStopDetourStates = busStopDetourStates
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt
         self.intercampusFetchedAt = intercampusFetchedAt
         self.bikesFetchedAt = bikesFetchedAt
         self.alertsFetchedAt = alertsFetchedAt
+        self.busDetoursFetchedAt = busDetoursFetchedAt
+        self.busPatternsFetchedAt = busPatternsFetchedAt
     }
 
     public static let empty = TransitSnapshot()

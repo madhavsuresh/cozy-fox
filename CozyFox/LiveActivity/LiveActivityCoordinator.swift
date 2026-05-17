@@ -254,7 +254,16 @@ actor LiveActivityCoordinator {
         }
 
         guard let route = prefs.pinnedBusRoute else { return nil }
-        var predictions = snapshot.busPredictions.filter { $0.route == route }
+        var predictions = BusPredictionCalibrator
+            .displayableCalibratedPredictions(
+                from: snapshot.busPredictions,
+                vehicles: snapshot.vehiclePositions,
+                activeDetours: snapshot.busDetours,
+                patterns: snapshot.busPatterns,
+                stopDetourStates: snapshot.busStopDetourStates,
+                bins: snapshot.busResidualBins
+            )
+            .filter { $0.route == route }
         if let direction = prefs.pinnedBusDirection {
             predictions = predictions.filter { $0.directionName == direction }
         }
@@ -288,7 +297,16 @@ actor LiveActivityCoordinator {
         snapshot: TransitSnapshot,
         biasCells: [BiasCellKey: BiasCell] = [:]
     ) -> CommuteAttributes.BusLeg? {
-        var predictions = snapshot.busPredictions.filter { $0.route == tripBus.route }
+        var predictions = BusPredictionCalibrator
+            .displayableCalibratedPredictions(
+                from: snapshot.busPredictions,
+                vehicles: snapshot.vehiclePositions,
+                activeDetours: snapshot.busDetours,
+                patterns: snapshot.busPatterns,
+                stopDetourStates: snapshot.busStopDetourStates,
+                bins: snapshot.busResidualBins
+            )
+            .filter { $0.route == tripBus.route }
         if let direction = tripBus.directionLabel {
             predictions = predictions.filter { $0.directionName == direction }
         }
@@ -482,7 +500,15 @@ actor LiveActivityCoordinator {
         guard case .bus(let route) = leg.transit?.resolution else { return nil }
         guard case .bus(let stopID) = leg.fromStopID else { return nil }
         let now = Date()
-        let sorted = snapshot.busPredictions
+        let sorted = BusPredictionCalibrator
+            .displayableCalibratedPredictions(
+                from: snapshot.busPredictions,
+                vehicles: snapshot.vehiclePositions,
+                activeDetours: snapshot.busDetours,
+                patterns: snapshot.busPatterns,
+                stopDetourStates: snapshot.busStopDetourStates,
+                bins: snapshot.busResidualBins
+            )
             .filter { $0.route == route && $0.stopId == stopID && $0.arrivalAt > now }
             .sorted { $0.arrivalAt < $1.arrivalAt }
         guard let first = sorted.first else { return nil }

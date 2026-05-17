@@ -1,0 +1,54 @@
+{
+  "bustime-response": {
+    "ptr": [
+      {
+        "pid": 4042,
+        "ln": 27410.5,
+        "rtdir": "Westbound",
+        "pt": [
+          {
+            "seq": 1,
+            "lat": 41.8919,
+            "lon": -87.6182,
+            "typ": "S",
+            "stpid": "456",
+            "stpnm": "Grand & McClurg",
+            "pdist": 0.0
+          },
+          {
+            "seq": 2,
+            "lat": 41.8919,
+            "lon": -87.6203,
+            "typ": "W",
+            "pdist": 580.0
+          },
+          {
+            "seq": 3,
+            "lat": 41.8919,
+            "lon": -87.6225,
+            "typ": "S",
+            "stpid": "457",
+            "stpnm": "Grand & Columbus",
+            "pdist": 1160.0
+          },
+          {
+            "seq": 4,
+            "lat": 41.8919,
+            "lon": -87.6260,
+            "typ": "W",
+            "pdist": 2050.0
+          },
+          {
+            "seq": 5,
+            "lat": 41.8919,
+            "lon": -87.6300,
+            "typ": "S",
+            "stpid": "458",
+            "stpnm": "Grand & Michigan",
+            "pdist": 3200.0
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -581,6 +581,98 @@ struct ArrivalGraderTests {
         #expect(grader.pendingCountForTests == 0)
     }
 
+    // MARK: - residualRecorder (phase 4)
+
+    @Test func busResolutionFiresResidualRecorder() async {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-bus-residual"))
+        await store.hydrateFromDiskIfNeeded()
+
+        // A capture box so the closure can mutate it safely on the main actor.
+        actor Captured {
+            var residuals: [BusPredictionResidual] = []
+            func append(_ r: BusPredictionResidual) { residuals.append(r) }
+        }
+        let captured = Captured()
+        let grader = ArrivalGrader(
+            biasStore: store,
+            calendar: .current,
+            residualRecorder: { residual in
+                Task { await captured.append(residual) }
+            }
+        )
+
+        let predictedArrival = t0.addingTimeInterval(5 * 60)
+        let prediction = makeBusPrediction(generatedAt: t0, arrivalAt: predictedArrival)
+        await grader.ingestBusPredictions([prediction], now: t0)
+
+        let frame1 = makePosition(
+            runNumber: "1841", route: "22",
+            nextStopId: 1818, observedAt: t0.addingTimeInterval(3 * 60),
+            mode: .bus
+        )
+        await grader.ingestPositions([frame1], now: t0.addingTimeInterval(3 * 60))
+
+        let observedCrossingAt = t0.addingTimeInterval(6 * 60)
+        let frame2 = makePosition(
+            runNumber: "1841", route: "22",
+            nextStopId: 1819, observedAt: observedCrossingAt,
+            mode: .bus
+        )
+        await grader.ingestPositions([frame2], now: observedCrossingAt)
+
+        // Give the detached task a tick to flush.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let recorded = await captured.residuals
+        #expect(recorded.count == 1)
+        if let residual = recorded.first {
+            #expect(residual.route == "22")
+            #expect(residual.directionName == "Northbound")
+            #expect(residual.stopId == 1818)
+            #expect(residual.vehicleId == "1841")
+            #expect(residual.predictedAt == t0)
+            #expect(residual.predictedArrivalAt == predictedArrival)
+            #expect(residual.confirmedArrivalAt == observedCrossingAt)
+            // 5-minute horizon → 2-5m bucket.
+            #expect(residual.horizonBucket == .under5min)
+            // residual = observed - predicted = +60 s.
+            #expect(abs(residual.residualSeconds - 60) < 1e-9)
+        }
+    }
+
+    @Test func trainResolutionDoesNotFireResidualRecorder() async {
+        let store = ArrivalBiasStore(fileURL: Self.temporaryFile(name: "Grader-train-no-residual"))
+        await store.hydrateFromDiskIfNeeded()
+
+        actor Captured {
+            var count = 0
+            func bump() { count += 1 }
+        }
+        let captured = Captured()
+        let grader = ArrivalGrader(
+            biasStore: store,
+            calendar: .current,
+            residualRecorder: { _ in
+                Task { await captured.bump() }
+            }
+        )
+
+        let predictedArrival = t0.addingTimeInterval(5 * 60)
+        let trainArrival = makeArrival(predictedAt: t0, arrivalAt: predictedArrival)
+        await grader.ingestArrivals([trainArrival], now: t0)
+
+        let frame1 = makePosition(runNumber: "401", route: "red",
+                                  nextStopId: 30173, observedAt: t0.addingTimeInterval(3 * 60))
+        let frame2 = makePosition(runNumber: "401", route: "red",
+                                  nextStopId: 30174, observedAt: t0.addingTimeInterval(6 * 60))
+        await grader.ingestPositions([frame1], now: t0.addingTimeInterval(3 * 60))
+        await grader.ingestPositions([frame2], now: t0.addingTimeInterval(6 * 60))
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let count = await captured.count
+        #expect(count == 0, "train resolutions should not produce bus residuals")
+    }
+
     @Test func busVehicleIdCollidingWithTrainRunDoesNotCrossContaminate() async {
         // A bus and a train both happen to use id "401". The split
         // previous-snapshot maps must keep them independent — a bus

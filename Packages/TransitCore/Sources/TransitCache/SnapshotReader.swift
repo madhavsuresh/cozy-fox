@@ -24,6 +24,10 @@ public struct SnapshotReader: Sendable {
         let vehiclePositions = (try? context.fetch(FetchDescriptor<CachedVehiclePosition>())) ?? []
         let intercampusArrivals = (try? context.fetch(FetchDescriptor<CachedIntercampusArrival>())) ?? []
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
+        let detours = (try? context.fetch(FetchDescriptor<CachedBusDetour>())) ?? []
+        let patterns = (try? context.fetch(FetchDescriptor<CachedBusPattern>())) ?? []
+        let residualBins = (try? context.fetch(FetchDescriptor<CachedBusResidualQuantileBin>())) ?? []
+        let stopDetourStates = (try? context.fetch(FetchDescriptor<CachedBusStopDetourState>())) ?? []
         let nearestBikes = (try? context.fetch(FetchDescriptor<CachedNearestBike>())) ?? []
         let nearestFreeBikes = (try? context.fetch(FetchDescriptor<CachedNearestFreeBike>())) ?? []
 
@@ -49,6 +53,11 @@ public struct SnapshotReader: Sendable {
 
         let activeAlerts = alerts.map(\.asModel)
             .filter { $0.isActive(at: now) }
+
+        let busDetours = detours.map(\.asModel)
+        let busPatterns = patterns.map(\.asModel)
+        let busResidualBins = residualBins.compactMap(\.asModel)
+        let busStopDetourStates = stopDetourStates.map(\.asModel)
 
         let nearbyPicks = nearestBikes
             .sorted { $0.rank < $1.rank }
@@ -98,12 +107,18 @@ public struct SnapshotReader: Sendable {
             nearbyBikePicks: nearbyPicks,
             nearbyFreeBikePicks: nearbyFreePicks,
             activeAlerts: activeAlerts,
+            busDetours: busDetours,
+            busPatterns: busPatterns,
+            busResidualBins: busResidualBins,
+            busStopDetourStates: busStopDetourStates,
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
             metraFetchedAt: metraPredictions.first?.fetchedAt,
             intercampusFetchedAt: intercampusArrivals.first?.fetchedAt,
             bikesFetchedAt: nearbyPicks.first?.computedAt ?? nearbyFreePicks.first?.computedAt,
-            alertsFetchedAt: alerts.first?.fetchedAt
+            alertsFetchedAt: alerts.first?.fetchedAt,
+            busDetoursFetchedAt: detours.first?.fetchedAt,
+            busPatternsFetchedAt: patterns.first?.fetchedAt
         )
     }
 

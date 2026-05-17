@@ -71,10 +71,33 @@ final class RefreshCoordinator {
     /// changes get picked up.
     private var lastWalkingInvalidationDay: Date?
 
+    /// Last successful detour fetch. Throttles `refreshDetoursIfNeeded` so
+    /// we don't hit `getdetours` on every 30 s refresh cycle — detours
+    /// change on the order of hours, not seconds.
+    private var lastDetoursFetchedAt: Date?
+    private static let detourRefreshInterval: TimeInterval = 5 * 60
+
+    /// Last successful pattern fetch and the route set that fetch covered.
+    /// Patterns change very rarely (on detour-version changes), so an
+    /// hourly cadence is plenty — and the set of pinned routes also rarely
+    /// changes, so we only re-fetch when *either* the hour passes or the
+    /// route set grows.
+    private var lastPatternsFetchedAt: Date?
+    private var lastPatternsRouteSet: Set<String> = []
+    private static let patternRefreshInterval: TimeInterval = 60 * 60
+
     /// Last-known live vehicle positions for the user's pinned line/route.
     /// Refreshed every cycle; exposed so the dashboard can draw a "where's
     /// my train" strip. Empty when no route is pinned.
     private(set) var latestPositions: [VehiclePosition] = []
+
+    /// Per-bus rolling history of along-pattern observations. Phase 3b's
+    /// geometry blender reads this to compute a robust median speed. Kept
+    /// in memory only — ~8 entries per active bus is enough, and we
+    /// don't need it to persist across launches.
+    private(set) var latestBusVehicleHistory: [String: [BusVehicleHistorySample]] = [:]
+    private static let busHistoryEntriesPerVehicle: Int = 8
+    private static let busHistoryTTL: TimeInterval = 12 * 60
 
     /// Per-feed "have we heard back from the upstream recently?" signal,
     /// mirrored onto `AppViewModel.feedFetchStates`. The dashboard's empty-
@@ -133,7 +156,13 @@ final class RefreshCoordinator {
         self.location = location
         self.walkingStore = walkingStore
         self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
-        self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
+        self.arrivalGrader = ArrivalGrader(
+            biasStore: arrivalBiasStore,
+            residualRecorder: { [weak store] residual in
+                guard let store else { return }
+                Task { await store.recordBusResidual(residual) }
+            }
+        )
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
         self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
         self.commuteLegTracker = CommuteLegTracker(preferences: preferences)
@@ -222,6 +251,8 @@ final class RefreshCoordinator {
                 }
             }
             group.addTask { await self.refreshPositions(prefs: prefs) }
+            group.addTask { await self.refreshDetoursIfNeeded(prefs: prefs) }
+            group.addTask { await self.refreshPatternsIfNeeded(prefs: prefs) }
         }
 
         // Phase 4: portfolio evaluation. Runs after the parallel
@@ -978,6 +1009,7 @@ final class RefreshCoordinator {
             }
         }
         latestPositions = collected
+        appendBusVehicleHistory(from: collected)
         // Phase 2: feed the snapshot to the grader so it can resolve any
         // pending grades against this snapshot's `nextStopId` transitions
         // before the store overwrite. Either order is correct (the grader
@@ -985,6 +1017,35 @@ final class RefreshCoordinator {
         // keeps the pre/post-store-write boundary readable.
         await arrivalGrader.ingestPositions(collected)
         await store.replaceVehiclePositions(collected)
+    }
+
+    /// Append the latest bus observations to the per-vehicle history ring
+    /// buffer used by `BusGeometryBlender`. Trims old samples and caps
+    /// the per-vehicle window so the dictionary stays bounded.
+    private func appendBusVehicleHistory(from positions: [VehiclePosition]) {
+        let cutoff = Date().addingTimeInterval(-Self.busHistoryTTL)
+        for vehicle in positions where vehicle.mode == .bus {
+            var history = latestBusVehicleHistory[vehicle.id] ?? []
+            // Avoid duplicate samples when the same observation lands twice
+            // in a single refresh (e.g. two pinned routes that share a bus).
+            if history.last?.observedAt == vehicle.observedAt { continue }
+            history.append(BusVehicleHistorySample(
+                vehicleId: vehicle.id,
+                observedAt: vehicle.observedAt,
+                patternId: vehicle.patternId,
+                patternDistanceFeet: vehicle.patternDistanceFeet
+            ))
+            history.removeAll { $0.observedAt < cutoff }
+            if history.count > Self.busHistoryEntriesPerVehicle {
+                history.removeFirst(history.count - Self.busHistoryEntriesPerVehicle)
+            }
+            latestBusVehicleHistory[vehicle.id] = history
+        }
+        // Evict whole vehicles that haven't appeared in a refresh in the
+        // TTL window. Bounds the dictionary growth across a long session.
+        latestBusVehicleHistory = latestBusVehicleHistory.filter {
+            $0.value.last?.observedAt ?? .distantPast >= cutoff
+        }
     }
 
     private func refreshAlerts(prefs: UserRoutePreferences) async {
@@ -1021,6 +1082,110 @@ final class RefreshCoordinator {
             await store.replaceAlerts(alerts + (await metraAlerts))
         } catch {
             await store.replaceAlerts(await metraAlerts)
+        }
+    }
+
+    /// Refreshes the cached bus-detour list at most once every
+    /// `detourRefreshInterval`. Detours change on the order of hours, so
+    /// the 30 s refresh ticker would otherwise burn API budget repeating
+    /// itself. Scoped to the routes the user actually rides so we don't
+    /// download every detour citywide.
+    private func refreshDetoursIfNeeded(prefs: UserRoutePreferences) async {
+        let now = Date()
+        if let last = lastDetoursFetchedAt,
+           now.timeIntervalSince(last) < Self.detourRefreshInterval {
+            return
+        }
+
+        var routes: Set<String> = []
+        for pref in prefs.buses where prefs.isBusRouteVisible(pref.route) || prefs.pinnedBusRoute == pref.route {
+            routes.insert(pref.route)
+        }
+        if let pinned = prefs.pinnedBusRoute { routes.insert(pinned) }
+        routes.formUnion(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+
+        guard !routes.isEmpty else {
+            // No bus routes to monitor — clear any stale cached detours so
+            // the scorer doesn't trip on outdated state when the user
+            // un-pins everything.
+            await store.replaceBusDetours([])
+            lastDetoursFetchedAt = now
+            return
+        }
+
+        do {
+            let detours = try await busClient.fetchDetours(routes: Array(routes))
+            await store.replaceBusDetours(detours)
+            lastDetoursFetchedAt = now
+        } catch {
+            // Soft fail: keep the previous cached detours. A stale
+            // detour list is better than no detour signal at all, and
+            // `BusDetour.affects(...)` already filters out detours past
+            // their `endsAt`.
+        }
+
+        // Phase 2b: alongside the route-level detour set, fetch per-stop
+        // detour membership for the stops the user is tracking. This is
+        // the v3 surface — small targeted call, same 5-min cadence.
+        var stopIds: Set<Int> = []
+        for pref in prefs.buses where prefs.isBusRouteVisible(pref.route) || prefs.pinnedBusRoute == pref.route {
+            stopIds.insert(pref.stopId)
+        }
+        if let pinnedStop = prefs.pinnedBusStopId { stopIds.insert(pinnedStop) }
+        for tripBus in prefs.plannedTripPin?.busLegs ?? [] {
+            if let stopId = tripBus.stopId { stopIds.insert(stopId) }
+        }
+        guard !stopIds.isEmpty else {
+            await store.replaceBusStopDetourStates([])
+            return
+        }
+        do {
+            let states = try await busClient.fetchStopDetourStates(stopIds: Array(stopIds))
+            // Only persist rows that actually carry detour info — the
+            // CTA response includes every requested stop, but most have
+            // empty `dtradd`/`dtrrem`. Skipping those keeps the cache
+            // small and the scorer's filter cheap.
+            let withDetourInfo = states.filter {
+                !$0.addedByDetourIds.isEmpty || !$0.removedByDetourIds.isEmpty
+            }
+            await store.replaceBusStopDetourStates(withDetourInfo)
+        } catch {
+            // Soft fail like the detour list above.
+        }
+    }
+
+    /// Refresh CTA bus pattern geometry for the user's pinned/visible
+    /// routes. Patterns change rarely (only on detour-version changes), so
+    /// an hourly cadence is enough — but we re-fetch sooner whenever the
+    /// pinned-route set grows so a newly-tracked route still gets geometry
+    /// promptly.
+    private func refreshPatternsIfNeeded(prefs: UserRoutePreferences) async {
+        var routes: Set<String> = []
+        for pref in prefs.buses where prefs.isBusRouteVisible(pref.route) || prefs.pinnedBusRoute == pref.route {
+            routes.insert(pref.route)
+        }
+        if let pinned = prefs.pinnedBusRoute { routes.insert(pinned) }
+        routes.formUnion(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
+
+        guard !routes.isEmpty else {
+            await store.replaceBusPatterns([])
+            lastPatternsFetchedAt = Date()
+            lastPatternsRouteSet = []
+            return
+        }
+
+        let now = Date()
+        let stale = lastPatternsFetchedAt.map { now.timeIntervalSince($0) >= Self.patternRefreshInterval } ?? true
+        let routesChanged = !routes.isSubset(of: lastPatternsRouteSet)
+        guard stale || routesChanged else { return }
+
+        do {
+            let patterns = try await busClient.fetchPatterns(routes: Array(routes))
+            await store.replaceBusPatterns(patterns)
+            lastPatternsFetchedAt = now
+            lastPatternsRouteSet = routes
+        } catch {
+            // Soft fail: stale geometry is better than none.
         }
     }
 

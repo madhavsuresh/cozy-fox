@@ -182,6 +182,12 @@ public final class CachedVehiclePosition {
     public var heading: Int?
     public var destinationName: String?
     public var nextStopId: Int?
+    /// CTA `pid` — bus pattern variant the vehicle is currently running.
+    /// Default nil so the new field is backwards-compatible with cached
+    /// rows that predate phase 3.
+    public var patternId: Int?
+    /// CTA `pdist` — along-pattern distance in feet.
+    public var patternDistanceFeet: Double?
     public var observedAt: Date
     public var fetchedAt: Date
 
@@ -195,6 +201,8 @@ public final class CachedVehiclePosition {
         self.heading = position.heading
         self.destinationName = position.destinationName
         self.nextStopId = position.nextStopId
+        self.patternId = position.patternId
+        self.patternDistanceFeet = position.patternDistanceFeet
         self.observedAt = position.observedAt
         self.fetchedAt = fetchedAt
     }
@@ -210,7 +218,51 @@ public final class CachedVehiclePosition {
             heading: heading,
             destinationName: destinationName,
             nextStopId: nextStopId,
+            patternId: patternId,
+            patternDistanceFeet: patternDistanceFeet,
             observedAt: observedAt
+        )
+    }
+}
+
+@Model
+public final class CachedBusPattern {
+    @Attribute(.unique) public var id: Int
+    public var route: String
+    public var directionName: String
+    public var lengthFeet: Double?
+    public var detourId: String?
+    /// `[BusPatternPoint]` serialized as JSON. SwiftData persists arrays of
+    /// primitives, not arrays of nested structs, so points round-trip
+    /// through `JSONEncoder`/`Decoder`.
+    public var pointsJSON: String
+    public var fetchedAt: Date
+
+    public init(pattern: BusPattern, fetchedAt: Date) {
+        self.id = pattern.id
+        self.route = pattern.route
+        self.directionName = pattern.directionName
+        self.lengthFeet = pattern.lengthFeet
+        self.detourId = pattern.detourId
+        self.pointsJSON = (try? String(
+            data: JSONEncoder().encode(pattern.points),
+            encoding: .utf8
+        )) ?? "[]"
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: BusPattern {
+        let points: [BusPatternPoint] = (try? JSONDecoder().decode(
+            [BusPatternPoint].self,
+            from: Data(pointsJSON.utf8)
+        )) ?? []
+        return BusPattern(
+            id: id,
+            route: route,
+            directionName: directionName,
+            lengthFeet: lengthFeet,
+            detourId: detourId,
+            points: points
         )
     }
 }
@@ -455,6 +507,180 @@ public final class CachedNearestFreeBike {
             ),
             walkingDistanceMeters: walkingDistanceMeters,
             computedAt: computedAt
+        )
+    }
+}
+
+@Model
+public final class CachedBusDetour {
+    @Attribute(.unique) public var id: String
+    public var version: Int
+    public var isActive: Bool
+    public var summary: String
+    /// `[BusDetour.RouteDirection]` serialized as JSON. SwiftData persists
+    /// arrays of primitive types but not arrays of nested structs, so we
+    /// encode here and decode in `asModel`.
+    public var affectedJSON: String
+    public var beginsAt: Date?
+    public var endsAt: Date?
+    public var fetchedAt: Date
+
+    public init(detour: BusDetour, fetchedAt: Date) {
+        self.id = detour.id
+        self.version = detour.version
+        self.isActive = detour.isActive
+        self.summary = detour.summary
+        self.affectedJSON = (try? String(
+            data: JSONEncoder().encode(detour.affected),
+            encoding: .utf8
+        )) ?? "[]"
+        self.beginsAt = detour.beginsAt
+        self.endsAt = detour.endsAt
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: BusDetour {
+        let affected: [BusDetour.RouteDirection] = (try? JSONDecoder().decode(
+            [BusDetour.RouteDirection].self,
+            from: Data(affectedJSON.utf8)
+        )) ?? []
+        return BusDetour(
+            id: id,
+            version: version,
+            isActive: isActive,
+            summary: summary,
+            affected: affected,
+            beginsAt: beginsAt,
+            endsAt: endsAt
+        )
+    }
+}
+
+@Model
+public final class CachedBusPredictionResidual {
+    @Attribute(.unique) public var id: UUID
+    public var route: String
+    public var directionName: String
+    public var stopId: Int
+    public var vehicleId: String
+    public var predictedAt: Date
+    public var predictedArrivalAt: Date
+    public var confirmedArrivalAt: Date
+    public var horizonBucketRaw: String
+    public var hourOfWeek: Int
+    public var residualSeconds: Double
+
+    public init(residual: BusPredictionResidual) {
+        self.id = residual.id
+        self.route = residual.route
+        self.directionName = residual.directionName
+        self.stopId = residual.stopId
+        self.vehicleId = residual.vehicleId
+        self.predictedAt = residual.predictedAt
+        self.predictedArrivalAt = residual.predictedArrivalAt
+        self.confirmedArrivalAt = residual.confirmedArrivalAt
+        self.horizonBucketRaw = residual.horizonBucket.rawValue
+        self.hourOfWeek = residual.hourOfWeek
+        self.residualSeconds = residual.residualSeconds
+    }
+
+    public var asModel: BusPredictionResidual? {
+        guard let bucket = BusHorizonBucket(rawValue: horizonBucketRaw) else { return nil }
+        return BusPredictionResidual(
+            id: id,
+            route: route,
+            directionName: directionName,
+            stopId: stopId,
+            vehicleId: vehicleId,
+            predictedAt: predictedAt,
+            predictedArrivalAt: predictedArrivalAt,
+            confirmedArrivalAt: confirmedArrivalAt,
+            horizonBucket: bucket,
+            hourOfWeek: hourOfWeek,
+            residualSeconds: residualSeconds
+        )
+    }
+}
+
+@Model
+public final class CachedBusResidualQuantileBin {
+    /// Composite primary key — `BusResidualQuantileBin.key`.
+    @Attribute(.unique) public var key: String
+    public var route: String
+    public var directionName: String
+    public var stopId: Int
+    public var horizonBucketRaw: String
+    public var hourOfWeek: Int
+    public var sampleCount: Int
+    public var q10Seconds: Double
+    public var q50Seconds: Double
+    public var q90Seconds: Double
+    public var lastUpdated: Date
+
+    public init(bin: BusResidualQuantileBin) {
+        self.key = bin.key
+        self.route = bin.route
+        self.directionName = bin.directionName
+        self.stopId = bin.stopId
+        self.horizonBucketRaw = bin.horizonBucket.rawValue
+        self.hourOfWeek = bin.hourOfWeek
+        self.sampleCount = bin.sampleCount
+        self.q10Seconds = bin.q10Seconds
+        self.q50Seconds = bin.q50Seconds
+        self.q90Seconds = bin.q90Seconds
+        self.lastUpdated = bin.lastUpdated
+    }
+
+    public var asModel: BusResidualQuantileBin? {
+        guard let bucket = BusHorizonBucket(rawValue: horizonBucketRaw) else { return nil }
+        return BusResidualQuantileBin(
+            route: route,
+            directionName: directionName,
+            stopId: stopId,
+            horizonBucket: bucket,
+            hourOfWeek: hourOfWeek,
+            sampleCount: sampleCount,
+            q10Seconds: q10Seconds,
+            q50Seconds: q50Seconds,
+            q90Seconds: q90Seconds,
+            lastUpdated: lastUpdated
+        )
+    }
+}
+
+@Model
+public final class CachedBusStopDetourState {
+    @Attribute(.unique) public var stopId: Int
+    public var addedByDetourIdsJSON: String
+    public var removedByDetourIdsJSON: String
+    public var fetchedAt: Date
+
+    public init(state: BusStopDetourState, fetchedAt: Date) {
+        self.stopId = state.stopId
+        self.addedByDetourIdsJSON = (try? String(
+            data: JSONEncoder().encode(state.addedByDetourIds),
+            encoding: .utf8
+        )) ?? "[]"
+        self.removedByDetourIdsJSON = (try? String(
+            data: JSONEncoder().encode(state.removedByDetourIds),
+            encoding: .utf8
+        )) ?? "[]"
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: BusStopDetourState {
+        let added = (try? JSONDecoder().decode(
+            [String].self,
+            from: Data(addedByDetourIdsJSON.utf8)
+        )) ?? []
+        let removed = (try? JSONDecoder().decode(
+            [String].self,
+            from: Data(removedByDetourIdsJSON.utf8)
+        )) ?? []
+        return BusStopDetourState(
+            stopId: stopId,
+            addedByDetourIds: added,
+            removedByDetourIds: removed
         )
     }
 }
