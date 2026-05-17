@@ -1076,7 +1076,9 @@ struct DashboardScreen: View {
                                 ),
                                 urgencies: tripTrainUrgencies)
             } else {
-                Text(model.isRefreshing ? "Fetching arrivals…" : "No upcoming arrivals returned yet.")
+                Text(model.hasFreshFetch(for: .trains)
+                     ? "No upcoming arrivals."
+                     : "Fetching arrivals…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -1150,7 +1152,9 @@ struct DashboardScreen: View {
                                 accent: ChicagoPalette.Mode.bus,
                                 urgencies: tripBusUrgencies)
             } else {
-                Text(model.isRefreshing ? "Fetching predictions…" : "No upcoming buses returned yet.")
+                Text(model.hasFreshFetch(for: .buses)
+                     ? "No upcoming buses."
+                     : "Fetching predictions…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -1203,7 +1207,9 @@ struct DashboardScreen: View {
                                 accent: accent,
                                 urgencies: tripMetraUrgencies)
             } else {
-                Text(model.isRefreshing ? "Fetching Metra trains…" : "No upcoming Metra trains returned yet.")
+                Text(model.hasFreshFetch(for: .metra)
+                     ? "No upcoming Metra trains."
+                     : "Fetching Metra trains…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -2583,9 +2589,9 @@ struct DashboardScreen: View {
         scheduled: [IntercampusArrival]
     ) -> some View {
         if arrivals.isEmpty {
-            Text(model.isRefreshing
-                 ? "Fetching Intercampus arrivals…"
-                 : "No upcoming Intercampus arrivals returned yet.")
+            Text(model.hasFreshFetch(for: .intercampus)
+                 ? "No upcoming Intercampus arrivals."
+                 : "Fetching Intercampus arrivals…")
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
             if !scheduled.isEmpty {
@@ -3194,9 +3200,9 @@ struct DashboardScreen: View {
         }()
 
         if arrivals.isEmpty {
-            Text(model.isRefreshing
-                 ? "Fetching arrivals…"
-                 : "No upcoming \(line.displayName) arrivals returned by CTA.")
+            Text(model.hasFreshFetch(for: .trains)
+                 ? "No upcoming \(line.displayName) arrivals."
+                 : "Fetching arrivals…")
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         } else {
@@ -3831,9 +3837,9 @@ struct DashboardScreen: View {
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                 .foregroundStyle(ChicagoPalette.Gray.light)
             if predictions.isEmpty {
-                Text(model.isRefreshing
-                     ? "Fetching predictions…"
-                     : "No upcoming buses returned by CTA.")
+                Text(model.hasFreshFetch(for: .buses)
+                     ? "No upcoming buses."
+                     : "Fetching predictions…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else if let minutes, let first {
@@ -4153,9 +4159,9 @@ struct DashboardScreen: View {
                     .foregroundStyle(ChicagoPalette.Gray.light)
             }
             if predictions.isEmpty {
-                Text(model.isRefreshing
-                     ? "Fetching Metra trains…"
-                     : "No upcoming Metra trains in the schedule window.")
+                Text(model.hasFreshFetch(for: .metra)
+                     ? "No upcoming Metra trains in the schedule window."
+                     : "Fetching Metra trains…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             } else if let group {
