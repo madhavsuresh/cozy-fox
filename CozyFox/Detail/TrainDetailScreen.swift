@@ -9,9 +9,10 @@ struct TrainDetailScreen: View {
     @Environment(AppViewModel.self) private var model
 
     var arrivals: [Arrival] {
-        model.snapshot.trainArrivals
+        let base = model.snapshot.trainArrivals
             .filter { $0.stationId == stationId || stationId == 0 }
             .sorted { $0.arrivalAt < $1.arrivalAt }
+        return model.filteredDisplayableTrainArrivals(base)
     }
 
     var body: some View {
@@ -27,12 +28,12 @@ struct TrainDetailScreen: View {
                     let grouped = Dictionary(grouping: arrivals, by: \.line)
                         .sorted { $0.key.displayName < $1.key.displayName }
                     ForEach(grouped, id: \.key) { line, items in
-                        let assessments = GhostTrainDetector().assessments(
+                        let reliabilities = TrainReliabilityScorer().catalogedAssessments(
                             for: items,
                             vehiclePositions: model.vehiclePositions.isEmpty
                                 ? model.snapshot.vehiclePositions
                                 : model.vehiclePositions,
-                            arrivalsFetchedAt: model.snapshot.trainsFetchedAt
+                            alerts: model.snapshot.activeAlerts
                         )
                         ChicagoCard(title: line.displayName,
                                     eyebrow: items.first?.stationName,
@@ -41,29 +42,35 @@ struct TrainDetailScreen: View {
                             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
                                 let first = items.first!
                                 let minutes = max(0, Int((first.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
-                                let firstAssessment = assessments[first.id]
-                                BigNumber(
-                                    minutes,
-                                    unit: "min",
-                                    size: .lg,
-                                    tone: first.isDelayed || firstAssessment?.isGhostLikely == true ? .alert : .primary,
-                                    accessibilityLabel: "\(minutes) minutes to next \(line.displayName) train"
-                                )
-                                if let badge = GhostTrainBadge(firstAssessment) {
-                                    badge
+                                let firstReliability = reliabilities[first.id]
+                                let suppressBigNumber = firstReliability?.needsMutedStyling ?? false
+                                if !suppressBigNumber {
+                                    BigNumber(
+                                        minutes,
+                                        unit: "min",
+                                        size: .lg,
+                                        tone: first.isDelayed ? .alert : .primary,
+                                        accessibilityLabel: "\(minutes) minutes to next \(line.displayName) train"
+                                    )
                                 }
                                 HeadwayDotStrip(
                                     arrivals: items.prefix(8).map(\.arrivalAt),
                                     accent: line.swiftUIColor,
                                     complications: items.prefix(8).map {
-                                        assessments[$0.id]?.headwayComplication
+                                        reliabilities[$0.id]?.headwayComplication
                                     }
                                 )
+                                if model.showTrainReliabilityDebug {
+                                    TrainReliabilityDebugOverlay(
+                                        arrivals: Array(items.prefix(4)),
+                                        reliabilities: reliabilities
+                                    )
+                                }
                                 Rectangle()
                                     .fill(ChicagoPalette.Gray.light.opacity(0.28))
                                     .frame(height: ChicagoSpacing.Stroke.hairline)
                                 ForEach(items.prefix(6), id: \.id) { arrival in
-                                    arrivalRow(arrival, assessment: assessments[arrival.id])
+                                    arrivalRow(arrival, reliability: reliabilities[arrival.id])
                                 }
                             }
                         }
@@ -77,27 +84,25 @@ struct TrainDetailScreen: View {
         }
     }
 
-    private func arrivalRow(_ arrival: Arrival, assessment: GhostTrainAssessment?) -> some View {
+    private func arrivalRow(_ arrival: Arrival, reliability: TrainArrivalReliability?) -> some View {
         let minutes = max(0, Int((arrival.arrivalAt.timeIntervalSince(.now) / 60).rounded()))
+        let muted = reliability?.needsMutedStyling ?? false
         return HStack(spacing: ChicagoSpacing.sm) {
             RouteBadge(line: arrival.line, size: .sm)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("→ \(arrival.destinationName)")
-                    .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
-                    .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    .lineLimit(1)
-                if let badge = GhostTrainBadge(assessment) {
-                    badge
-                }
-            }
+            Text("→ \(arrival.destinationName)")
+                .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                .foregroundStyle(ChicagoPalette.Gray.darkest)
+                .lineLimit(1)
             Spacer()
-            BigNumber(
-                minutes,
-                unit: "min",
-                size: .sm,
-                tone: arrival.isDelayed || assessment?.isGhostLikely == true ? .alert : .primary,
-                accessibilityLabel: "\(minutes) minutes"
-            )
+            if !muted {
+                BigNumber(
+                    minutes,
+                    unit: "min",
+                    size: .sm,
+                    tone: arrival.isDelayed ? .alert : .primary,
+                    accessibilityLabel: "\(minutes) minutes"
+                )
+            }
         }
     }
 
