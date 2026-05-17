@@ -557,6 +557,98 @@ public final class CachedBusDetour {
 }
 
 @Model
+public final class CachedBusPredictionResidual {
+    @Attribute(.unique) public var id: UUID
+    public var route: String
+    public var directionName: String
+    public var stopId: Int
+    public var vehicleId: String
+    public var predictedAt: Date
+    public var predictedArrivalAt: Date
+    public var confirmedArrivalAt: Date
+    public var horizonBucketRaw: String
+    public var hourOfWeek: Int
+    public var residualSeconds: Double
+
+    public init(residual: BusPredictionResidual) {
+        self.id = residual.id
+        self.route = residual.route
+        self.directionName = residual.directionName
+        self.stopId = residual.stopId
+        self.vehicleId = residual.vehicleId
+        self.predictedAt = residual.predictedAt
+        self.predictedArrivalAt = residual.predictedArrivalAt
+        self.confirmedArrivalAt = residual.confirmedArrivalAt
+        self.horizonBucketRaw = residual.horizonBucket.rawValue
+        self.hourOfWeek = residual.hourOfWeek
+        self.residualSeconds = residual.residualSeconds
+    }
+
+    public var asModel: BusPredictionResidual? {
+        guard let bucket = BusHorizonBucket(rawValue: horizonBucketRaw) else { return nil }
+        return BusPredictionResidual(
+            id: id,
+            route: route,
+            directionName: directionName,
+            stopId: stopId,
+            vehicleId: vehicleId,
+            predictedAt: predictedAt,
+            predictedArrivalAt: predictedArrivalAt,
+            confirmedArrivalAt: confirmedArrivalAt,
+            horizonBucket: bucket,
+            hourOfWeek: hourOfWeek,
+            residualSeconds: residualSeconds
+        )
+    }
+}
+
+@Model
+public final class CachedBusResidualQuantileBin {
+    /// Composite primary key — `BusResidualQuantileBin.key`.
+    @Attribute(.unique) public var key: String
+    public var route: String
+    public var directionName: String
+    public var stopId: Int
+    public var horizonBucketRaw: String
+    public var hourOfWeek: Int
+    public var sampleCount: Int
+    public var q10Seconds: Double
+    public var q50Seconds: Double
+    public var q90Seconds: Double
+    public var lastUpdated: Date
+
+    public init(bin: BusResidualQuantileBin) {
+        self.key = bin.key
+        self.route = bin.route
+        self.directionName = bin.directionName
+        self.stopId = bin.stopId
+        self.horizonBucketRaw = bin.horizonBucket.rawValue
+        self.hourOfWeek = bin.hourOfWeek
+        self.sampleCount = bin.sampleCount
+        self.q10Seconds = bin.q10Seconds
+        self.q50Seconds = bin.q50Seconds
+        self.q90Seconds = bin.q90Seconds
+        self.lastUpdated = bin.lastUpdated
+    }
+
+    public var asModel: BusResidualQuantileBin? {
+        guard let bucket = BusHorizonBucket(rawValue: horizonBucketRaw) else { return nil }
+        return BusResidualQuantileBin(
+            route: route,
+            directionName: directionName,
+            stopId: stopId,
+            horizonBucket: bucket,
+            hourOfWeek: hourOfWeek,
+            sampleCount: sampleCount,
+            q10Seconds: q10Seconds,
+            q50Seconds: q50Seconds,
+            q90Seconds: q90Seconds,
+            lastUpdated: lastUpdated
+        )
+    }
+}
+
+@Model
 public final class CachedAlert {
     @Attribute(.unique) public var id: String
     public var headline: String

@@ -17,6 +17,8 @@ public extension ModelContainer {
             CachedAlert.self,
             CachedBusDetour.self,
             CachedBusPattern.self,
+            CachedBusPredictionResidual.self,
+            CachedBusResidualQuantileBin.self,
         ])
         let groupURL = AppGroup.containerURL
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -43,6 +45,8 @@ public extension ModelContainer {
             CachedAlert.self,
             CachedBusDetour.self,
             CachedBusPattern.self,
+            CachedBusPredictionResidual.self,
+            CachedBusResidualQuantileBin.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])

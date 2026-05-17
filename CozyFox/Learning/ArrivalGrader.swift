@@ -61,10 +61,23 @@ final class ArrivalGrader {
     private let matcher = ArrivalGradeMatcher()
     private weak var biasStore: ArrivalBiasStore?
     private let calendar: Calendar
+    /// Phase 4 hook: when a *bus* arrival resolves, the grader builds a
+    /// `BusPredictionResidual` from `Resolution.deltaSeconds` + the
+    /// pending grade and hands it to this closure. The app wires it to
+    /// `TransitStore.recordBusResidual`; tests can substitute a capture
+    /// closure. Train resolutions don't fire this — the residual store
+    /// is intentionally bus-only because that's where calibration buys
+    /// the most ground (CTA train predictions are already much tighter).
+    private let residualRecorder: (@MainActor (BusPredictionResidual) -> Void)?
 
-    init(biasStore: ArrivalBiasStore?, calendar: Calendar = .current) {
+    init(
+        biasStore: ArrivalBiasStore?,
+        calendar: Calendar = .current,
+        residualRecorder: (@MainActor (BusPredictionResidual) -> Void)? = nil
+    ) {
         self.biasStore = biasStore
         self.calendar = calendar
+        self.residualRecorder = residualRecorder
     }
 
     // MARK: - Ingest
@@ -186,6 +199,33 @@ final class ArrivalGrader {
                 deltaSeconds: resolution.deltaSeconds,
                 at: resolution.observedCrossingAt
             )
+            // Phase 4: write a bus-only residual to the calibration
+            // store. `grade.line` is the route number for buses; for
+            // trains it's a `LineColor` raw value. Only fire when the
+            // line is *not* a known train color.
+            if let recorder = residualRecorder,
+               LineColor(rawValue: grade.line) == nil,
+               let stopIdInt = Int(exactly: grade.stopId) {
+                let horizonSeconds = grade.firstPredictedArrivalAt.timeIntervalSince(grade.firstPredictedAt)
+                let bucket = BusHorizonBucket.bucket(for: horizonSeconds)
+                let hourOfWeek = BusHourOfWeek.value(
+                    for: grade.firstPredictedArrivalAt,
+                    calendar: calendar
+                )
+                let residual = BusPredictionResidual(
+                    route: grade.line,
+                    directionName: grade.directionCode,
+                    stopId: stopIdInt,
+                    vehicleId: grade.runNumber,
+                    predictedAt: grade.firstPredictedAt,
+                    predictedArrivalAt: grade.firstPredictedArrivalAt,
+                    confirmedArrivalAt: resolution.observedCrossingAt,
+                    horizonBucket: bucket,
+                    hourOfWeek: hourOfWeek,
+                    residualSeconds: resolution.deltaSeconds
+                )
+                recorder(residual)
+            }
             pending.removeValue(
                 forKey: PendingGradeKey(
                     line: grade.line,

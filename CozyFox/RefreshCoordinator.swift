@@ -142,7 +142,13 @@ final class RefreshCoordinator {
         self.location = location
         self.walkingStore = walkingStore
         self.walkingResolver = WalkingDistanceResolver(store: walkingStore)
-        self.arrivalGrader = ArrivalGrader(biasStore: arrivalBiasStore)
+        self.arrivalGrader = ArrivalGrader(
+            biasStore: arrivalBiasStore,
+            residualRecorder: { [weak store] residual in
+                guard let store else { return }
+                Task { await store.recordBusResidual(residual) }
+            }
+        )
         self.walkSpeedTracker = WalkSpeedTracker(walkingStore: walkingStore)
         self.bikeSpeedTracker = BikeSpeedTracker(walkingStore: walkingStore)
         self.commuteLegTracker = CommuteLegTracker(preferences: preferences)
