@@ -1080,7 +1080,7 @@ struct DashboardScreen: View {
                                     reliabilities: reliabilities
                                 ),
                                 urgencies: tripTrainUrgencies)
-                if model.showTrainReliabilityDebug {
+                if model.showBusReliabilityDebug {
                     TrainReliabilityDebugOverlay(
                         arrivals: Array(displayableArrivals.prefix(4)),
                         reliabilities: reliabilities
@@ -3335,7 +3335,7 @@ struct DashboardScreen: View {
                                 arrivals: sortedTimes.prefix(8)
                             )
                         )
-                        if model.showTrainReliabilityDebug {
+                        if model.showBusReliabilityDebug {
                             TrainReliabilityDebugOverlay(
                                 arrivals: Array(sortedTimes.prefix(4)),
                                 reliabilities: reliabilities
