@@ -44,3 +44,55 @@ public struct LiveHTTPClient: HTTPClient {
         return URLSession(configuration: config)
     }
 }
+
+/// Transparent retry wrapper. Re-attempts on transport errors and 5xx
+/// responses with a short backoff so a single flaky fetch doesn't surface as
+/// "no data" in the UI. Honors `APIError.rateLimited` and 4xx as terminal.
+public struct RetryingHTTPClient: HTTPClient {
+    public let inner: HTTPClient
+    public let maxAttempts: Int
+    public let baseBackoff: TimeInterval
+
+    public init(inner: HTTPClient, maxAttempts: Int = 2, baseBackoff: TimeInterval = 0.4) {
+        self.inner = inner
+        self.maxAttempts = max(1, maxAttempts)
+        self.baseBackoff = max(0, baseBackoff)
+    }
+
+    public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var lastError: Error = APIError.transport("No attempts made")
+        for attempt in 0..<maxAttempts {
+            do {
+                let (data, response) = try await inner.data(for: request)
+                if (500...599).contains(response.statusCode), attempt < maxAttempts - 1 {
+                    lastError = APIError.http(status: response.statusCode)
+                    try? await Task.sleep(nanoseconds: backoffNanos(for: attempt))
+                    continue
+                }
+                return (data, response)
+            } catch let error as APIError {
+                lastError = error
+                guard Self.isRetryable(error), attempt < maxAttempts - 1 else { throw error }
+                try? await Task.sleep(nanoseconds: backoffNanos(for: attempt))
+            } catch {
+                lastError = error
+                guard attempt < maxAttempts - 1 else { throw error }
+                try? await Task.sleep(nanoseconds: backoffNanos(for: attempt))
+            }
+        }
+        throw lastError
+    }
+
+    private func backoffNanos(for attempt: Int) -> UInt64 {
+        let seconds = min(2.0, baseBackoff * pow(2.0, Double(attempt)))
+        return UInt64(seconds * 1_000_000_000)
+    }
+
+    private static func isRetryable(_ error: APIError) -> Bool {
+        switch error {
+        case .transport: return true
+        case .http(let status) where (500...599).contains(status): return true
+        case .http, .decoding, .invalidURL, .missingAPIKey, .rateLimited: return false
+        }
+    }
+}

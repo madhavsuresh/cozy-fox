@@ -99,6 +99,12 @@ final class RefreshCoordinator {
     private static let busHistoryEntriesPerVehicle: Int = 8
     private static let busHistoryTTL: TimeInterval = 12 * 60
 
+    /// Per-feed "have we heard back from the upstream recently?" signal,
+    /// mirrored onto `AppViewModel.feedFetchStates`. The dashboard's empty-
+    /// state copy ("Fetching arrivals…" vs "No upcoming X arrivals") branches
+    /// off this so a timeout doesn't masquerade as "no service".
+    private(set) var feedFetchStates: FeedFetchStates = .init()
+
     /// Latest Divvy GBFS station + free-bike snapshot, held in memory only.
     /// The dashboard's trip-pin Divvy chips read directly from this — the
     /// full station list never goes through SwiftData. Empty until the
@@ -170,7 +176,11 @@ final class RefreshCoordinator {
         self.portfolioMissCostCalculator = MissCostCalculator(scorer: portfolioScorer)
 
         let session = LiveHTTPClient.makeSharedSession()
-        let http = LiveHTTPClient(session: session)
+        // Wrap every upstream call in a one-retry layer so a single flaky
+        // request doesn't surface to the dashboard as "no upcoming arrivals".
+        // Retries only fire for transport errors and 5xx; 4xx and rate-limits
+        // are terminal.
+        let http: HTTPClient = RetryingHTTPClient(inner: LiveHTTPClient(session: session))
         self.trainClient = CTATrainClient(http: http) {
             APIKeys.read(.trainTracker)
         }
@@ -557,27 +567,59 @@ final class RefreshCoordinator {
             }
         }
 
-        var collected: [Arrival] = []
-        for target in targets {
-            do {
-                let result: [Arrival]
-                if let stopId = target.stopId {
-                    // stopId queries return one platform's arrivals (one
-                    // direction) — 4 is plenty.
-                    result = try await trainClient.fetchArrivals(stopId: stopId, max: 4)
-                } else {
-                    // mapId queries return every line at that station in both
-                    // directions sorted by time — needs enough headroom that
-                    // each (line × direction) pair gets a couple of arrivals.
-                    // At Belmont's 3 lines × 2 directions = 6 pairs, 12 keeps
-                    // both directions visible.
-                    result = try await trainClient.fetchArrivals(mapId: target.mapId, max: 12)
+        guard !targets.isEmpty else {
+            // Nothing pinned/nearby to fetch. Treat as a definitive "fresh
+            // empty" so the empty-state UI doesn't sit on "Fetching…".
+            recordFeedSuccess(.trains)
+            await arrivalGrader.ingestArrivals([])
+            return
+        }
+
+        // Fetch every target in parallel so a single slow upstream call
+        // (or its retry) doesn't block the rest. Each task captures the
+        // actor reference and returns its own result; failures collapse to
+        // an empty array but are tracked separately for fetch-state.
+        let client = trainClient
+        let outcomes: [TrainFetchOutcome] = await withTaskGroup(
+            of: TrainFetchOutcome.self,
+            returning: [TrainFetchOutcome].self
+        ) { group in
+            for target in targets {
+                group.addTask {
+                    do {
+                        let result: [Arrival]
+                        if let stopId = target.stopId {
+                            // stopId queries return one platform's arrivals
+                            // (one direction) — 4 is plenty.
+                            result = try await client.fetchArrivals(stopId: stopId, max: 4)
+                        } else {
+                            // mapId queries return every line at that station
+                            // in both directions sorted by time — needs enough
+                            // headroom that each (line × direction) pair gets
+                            // a couple of arrivals. At Belmont's 3 lines × 2
+                            // directions = 6 pairs, 12 keeps both directions
+                            // visible.
+                            result = try await client.fetchArrivals(mapId: target.mapId, max: 12)
+                        }
+                        return .succeeded(result)
+                    } catch {
+                        return .failed
+                    }
                 }
-                collected.append(contentsOf: result)
-            } catch {
-                // Skip on transient failure; existing cache stays.
-                continue
             }
+            var results: [TrainFetchOutcome] = []
+            for await outcome in group {
+                results.append(outcome)
+            }
+            return results
+        }
+
+        let collected = outcomes.flatMap(\.arrivals)
+        let anySucceeded = outcomes.contains(where: \.didSucceed)
+        if anySucceeded {
+            recordFeedSuccess(.trains)
+        } else {
+            recordFeedFailure(.trains)
         }
 
         if !collected.isEmpty {
@@ -588,6 +630,20 @@ final class RefreshCoordinator {
         // so callers see consistent behavior; the grader's own guard short-
         // circuits the empty case.
         await arrivalGrader.ingestArrivals(collected)
+    }
+
+    private enum TrainFetchOutcome: Sendable {
+        case succeeded([Arrival])
+        case failed
+
+        var arrivals: [Arrival] {
+            if case .succeeded(let value) = self { return value }
+            return []
+        }
+        var didSucceed: Bool {
+            if case .succeeded = self { return true }
+            return false
+        }
     }
 
     private func refreshBuses(
@@ -655,16 +711,42 @@ final class RefreshCoordinator {
             appendTarget(route: tripBus.route, stopId: stopId)
         }
 
-        var collected: [BusPrediction] = []
-        for target in targets {
-            do {
-                let result = try await busClient.fetchPredictions(
-                    route: target.route, stopId: target.stopId, top: 4
-                )
-                collected.append(contentsOf: result)
-            } catch {
-                continue
+        guard !targets.isEmpty else {
+            recordFeedSuccess(.buses)
+            await arrivalGrader.ingestBusPredictions([])
+            return
+        }
+
+        let client = busClient
+        let outcomes: [BusFetchOutcome] = await withTaskGroup(
+            of: BusFetchOutcome.self,
+            returning: [BusFetchOutcome].self
+        ) { group in
+            for target in targets {
+                group.addTask {
+                    do {
+                        let result = try await client.fetchPredictions(
+                            route: target.route, stopId: target.stopId, top: 4
+                        )
+                        return .succeeded(result)
+                    } catch {
+                        return .failed
+                    }
+                }
             }
+            var results: [BusFetchOutcome] = []
+            for await outcome in group {
+                results.append(outcome)
+            }
+            return results
+        }
+
+        let collected = outcomes.flatMap(\.predictions)
+        let anySucceeded = outcomes.contains(where: \.didSucceed)
+        if anySucceeded {
+            recordFeedSuccess(.buses)
+        } else {
+            recordFeedFailure(.buses)
         }
 
         if !collected.isEmpty {
@@ -674,6 +756,20 @@ final class RefreshCoordinator {
         // fetched predictions. The grader's own guard short-circuits the
         // empty case; calling unconditionally keeps behavior consistent.
         await arrivalGrader.ingestBusPredictions(collected)
+    }
+
+    private enum BusFetchOutcome: Sendable {
+        case succeeded([BusPrediction])
+        case failed
+
+        var predictions: [BusPrediction] {
+            if case .succeeded(let value) = self { return value }
+            return []
+        }
+        var didSucceed: Bool {
+            if case .succeeded = self { return true }
+            return false
+        }
     }
 
     private func refreshMetra(
@@ -742,7 +838,10 @@ final class RefreshCoordinator {
             }
         }
 
-        guard !targets.isEmpty else { return }
+        guard !targets.isEmpty else {
+            recordFeedSuccess(.metra)
+            return
+        }
 
         let updates = (try? await metraClient.fetchTripUpdates()) ?? []
         let updateByTripStop = Dictionary(grouping: updates) { update in
@@ -774,6 +873,12 @@ final class RefreshCoordinator {
         if !unique.isEmpty {
             await store.replaceMetraPredictions(unique)
         }
+        // Metra always has a definitive answer because the bundled GTFS
+        // schedule is in-process — even if the live trip-updates fetch
+        // fails, the schedule lookup completed. An empty `unique` here
+        // means no scheduled service in the window, which the UI should
+        // render as "no upcoming" rather than "still fetching".
+        recordFeedSuccess(.metra)
     }
 
     private func refreshIntercampus(
@@ -787,6 +892,7 @@ final class RefreshCoordinator {
         let shouldFetchNearby = prefs.includeIntercampus && prefs.isModeVisible(.intercampus)
         guard shouldFetchNearby || prefs.pinnedIntercampusStopId != nil || !plannedStopIds.isEmpty else {
             await store.replaceIntercampusArrivals([])
+            recordFeedSuccess(.intercampus)
             return
         }
 
@@ -813,6 +919,7 @@ final class RefreshCoordinator {
         }
         guard !targetStopIds.isEmpty else {
             await store.replaceIntercampusArrivals([])
+            recordFeedSuccess(.intercampus)
             return
         }
 
@@ -837,8 +944,39 @@ final class RefreshCoordinator {
                 now: .now
             )
             await store.replaceIntercampusArrivals(trafficAdjusted)
+            recordFeedSuccess(.intercampus)
         } catch {
             // Leave the previous cache in place on transient TripShot failures.
+            recordFeedFailure(.intercampus)
+        }
+    }
+
+    // MARK: - Feed fetch state
+
+    private func recordFeedSuccess(_ feed: TransitFeed) {
+        let now = Date()
+        switch feed {
+        case .trains:
+            feedFetchStates.trains.lastSuccessAt = now
+            feedFetchStates.trains.consecutiveFailures = 0
+        case .buses:
+            feedFetchStates.buses.lastSuccessAt = now
+            feedFetchStates.buses.consecutiveFailures = 0
+        case .metra:
+            feedFetchStates.metra.lastSuccessAt = now
+            feedFetchStates.metra.consecutiveFailures = 0
+        case .intercampus:
+            feedFetchStates.intercampus.lastSuccessAt = now
+            feedFetchStates.intercampus.consecutiveFailures = 0
+        }
+    }
+
+    private func recordFeedFailure(_ feed: TransitFeed) {
+        switch feed {
+        case .trains: feedFetchStates.trains.consecutiveFailures += 1
+        case .buses: feedFetchStates.buses.consecutiveFailures += 1
+        case .metra: feedFetchStates.metra.consecutiveFailures += 1
+        case .intercampus: feedFetchStates.intercampus.consecutiveFailures += 1
         }
     }
 

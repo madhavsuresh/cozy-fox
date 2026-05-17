@@ -58,6 +58,20 @@ final class AppViewModel {
     /// changes without diffing the full map.
     var portfolioRevision: Int = 0
 
+    /// Mirror of `RefreshCoordinator.feedFetchStates`. The dashboard's empty-
+    /// state branches read this to decide between "Fetching arrivals…" (we
+    /// haven't successfully heard back yet) and "No upcoming arrivals" (the
+    /// upstream answered, the answer is genuinely empty). Replaces the older
+    /// pattern of branching off the global `isRefreshing` flag, which flipped
+    /// false the moment the fetch loop ended regardless of outcome.
+    var feedFetchStates: FeedFetchStates = .init()
+
+    /// Has this feed responded successfully recently enough that we trust an
+    /// empty result for it? Convenience over `feedFetchStates.hasFreshFetch`.
+    func hasFreshFetch(for feed: TransitFeed) -> Bool {
+        feedFetchStates.hasFreshFetch(for: feed)
+    }
+
     /// User-controlled toggle for the 30 s ticker. Persisted to prefs.
     /// Observable so the dashboard switch reflects state instantly.
     var liveUpdatesEnabled: Bool = true
@@ -328,6 +342,7 @@ final class AppViewModel {
         portfolioEvaluations = refreshCoordinator.latestPortfolioEvaluations
         portfolioRecommendations = refreshCoordinator.latestPortfolioRecommendations
         portfolioRevision = refreshCoordinator.portfolioRevision
+        feedFetchStates = refreshCoordinator.feedFetchStates
     }
 
     func saveManualRoutePreferences(_ update: (inout UserRoutePreferences) -> Void) {
