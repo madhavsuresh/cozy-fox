@@ -1036,6 +1036,8 @@ struct DashboardScreen: View {
         let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
         let assessments = ghostAssessments(for: arrivals)
         let firstAssessment = first.flatMap { assessments[$0.id] }
+        let targetKey: TargetFetchKey? = train.stationId.map { .train(stationId: $0) }
+        let isFresh: Bool = targetKey.map(model.hasFreshFetch(forTarget:)) ?? model.hasFreshFetch(for: .trains)
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(spacing: ChicagoSpacing.xs) {
                 RouteBadge(line: train.line, size: .sm)
@@ -1043,6 +1045,9 @@ struct DashboardScreen: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Spacer()
+                if let targetKey {
+                    StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                }
             }
             if !alerts.isEmpty {
                 pinAlertInlineSummary(alerts)
@@ -1076,9 +1081,7 @@ struct DashboardScreen: View {
                                 ),
                                 urgencies: tripTrainUrgencies)
             } else {
-                Text(model.hasFreshFetch(for: .trains)
-                     ? "No upcoming arrivals."
-                     : "Fetching arrivals…")
+                Text(isFresh ? "No upcoming arrivals." : "Fetching arrivals…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -1097,6 +1100,8 @@ struct DashboardScreen: View {
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let first = predictions.first
         let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
+        let targetKey: TargetFetchKey? = bus.stopId.map { .bus(route: bus.route, stopId: $0) }
+        let isFresh: Bool = targetKey.map(model.hasFreshFetch(forTarget:)) ?? model.hasFreshFetch(for: .buses)
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(spacing: ChicagoSpacing.xs) {
                 RouteBadge(bus: bus.route, size: .sm)
@@ -1111,6 +1116,9 @@ struct DashboardScreen: View {
                     }
                 }
                 Spacer()
+                if let targetKey {
+                    StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                }
             }
             if !alerts.isEmpty {
                 pinAlertInlineSummary(alerts)
@@ -1152,9 +1160,7 @@ struct DashboardScreen: View {
                                 accent: ChicagoPalette.Mode.bus,
                                 urgencies: tripBusUrgencies)
             } else {
-                Text(model.hasFreshFetch(for: .buses)
-                     ? "No upcoming buses."
-                     : "Fetching predictions…")
+                Text(isFresh ? "No upcoming buses." : "Fetching predictions…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -1173,6 +1179,10 @@ struct DashboardScreen: View {
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let group = MetraDepartureGrouper.groups(from: predictions, limitPerGroup: 3).first
         let accent = MetraStationCatalog.route(id: metra.routeId)?.swiftUIColor ?? ChicagoPalette.bahama
+        let targetKey: TargetFetchKey? = metra.stationId.map {
+            .metra(routeId: metra.routeId, stationId: $0)
+        }
+        let isFresh: Bool = targetKey.map(model.hasFreshFetch(forTarget:)) ?? model.hasFreshFetch(for: .metra)
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(spacing: ChicagoSpacing.xs) {
                 RouteBadge(metra: metra.routeId, size: .sm)
@@ -1187,6 +1197,9 @@ struct DashboardScreen: View {
                     }
                 }
                 Spacer()
+                if let targetKey {
+                    StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                }
             }
             if !alerts.isEmpty {
                 pinAlertInlineSummary(alerts)
@@ -1207,9 +1220,7 @@ struct DashboardScreen: View {
                                 accent: accent,
                                 urgencies: tripMetraUrgencies)
             } else {
-                Text(model.hasFreshFetch(for: .metra)
-                     ? "No upcoming Metra trains."
-                     : "Fetching Metra trains…")
+                Text(isFresh ? "No upcoming Metra trains." : "Fetching Metra trains…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -1239,8 +1250,15 @@ struct DashboardScreen: View {
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                 }
                 Spacer()
+                StalenessIndicator(
+                    staleness: model.staleness(forTarget: .intercampus(stopId: intercampus.stopId))
+                )
             }
-            intercampusReadoutBody(arrivals: arrivals, scheduled: scheduled)
+            intercampusReadoutBody(
+                stopId: intercampus.stopId,
+                arrivals: arrivals,
+                scheduled: scheduled
+            )
         }
         .padding(ChicagoSpacing.md)
         .background(ChicagoPalette.Surface.elevated,
@@ -2535,6 +2553,9 @@ struct DashboardScreen: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(intercampusAccent)
                 Spacer()
+                StalenessIndicator(
+                    staleness: model.staleness(forTarget: .intercampus(stopId: choice.stop.id))
+                )
                 Text(choice.walkTimeText)
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .monospacedDigit()
@@ -2543,7 +2564,11 @@ struct DashboardScreen: View {
             Text(choice.direction.label)
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                 .foregroundStyle(ChicagoPalette.Gray.light)
-            intercampusReadoutBody(arrivals: arrivals, scheduled: scheduled)
+            intercampusReadoutBody(
+                stopId: choice.stop.id,
+                arrivals: arrivals,
+                scheduled: scheduled
+            )
         }
     }
 
@@ -2585,11 +2610,12 @@ struct DashboardScreen: View {
     /// list at the bottom. The empty-state copy matches the card.
     @ViewBuilder
     private func intercampusReadoutBody(
+        stopId: String,
         arrivals: [IntercampusArrival],
         scheduled: [IntercampusArrival]
     ) -> some View {
         if arrivals.isEmpty {
-            Text(model.hasFreshFetch(for: .intercampus)
+            Text(model.hasFreshFetch(forTarget: .intercampus(stopId: stopId))
                  ? "No upcoming Intercampus arrivals."
                  : "Fetching Intercampus arrivals…")
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -3198,9 +3224,16 @@ struct DashboardScreen: View {
             }
             return base
         }()
+        let targetKey: TargetFetchKey = .train(stationId: station.id)
+        // Subtle freshness chip — fixed-width row so the layout never reflows
+        // when the dot changes color or the label widens.
+        HStack {
+            Spacer()
+            StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+        }
 
         if arrivals.isEmpty {
-            Text(model.hasFreshFetch(for: .trains)
+            Text(model.hasFreshFetch(forTarget: targetKey)
                  ? "No upcoming \(line.displayName) arrivals."
                  : "Fetching arrivals…")
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption))
@@ -3820,12 +3853,14 @@ struct DashboardScreen: View {
             .sorted { $0.arrivalAt < $1.arrivalAt }
         let first = predictions.first
         let minutes = first.map { max(0, Int(($0.arrivalAt.timeIntervalSince(.now) / 60).rounded())) }
+        let targetKey: TargetFetchKey = .bus(route: route, stopId: stop.id)
         return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
             HStack(alignment: .firstTextBaseline) {
                 Text(stop.directionLabel.isEmpty ? stop.name : stop.directionLabel)
                     .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.Mode.bus)
                 Spacer()
+                StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
                 Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .monospacedDigit()
@@ -3837,7 +3872,7 @@ struct DashboardScreen: View {
                 .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                 .foregroundStyle(ChicagoPalette.Gray.light)
             if predictions.isEmpty {
-                Text(model.hasFreshFetch(for: .buses)
+                Text(model.hasFreshFetch(forTarget: targetKey)
                      ? "No upcoming buses."
                      : "Fetching predictions…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
