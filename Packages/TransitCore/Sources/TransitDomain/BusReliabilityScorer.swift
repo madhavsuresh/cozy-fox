@@ -458,6 +458,17 @@ public struct BusReliabilityScorer: Sendable {
         }
 
         let clamped = min(max(score, 0), 1)
+        // TODO: this score is stateless — recomputed from scratch every
+        // refresh tick — which means it can move down and back up as
+        // reason-code thresholds flicker (vehicle/prediction freshness
+        // crossing the 60s/120s lines, pattern data arriving, dyn
+        // transitions). Confidence in a single arrival should be
+        // approximately monotonic over time; getting there requires
+        // smoothing the threshold step functions or making the scorer
+        // memoryful. Telemetry first — see "Future work: temporal
+        // confidence telemetry" in docs/BUS_RELIABILITY.md for the
+        // plan to log per-prediction score trajectories and then
+        // decide which fix the data supports.
         let state: BusArrivalReliability.State = {
             if abstain { return .doNotDisplay }
             if clamped >= 0.78 { return .highConfidence }
