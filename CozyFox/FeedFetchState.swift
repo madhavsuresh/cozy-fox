@@ -5,6 +5,7 @@ enum TransitFeed: Sendable, Hashable {
     case trains
     case buses
     case metra
+    case amtrak
     case intercampus
 }
 
@@ -26,6 +27,9 @@ enum TargetFetchKey: Sendable, Hashable {
     /// schedule lookup is per (route, station) and we don't surface
     /// direction freshness separately.
     case metra(routeId: String, stationId: String)
+    /// Amtrak, keyed by route + station. Direction is ignored for the
+    /// same reason as Metra: schedule lookup is per (route, station).
+    case amtrak(routeId: String, stationId: String)
     /// Northwestern Intercampus, keyed by stop id.
     case intercampus(stopId: String)
 }
@@ -50,6 +54,7 @@ struct FeedFetchStates: Sendable, Equatable {
     var trains: FeedFetchState = .init()
     var buses: FeedFetchState = .init()
     var metra: FeedFetchState = .init()
+    var amtrak: FeedFetchState = .init()
     var intercampus: FeedFetchState = .init()
 
     /// Per-target `lastSuccessAt` map. This is the source of truth for the
@@ -81,6 +86,7 @@ struct FeedFetchStates: Sendable, Equatable {
         case .trains: state = trains
         case .buses: state = buses
         case .metra: state = metra
+        case .amtrak: state = amtrak
         case .intercampus: state = intercampus
         }
         guard let lastSuccessAt = state.lastSuccessAt else { return false }

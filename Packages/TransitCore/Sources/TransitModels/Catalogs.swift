@@ -28,6 +28,10 @@ public enum Catalogs {
                     _ = MetraStationCatalog.allRouteIds
                 }
                 group.addTask(priority: .utility) {
+                    _ = AmtrakStationCatalog.all
+                    _ = AmtrakStationCatalog.allRouteIds
+                }
+                group.addTask(priority: .utility) {
                     _ = BusStopCatalog.all
                     _ = BusStopCatalog.allRoutes
                     _ = BusStopCatalog.byRoute

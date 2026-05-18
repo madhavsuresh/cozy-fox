@@ -58,6 +58,16 @@ public actor TransitStore {
         try? ctx.save()
     }
 
+    public func replaceAmtrakPredictions(_ predictions: [AmtrakPrediction]) {
+        let now = Date()
+        let ctx = ModelContext(container)
+        try? ctx.delete(model: CachedAmtrakPrediction.self)
+        for prediction in predictions {
+            ctx.insert(CachedAmtrakPrediction(prediction: prediction, fetchedAt: now))
+        }
+        try? ctx.save()
+    }
+
     public func replaceIntercampusArrivals(_ arrivals: [IntercampusArrival]) {
         let now = Date()
         let ctx = ModelContext(container)

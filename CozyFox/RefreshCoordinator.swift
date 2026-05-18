@@ -35,6 +35,7 @@ final class RefreshCoordinator {
     private let trainClient: CTATrainClient
     private let busClient: CTABusClient
     private let metraClient: MetraClient
+    private let amtrakClient: AmtrakClient
     private let intercampusClient: NorthwesternIntercampusClient
     private let alertsClient: CTAAlertsClient
     private let divvyClient: DivvyGBFSClient
@@ -43,6 +44,7 @@ final class RefreshCoordinator {
     private let stationResolver = NearestStationResolver()
     private let busStopResolver = NearestBusStopResolver()
     private let metraStationResolver = NearestMetraStationResolver()
+    private let amtrakStationResolver = NearestAmtrakStationResolver()
     private let intercampusStopResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
     private let intercampusTrafficResolver = IntercampusTrafficETAResolver()
     private let corridorResolver = TransitCorridorResolver()
@@ -190,6 +192,7 @@ final class RefreshCoordinator {
         self.metraClient = MetraClient(http: http) {
             APIKeys.read(.metra)
         }
+        self.amtrakClient = AmtrakClient(http: http)
         self.intercampusClient = NorthwesternIntercampusClient(http: http)
         self.alertsClient = CTAAlertsClient(http: http)
         self.divvyClient = DivvyGBFSClient(http: http)
@@ -239,6 +242,7 @@ final class RefreshCoordinator {
             }
             group.addTask { await self.refreshBuses(prefs: prefs, lastLocation: lastLocation) }
             group.addTask { await self.refreshMetra(prefs: prefs, lastLocation: lastLocation) }
+            group.addTask { await self.refreshAmtrak(prefs: prefs, lastLocation: lastLocation) }
             group.addTask { await self.refreshIntercampus(prefs: prefs, lastLocation: lastLocation) }
             group.addTask {
                 if prefs.isModeVisible(.bikes) {
@@ -908,6 +912,113 @@ final class RefreshCoordinator {
         recordFeedSuccess(.metra)
     }
 
+    private func refreshAmtrak(
+        prefs: UserRoutePreferences,
+        lastLocation: LastKnownLocation?
+    ) async {
+        var targets: [(routeId: String, stationId: String, directionId: Int?)] = []
+        var seenTargets: Set<AmtrakTargetKey> = []
+        func appendTarget(routeId: String, stationId: String, directionId: Int?) {
+            if seenTargets.insert(AmtrakTargetKey(routeId: routeId, stationId: stationId)).inserted {
+                targets.append((routeId, stationId, directionId))
+            }
+        }
+
+        let visibleAmtrakPrefs = prefs.amtrak.filter {
+            prefs.isAmtrakRouteVisible($0.routeId) || prefs.pinnedAmtrakRoute == $0.routeId
+        }
+        if !visibleAmtrakPrefs.isEmpty {
+            for pref in visibleAmtrakPrefs {
+                appendTarget(routeId: pref.routeId, stationId: pref.stationId, directionId: pref.directionId)
+            }
+        } else if prefs.isModeVisible(.amtrak),
+                  prefs.nearbyDiscoveryEnabled,
+                  let lastLocation {
+            let nearest = amtrakStationResolver.nearestPerRoute(
+                to: (lastLocation.latitude, lastLocation.longitude),
+                limit: 5,
+                catalog: AmtrakStationCatalog.all.filter { station in
+                    station.servedRoutes.contains(where: prefs.isAmtrakRouteVisible)
+                }
+            )
+            for entry in nearest {
+                appendTarget(routeId: entry.routeId, stationId: entry.station.id, directionId: nil)
+            }
+        }
+
+        for tripAmtrak in prefs.plannedTripPin?.amtrakLegs ?? [] {
+            guard let stationId = tripAmtrak.stationId else { continue }
+            appendTarget(routeId: tripAmtrak.routeId, stationId: stationId, directionId: tripAmtrak.directionId)
+        }
+
+        if let pinnedRoute = prefs.pinnedAmtrakRoute, let lastLocation {
+            if let pinnedStationId = prefs.pinnedAmtrakStationId,
+               let pinnedStation = AmtrakStationCatalog.station(id: pinnedStationId),
+               pinnedStation.servedRoutes.contains(pinnedRoute)
+            {
+                appendTarget(
+                    routeId: pinnedRoute,
+                    stationId: pinnedStationId,
+                    directionId: prefs.pinnedAmtrakDirectionId
+                )
+            }
+
+            let nearest = amtrakStationResolver.closestStations(
+                onRoute: pinnedRoute,
+                to: (lastLocation.latitude, lastLocation.longitude),
+                limit: 3,
+                catalog: AmtrakStationCatalog.all
+            )
+            for station in nearest {
+                appendTarget(
+                    routeId: pinnedRoute,
+                    stationId: station.station.id,
+                    directionId: prefs.pinnedAmtrakDirectionId
+                )
+            }
+        }
+
+        guard !targets.isEmpty else {
+            recordFeedSuccess(.amtrak)
+            return
+        }
+
+        let updates = (try? await amtrakClient.fetchLiveUpdates()) ?? []
+        let updateByTripStop = Dictionary(grouping: updates) { update in
+            "\(update.tripId)|\(update.stopId)"
+        }
+
+        var collected: [AmtrakPrediction] = []
+        let amtrakNow = Date()
+        for target in targets {
+            let scheduled = AmtrakScheduleCatalog.upcomingDepartures(
+                stationId: target.stationId,
+                routeId: target.routeId,
+                directionId: target.directionId,
+                now: amtrakNow,
+                limit: 4
+            )
+            collected.append(contentsOf: scheduled.map { prediction in
+                let key = "\(prediction.tripId)|\(prediction.stationId)"
+                guard let latest = updateByTripStop[key]?.max(by: { $0.generatedAt < $1.generatedAt }) else {
+                    return prediction
+                }
+                return prediction.applying(latest)
+            })
+            feedFetchStates.recordSuccess(
+                .amtrak(routeId: target.routeId, stationId: target.stationId),
+                at: amtrakNow
+            )
+        }
+
+        var seen: Set<String> = []
+        let unique = collected
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+            .filter { seen.insert($0.id).inserted }
+        await store.replaceAmtrakPredictions(unique)
+        recordFeedSuccess(.amtrak)
+    }
+
     private func refreshIntercampus(
         prefs: UserRoutePreferences,
         lastLocation: LastKnownLocation?
@@ -1002,6 +1113,9 @@ final class RefreshCoordinator {
         case .metra:
             feedFetchStates.metra.lastSuccessAt = now
             feedFetchStates.metra.consecutiveFailures = 0
+        case .amtrak:
+            feedFetchStates.amtrak.lastSuccessAt = now
+            feedFetchStates.amtrak.consecutiveFailures = 0
         case .intercampus:
             feedFetchStates.intercampus.lastSuccessAt = now
             feedFetchStates.intercampus.consecutiveFailures = 0
@@ -1013,6 +1127,7 @@ final class RefreshCoordinator {
         case .trains: feedFetchStates.trains.consecutiveFailures += 1
         case .buses: feedFetchStates.buses.consecutiveFailures += 1
         case .metra: feedFetchStates.metra.consecutiveFailures += 1
+        case .amtrak: feedFetchStates.amtrak.consecutiveFailures += 1
         case .intercampus: feedFetchStates.intercampus.consecutiveFailures += 1
         }
     }
@@ -1096,10 +1211,14 @@ final class RefreshCoordinator {
         let visibleTrackedMetra = prefs.metra
             .filter { prefs.isMetraRouteVisible($0.routeId) || prefs.pinnedMetraRoute == $0.routeId }
             .map(\.routeId)
+        let visibleTrackedAmtrak = prefs.amtrak
+            .filter { prefs.isAmtrakRouteVisible($0.routeId) || prefs.pinnedAmtrakRoute == $0.routeId }
+            .map(\.routeId)
 
         routes.formUnion(visibleTrackedLines)
         routes.formUnion(visibleTrackedBuses)
         routes.formUnion(visibleTrackedMetra)
+        routes.formUnion(visibleTrackedAmtrak)
         if let pinnedLine = prefs.pinnedLine {
             routes.insert(pinnedLine.rawValue.capitalized)
         }
@@ -1109,16 +1228,21 @@ final class RefreshCoordinator {
         if let pinnedMetraRoute = prefs.pinnedMetraRoute {
             routes.insert(pinnedMetraRoute)
         }
+        if let pinnedAmtrakRoute = prefs.pinnedAmtrakRoute {
+            routes.insert(pinnedAmtrakRoute)
+        }
         routes.formUnion(prefs.plannedTripPin?.trainLegs.map { $0.line.rawValue.capitalized } ?? [])
         routes.formUnion(prefs.plannedTripPin?.busLegs.map(\.route) ?? [])
         routes.formUnion(prefs.plannedTripPin?.metraLegs.map(\.routeId) ?? [])
+        routes.formUnion(prefs.plannedTripPin?.amtrakLegs.map(\.routeId) ?? [])
 
         async let metraAlerts = (try? metraClient.fetchAlerts()) ?? []
+        async let amtrakNotices = (try? amtrakClient.fetchServiceNotices()) ?? []
         do {
             let alerts = try await alertsClient.fetchActiveAlerts(forRoutes: Array(routes))
-            await store.replaceAlerts(alerts + (await metraAlerts))
+            await store.replaceAlerts(alerts + (await metraAlerts) + (await amtrakNotices))
         } catch {
-            await store.replaceAlerts(await metraAlerts)
+            await store.replaceAlerts((await metraAlerts) + (await amtrakNotices))
         }
     }
 
@@ -1396,6 +1520,11 @@ private struct BusTargetKey: Hashable {
 }
 
 private struct MetraTargetKey: Hashable {
+    let routeId: String
+    let stationId: String
+}
+
+private struct AmtrakTargetKey: Hashable {
     let routeId: String
     let stationId: String
 }

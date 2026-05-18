@@ -183,6 +183,74 @@ public final class CachedMetraPrediction {
 }
 
 @Model
+public final class CachedAmtrakPrediction {
+    @Attribute(.unique) public var id: String
+    public var routeId: String
+    public var routeName: String
+    public var routeKindRaw: Int
+    public var tripId: String
+    public var trainNumber: String
+    public var stationId: String
+    public var stationName: String
+    public var destinationName: String
+    public var directionId: Int?
+    public var generatedAt: Date
+    public var scheduledAt: Date
+    public var arrivalAt: Date
+    public var delaySeconds: Int?
+    public var isDelayed: Bool
+    public var isCanceled: Bool
+    public var isScheduled: Bool
+    public var sourceLabel: String
+    public var fetchedAt: Date
+
+    public init(prediction: AmtrakPrediction, fetchedAt: Date) {
+        self.id = prediction.id
+        self.routeId = prediction.routeId
+        self.routeName = prediction.routeName
+        self.routeKindRaw = prediction.routeKind.rawValue
+        self.tripId = prediction.tripId
+        self.trainNumber = prediction.trainNumber
+        self.stationId = prediction.stationId
+        self.stationName = prediction.stationName
+        self.destinationName = prediction.destinationName
+        self.directionId = prediction.directionId
+        self.generatedAt = prediction.generatedAt
+        self.scheduledAt = prediction.scheduledAt
+        self.arrivalAt = prediction.arrivalAt
+        self.delaySeconds = prediction.delaySeconds
+        self.isDelayed = prediction.isDelayed
+        self.isCanceled = prediction.isCanceled
+        self.isScheduled = prediction.isScheduled
+        self.sourceLabel = prediction.sourceLabel
+        self.fetchedAt = fetchedAt
+    }
+
+    public var asModel: AmtrakPrediction {
+        AmtrakPrediction(
+            id: id,
+            routeId: routeId,
+            routeName: routeName,
+            routeKind: AmtrakRouteKind(rawValue: routeKindRaw) ?? .other,
+            tripId: tripId,
+            trainNumber: trainNumber,
+            stationId: stationId,
+            stationName: stationName,
+            destinationName: destinationName,
+            directionId: directionId,
+            generatedAt: generatedAt,
+            scheduledAt: scheduledAt,
+            arrivalAt: arrivalAt,
+            delaySeconds: delaySeconds,
+            isDelayed: isDelayed,
+            isCanceled: isCanceled,
+            isScheduled: isScheduled,
+            sourceLabel: sourceLabel
+        )
+    }
+}
+
+@Model
 public final class CachedVehiclePosition {
     @Attribute(.unique) public var key: String
     public var vehicleId: String
@@ -702,6 +770,8 @@ public final class CachedAlert {
     public var headline: String
     public var shortDescription: String
     public var severityRaw: String
+    public var providerRaw: String?
+    public var sourceLabel: String?
     public var impactedRoutes: [String]
     public var beginsAt: Date
     public var endsAt: Date?
@@ -718,6 +788,8 @@ public final class CachedAlert {
         self.headline = alert.headline
         self.shortDescription = alert.shortDescription
         self.severityRaw = alert.severity.rawValue
+        self.providerRaw = alert.provider.rawValue
+        self.sourceLabel = alert.sourceLabel
         self.impactedRoutes = alert.impactedRoutes
         self.beginsAt = alert.beginsAt
         self.endsAt = alert.endsAt
@@ -728,11 +800,14 @@ public final class CachedAlert {
 
     public var asModel: ServiceAlert {
         let severity = AlertSeverity(rawValue: severityRaw) ?? .low
+        let provider = providerRaw.flatMap(ServiceAlertProvider.init(rawValue:)) ?? .cta
         return ServiceAlert(
             id: id,
             headline: headline,
             shortDescription: shortDescription,
             severity: severity,
+            provider: provider,
+            sourceLabel: sourceLabel ?? (provider == .amtrak ? "Notice" : "Service alert"),
             impactedRoutes: impactedRoutes,
             impactedLineColors: impactedRoutes.compactMap { LineColor(ctaRouteCode: $0) },
             beginsAt: beginsAt,

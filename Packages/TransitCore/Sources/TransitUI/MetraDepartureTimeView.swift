@@ -262,3 +262,78 @@ public struct MetraDepartureListView: View {
         prediction.isDelayed || prediction.isCanceled ? ChicagoPalette.starRed : ChicagoPalette.Gray.darkest
     }
 }
+
+public struct AmtrakDepartureListView: View {
+    public let predictions: [AmtrakPrediction]
+    public let maxCount: Int
+    public let density: MetraDepartureListView.Density
+    public let accessibilityPrefix: String
+
+    public init(
+        predictions: [AmtrakPrediction],
+        maxCount: Int = 3,
+        density: MetraDepartureListView.Density = .regular,
+        accessibilityPrefix: String = "Amtrak departures"
+    ) {
+        self.predictions = predictions
+        self.maxCount = maxCount
+        self.density = density
+        self.accessibilityPrefix = accessibilityPrefix
+    }
+
+    public var body: some View {
+        if displayed.isEmpty {
+            Text("No departures")
+                .font(density.detailFont)
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+        } else {
+            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                ForEach(displayed, id: \.id) { prediction in
+                    row(prediction)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel)
+        }
+    }
+
+    private func row(_ prediction: AmtrakPrediction) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: ChicagoSpacing.xs) {
+            Text(AmtrakDepartureFormatter.timeString(prediction.arrivalAt))
+                .font(density.timeFont)
+                .foregroundStyle(prediction.isDelayed || prediction.isCanceled ? ChicagoPalette.starRed : ChicagoPalette.Gray.darkest)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(width: density.timeWidth, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(prediction.destinationName)
+                    .font(density.destinationFont)
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    if !prediction.trainNumber.isEmpty {
+                        Text("\(prediction.routeKind.label) \(prediction.trainNumber)")
+                    }
+                    Text(prediction.sourceLabel)
+                }
+                .font(density.detailFont)
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+                .lineLimit(1)
+            }
+        }
+    }
+
+    private var displayed: [AmtrakPrediction] {
+        Array(predictions.prefix(maxCount))
+    }
+
+    private var accessibilityLabel: String {
+        let departures = displayed.map { prediction in
+            "\(AmtrakDepartureFormatter.accessibilityString(prediction.arrivalAt)) to \(prediction.destinationName), \(prediction.sourceLabel)"
+        }
+        .joined(separator: ", ")
+        return "\(accessibilityPrefix): \(departures)"
+    }
+}

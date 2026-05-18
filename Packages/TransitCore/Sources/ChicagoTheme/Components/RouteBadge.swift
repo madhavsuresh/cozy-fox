@@ -11,6 +11,7 @@ public struct RouteBadge: View {
         case lLine(LineColor)
         case bus(route: String)
         case metra(routeId: String)
+        case amtrak(routeId: String)
     }
 
     public enum Size: Sendable {
@@ -53,6 +54,11 @@ public struct RouteBadge: View {
         self.size = size
     }
 
+    public init(amtrak routeId: String, size: Size = .md) {
+        self.kind = .amtrak(routeId: routeId)
+        self.size = size
+    }
+
     public var body: some View {
         Text(label)
             .font(badgeFont)
@@ -72,6 +78,7 @@ public struct RouteBadge: View {
         case .lLine(let line): line.shortName
         case .bus(let route): "#\(route)"
         case .metra(let routeId): routeId
+        case .amtrak(let routeId): AmtrakStationCatalog.route(id: routeId)?.displayCode ?? "ATK"
         }
     }
 
@@ -81,6 +88,8 @@ public struct RouteBadge: View {
         case .bus(let route): "Bus route \(route)"
         case .metra(let routeId):
             MetraStationCatalog.route(id: routeId)?.displayName ?? "Metra \(routeId)"
+        case .amtrak(let routeId):
+            AmtrakStationCatalog.route(id: routeId)?.displayName ?? "Amtrak \(routeId)"
         }
     }
 
@@ -90,6 +99,8 @@ public struct RouteBadge: View {
         case .bus: ChicagoPalette.Mode.bus
         case .metra(let routeId):
             MetraStationCatalog.route(id: routeId)?.swiftUIColor ?? ChicagoPalette.bahama
+        case .amtrak(let routeId):
+            AmtrakStationCatalog.route(id: routeId)?.swiftUIColor ?? ChicagoPalette.flagBlue
         }
     }
 
@@ -99,6 +110,8 @@ public struct RouteBadge: View {
         case .bus: .white
         case .metra(let routeId):
             MetraStationCatalog.route(id: routeId)?.contrastingText ?? .white
+        case .amtrak(let routeId):
+            AmtrakStationCatalog.route(id: routeId)?.contrastingText ?? .white
         }
     }
 

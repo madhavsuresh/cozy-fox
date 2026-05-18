@@ -7,6 +7,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var trainArrivals: [Arrival]
     public var busPredictions: [BusPrediction]
     public var metraPredictions: [MetraPrediction]
+    public var amtrakPredictions: [AmtrakPrediction]
     public var intercampusArrivals: [IntercampusArrival]
     public var vehiclePositions: [VehiclePosition]
     public var nearestBike: NearestBikePick?
@@ -28,6 +29,7 @@ public struct TransitSnapshot: Sendable, Hashable {
     public var trainsFetchedAt: Date?
     public var busesFetchedAt: Date?
     public var metraFetchedAt: Date?
+    public var amtrakFetchedAt: Date?
     public var intercampusFetchedAt: Date?
     public var bikesFetchedAt: Date?
     public var alertsFetchedAt: Date?
@@ -38,6 +40,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         trainArrivals: [Arrival] = [],
         busPredictions: [BusPrediction] = [],
         metraPredictions: [MetraPrediction] = [],
+        amtrakPredictions: [AmtrakPrediction] = [],
         intercampusArrivals: [IntercampusArrival] = [],
         vehiclePositions: [VehiclePosition] = [],
         nearestBike: NearestBikePick? = nil,
@@ -51,6 +54,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         trainsFetchedAt: Date? = nil,
         busesFetchedAt: Date? = nil,
         metraFetchedAt: Date? = nil,
+        amtrakFetchedAt: Date? = nil,
         intercampusFetchedAt: Date? = nil,
         bikesFetchedAt: Date? = nil,
         alertsFetchedAt: Date? = nil,
@@ -60,6 +64,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.trainArrivals = trainArrivals
         self.busPredictions = busPredictions
         self.metraPredictions = metraPredictions
+        self.amtrakPredictions = amtrakPredictions
         self.intercampusArrivals = intercampusArrivals
         self.vehiclePositions = vehiclePositions
         self.nearestBike = nearestBike
@@ -73,6 +78,7 @@ public struct TransitSnapshot: Sendable, Hashable {
         self.trainsFetchedAt = trainsFetchedAt
         self.busesFetchedAt = busesFetchedAt
         self.metraFetchedAt = metraFetchedAt
+        self.amtrakFetchedAt = amtrakFetchedAt
         self.intercampusFetchedAt = intercampusFetchedAt
         self.bikesFetchedAt = bikesFetchedAt
         self.alertsFetchedAt = alertsFetchedAt
@@ -99,6 +105,7 @@ public struct TransitSnapshot: Sendable, Hashable {
             trainsFetchedAt,
             busesFetchedAt,
             metraFetchedAt,
+            amtrakFetchedAt,
             intercampusFetchedAt,
             bikesFetchedAt,
             alertsFetchedAt,

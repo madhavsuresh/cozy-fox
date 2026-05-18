@@ -132,7 +132,7 @@ struct SettingsScreen: View {
                         set: { prefs.autoStartLiveActivity = $0; save() }
                        ))
                 .disabled(prefs.alwaysShowLiveActivity)
-                Toggle("Show nearby trains and buses",
+                Toggle("Show nearby transit",
                        isOn: Binding(
                         get: { prefs.nearbyDiscoveryEnabled },
                         set: { prefs.nearbyDiscoveryEnabled = $0; save(refresh: true) }
@@ -140,7 +140,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Behavior")
             } footer: {
-                Text("When off, the dashboard only fetches your pinned routes — tap “Show nearby” on the home screen to query nearby trains and buses on demand.")
+                Text("When off, the dashboard only fetches your pinned routes — tap “Show nearby” on the home screen to query nearby trains, buses, Metra, and Amtrak on demand.")
             }
 
             Section("Tracked trains") {
@@ -355,6 +355,7 @@ struct SettingsScreen: View {
             modeToggle(.trains, title: "Trains", systemImage: "tram.fill")
             modeToggle(.buses, title: "Buses", systemImage: "bus.fill")
             modeToggle(.metra, title: "Metra", systemImage: "train.side.front.car")
+            modeToggle(.amtrak, title: "Amtrak", systemImage: "tram")
             modeToggle(.bikes, title: "Divvy", systemImage: "bicycle")
             modeToggle(.intercampus, title: "Intercampus", systemImage: "bus.fill")
 
@@ -411,6 +412,24 @@ struct SettingsScreen: View {
                     }
                 }
             }
+
+            routeVisibilityHeader(
+                title: "Amtrak routes",
+                selected: visibleAmtrakRouteCount,
+                total: AmtrakStationCatalog.routes.count,
+                allAction: { setAllAmtrakRoutes(visible: true) },
+                noneAction: { setAllAmtrakRoutes(visible: false) }
+            )
+            LazyVGrid(columns: visibilityChipColumns, alignment: .leading, spacing: ChicagoSpacing.xs) {
+                ForEach(AmtrakStationCatalog.routes, id: \.id) { route in
+                    VisibilityRouteChip(
+                        isVisible: isAmtrakRouteSelected(route.id),
+                        action: { toggleAmtrakRoute(route.id) }
+                    ) {
+                        RouteBadge(amtrak: route.id, size: .sm)
+                    }
+                }
+            }
         } header: {
             Text("Visible service")
         }
@@ -432,6 +451,10 @@ struct SettingsScreen: View {
         MetraStationCatalog.routes.map(\.id).filter(isMetraRouteSelected).count
     }
 
+    private var visibleAmtrakRouteCount: Int {
+        AmtrakStationCatalog.routes.map(\.id).filter(isAmtrakRouteSelected).count
+    }
+
     private func isTrainLineSelected(_ line: LineColor) -> Bool {
         !prefs.hiddenTrainLines.contains(line)
     }
@@ -442,6 +465,10 @@ struct SettingsScreen: View {
 
     private func isMetraRouteSelected(_ routeId: String) -> Bool {
         !prefs.hiddenMetraRoutes.contains(routeId)
+    }
+
+    private func isAmtrakRouteSelected(_ routeId: String) -> Bool {
+        !prefs.hiddenAmtrakRoutes.contains(routeId)
     }
 
     private func modeToggle(
@@ -467,7 +494,7 @@ struct SettingsScreen: View {
             ChicagoPalette.Mode.divvy
         case .intercampus:
             ChicagoPalette.Mode.intercampus
-        case .trains, .metra:
+        case .trains, .metra, .amtrak:
             ChicagoPalette.Gray.dark
         }
     }
@@ -571,6 +598,25 @@ struct SettingsScreen: View {
         save(refresh: true)
     }
 
+    private func toggleAmtrakRoute(_ routeId: String) {
+        if prefs.hiddenAmtrakRoutes.contains(routeId) {
+            prefs.hiddenAmtrakRoutes.remove(routeId)
+        } else {
+            prefs.hiddenAmtrakRoutes.insert(routeId)
+        }
+        save(refresh: true)
+    }
+
+    private func setAllAmtrakRoutes(visible: Bool) {
+        let routeIds = AmtrakStationCatalog.routes.map(\.id)
+        if visible {
+            prefs.hiddenAmtrakRoutes.subtract(Set(routeIds))
+        } else {
+            prefs.hiddenAmtrakRoutes.formUnion(routeIds)
+        }
+        save(refresh: true)
+    }
+
     private func save(refresh: Bool = false) {
         model.preferences.saveRoutePreferences(prefs)
         model.pinRevision += 1
@@ -603,6 +649,10 @@ struct SettingsScreen: View {
             prefs.pinnedMetraStationId = nil
             prefs.pinnedMetraDirectionId = nil
             prefs.pinnedMetraDestination = nil
+            prefs.pinnedAmtrakRoute = nil
+            prefs.pinnedAmtrakStationId = nil
+            prefs.pinnedAmtrakDirectionId = nil
+            prefs.pinnedAmtrakDestination = nil
             prefs.autoPinnedDirection = nil
             prefs.pinSource = .manual
         }

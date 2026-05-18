@@ -65,6 +65,8 @@ struct SnapshotWalkingDistanceReader: WalkingDistanceReader {
             destinationKey = WalkingDistanceStore.busStopDestinationKey(stopId: id)
         case .metra(let id):
             destinationKey = WalkingDistanceStore.metraStationDestinationKey(stationId: id)
+        case .amtrak(let id):
+            destinationKey = WalkingDistanceStore.amtrakStationDestinationKey(stationId: id)
         case .intercampus(let id):
             destinationKey = WalkingDistanceStore.intercampusStopDestinationKey(stopId: id)
         }

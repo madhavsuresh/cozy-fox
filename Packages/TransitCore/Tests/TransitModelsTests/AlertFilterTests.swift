@@ -6,6 +6,7 @@ import Testing
 struct AlertFilterTests {
     private func alert(
         id: String = "a",
+        provider: ServiceAlertProvider = .cta,
         lines: [LineColor] = [],
         routes: [String] = []
     ) -> ServiceAlert {
@@ -14,6 +15,7 @@ struct AlertFilterTests {
             headline: "h",
             shortDescription: "d",
             severity: .low,
+            provider: provider,
             impactedRoutes: routes,
             impactedLineColors: lines,
             beginsAt: .distantPast,
@@ -58,5 +60,39 @@ struct AlertFilterTests {
         ]
         let result = alerts.filtered(forLine: .red, busRoute: "22")
         #expect(Set(result.map(\.id)) == ["red", "22"])
+    }
+
+    @Test func amtrakProviderWideNoticeRequiresAmtrakContext() {
+        let alerts = [
+            alert(id: "amtrak", provider: .amtrak),
+            alert(id: "red", lines: [.red])
+        ]
+
+        let ctaOnly = alerts.filtered(
+            forLines: [.red],
+            busRoutes: [],
+            metraRoutes: [],
+            amtrakRoutes: []
+        )
+        #expect(ctaOnly.map(\.id) == ["red"])
+
+        let withAmtrak = alerts.filtered(
+            forLines: [],
+            busRoutes: [],
+            metraRoutes: [],
+            amtrakRoutes: ["51"]
+        )
+        #expect(withAmtrak.map(\.id) == ["amtrak"])
+    }
+
+    @Test func amtrakRouteSpecificNoticeMatchesOnlyThatRoute() {
+        let alerts = [
+            alert(id: "southwest-chief", provider: .amtrak, routes: ["51"]),
+            alert(id: "acela", provider: .amtrak, routes: ["40751"])
+        ]
+
+        let result = alerts.filtered(forLine: nil, busRoute: nil, amtrakRoute: "51")
+
+        #expect(result.map(\.id) == ["southwest-chief"])
     }
 }

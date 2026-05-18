@@ -80,6 +80,8 @@ struct TripHistoryRanker: Sendable {
         case .metra(let route):
             mode = .metra
             routeId = route
+        case .amtrak:
+            return 0
         case .unknown:
             return 0
         }
@@ -144,6 +146,8 @@ struct TripHistoryRanker: Sendable {
             return observation.busRoute == route
         case .metra(let route):
             return observation.metraRoute == route
+        case .amtrak:
+            return false
         case .unknown:
             return false
         }
@@ -173,6 +177,8 @@ struct TripHistoryRanker: Sendable {
             return "bus:\(route)"
         case .metra(let route):
             return "metra:\(route)"
+        case .amtrak(let route):
+            return "amtrak:\(route)"
         case .unknown(let raw):
             return "unknown:\(raw)"
         }

@@ -21,6 +21,7 @@ public struct SnapshotReader: Sendable {
         let trainArrivals = (try? context.fetch(FetchDescriptor<CachedTrainArrival>())) ?? []
         let busPredictions = (try? context.fetch(FetchDescriptor<CachedBusPrediction>())) ?? []
         let metraPredictions = (try? context.fetch(FetchDescriptor<CachedMetraPrediction>())) ?? []
+        let amtrakPredictions = (try? context.fetch(FetchDescriptor<CachedAmtrakPrediction>())) ?? []
         let vehiclePositions = (try? context.fetch(FetchDescriptor<CachedVehiclePosition>())) ?? []
         let intercampusArrivals = (try? context.fetch(FetchDescriptor<CachedIntercampusArrival>())) ?? []
         let alerts = (try? context.fetch(FetchDescriptor<CachedAlert>())) ?? []
@@ -40,6 +41,10 @@ public struct SnapshotReader: Sendable {
             .sorted { $0.arrivalAt < $1.arrivalAt }
 
         let metra = metraPredictions.map(\.asModel)
+            .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+
+        let amtrak = amtrakPredictions.map(\.asModel)
             .filter { $0.arrivalAt > now.addingTimeInterval(-120) }
             .sorted { $0.arrivalAt < $1.arrivalAt }
 
@@ -101,6 +106,7 @@ public struct SnapshotReader: Sendable {
             trainArrivals: Array(arrivals.prefix(50)),
             busPredictions: Array(predictions.prefix(50)),
             metraPredictions: Array(metra.prefix(50)),
+            amtrakPredictions: Array(amtrak.prefix(80)),
             intercampusArrivals: Array(intercampus.prefix(80)),
             vehiclePositions: Array(positions.prefix(80)),
             nearestBike: nearbyPicks.first,
@@ -114,6 +120,7 @@ public struct SnapshotReader: Sendable {
             trainsFetchedAt: trainArrivals.first?.fetchedAt,
             busesFetchedAt: busPredictions.first?.fetchedAt,
             metraFetchedAt: metraPredictions.first?.fetchedAt,
+            amtrakFetchedAt: amtrakPredictions.first?.fetchedAt,
             intercampusFetchedAt: intercampusArrivals.first?.fetchedAt,
             bikesFetchedAt: nearbyPicks.first?.computedAt ?? nearbyFreePicks.first?.computedAt,
             alertsFetchedAt: alerts.first?.fetchedAt,

@@ -15,6 +15,8 @@ public enum TransitResolution: Codable, Sendable, Hashable {
     case bus(String)
     /// Matched a Metra commuter-rail line, e.g. "BNSF" or "UP-N".
     case metra(String)
+    /// Matched an Amtrak intercity rail or Thruway route.
+    case amtrak(String)
     /// Apple returned a transit string we could not map (commuter rail,
     /// out-of-area bus, etc.). Surface the raw text so the UI can still show
     /// something useful.

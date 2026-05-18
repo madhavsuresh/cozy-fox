@@ -167,6 +167,32 @@ final class WalkingDistanceResolver {
         }
     }
 
+    func ensureFresh(
+        origin: (lat: Double, lon: Double),
+        amtrakStation: AmtrakStation,
+        modes: [AccessTravelMode] = [.walking]
+    ) {
+        ensureFresh(
+            origin: origin,
+            destination: AccessRouteDestination(
+                key: WalkingDistanceStore.amtrakStationDestinationKey(stationId: amtrakStation.id),
+                latitude: amtrakStation.latitude,
+                longitude: amtrakStation.longitude
+            ),
+            modes: modes
+        )
+    }
+
+    func ensureFresh(
+        origin: (lat: Double, lon: Double),
+        amtrakStations: [AmtrakStation],
+        modes: [AccessTravelMode] = [.walking]
+    ) {
+        for station in amtrakStations {
+            ensureFresh(origin: origin, amtrakStation: station, modes: modes)
+        }
+    }
+
     func ensureFresh(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) {
         ensureFresh(
             origin: origin,

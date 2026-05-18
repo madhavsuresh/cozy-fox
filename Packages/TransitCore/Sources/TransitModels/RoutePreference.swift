@@ -85,6 +85,35 @@ public struct MetraPreference: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+/// One of the user's tracked Amtrak stations: a route + station pair.
+public struct AmtrakPreference: Codable, Sendable, Hashable, Identifiable {
+    public let id: UUID
+    public let routeId: String
+    public let stationId: String
+    public let stationName: String
+    public let directionId: Int?
+    public let directionLabel: String
+    public let direction: CommuteDirection
+
+    public init(
+        id: UUID = UUID(),
+        routeId: String,
+        stationId: String,
+        stationName: String,
+        directionId: Int?,
+        directionLabel: String,
+        direction: CommuteDirection
+    ) {
+        self.id = id
+        self.routeId = routeId
+        self.stationId = stationId
+        self.stationName = stationName
+        self.directionId = directionId
+        self.directionLabel = directionLabel
+        self.direction = direction
+    }
+}
+
 public enum CommuteDirection: String, Codable, Sendable, Hashable, CaseIterable {
     /// The leg you take when going **toward** Home.
     case toHome
@@ -118,6 +147,7 @@ public enum TransitVisibilityMode: String, Codable, Sendable, Hashable, CaseIter
     case trains
     case buses
     case metra
+    case amtrak
     case bikes
     case intercampus
 
@@ -126,6 +156,7 @@ public enum TransitVisibilityMode: String, Codable, Sendable, Hashable, CaseIter
         case .trains: "Trains"
         case .buses: "Buses"
         case .metra: "Metra"
+        case .amtrak: "Amtrak"
         case .bikes: "Divvy"
         case .intercampus: "Intercampus"
         }
@@ -261,6 +292,28 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         }
     }
 
+    public struct AmtrakLeg: Codable, Sendable, Hashable {
+        public let routeId: String
+        public let stationId: String?
+        public let stationName: String
+        public let directionId: Int?
+        public let destinationName: String?
+
+        public init(
+            routeId: String,
+            stationId: String?,
+            stationName: String,
+            directionId: Int? = nil,
+            destinationName: String? = nil
+        ) {
+            self.routeId = routeId
+            self.stationId = stationId
+            self.stationName = stationName
+            self.directionId = directionId
+            self.destinationName = destinationName
+        }
+    }
+
     public struct IntercampusLeg: Codable, Sendable, Hashable {
         public let direction: IntercampusDirection
         public let stopId: String
@@ -292,11 +345,13 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
     public let trainLegs: [TrainLeg]
     public let busLegs: [BusLeg]
     public let metraLegs: [MetraLeg]
+    public let amtrakLegs: [AmtrakLeg]
     public let intercampusLegs: [IntercampusLeg]
 
     public var train: TrainLeg? { trainLegs.first }
     public var bus: BusLeg? { busLegs.first }
     public var metra: MetraLeg? { metraLegs.first }
+    public var amtrak: AmtrakLeg? { amtrakLegs.first }
     public var intercampus: IntercampusLeg? { intercampusLegs.first }
 
     public init(
@@ -315,6 +370,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         trainLegs: [TrainLeg]? = nil,
         busLegs: [BusLeg]? = nil,
         metraLegs: [MetraLeg]? = nil,
+        amtrakLegs: [AmtrakLeg]? = nil,
         intercampusLegs: [IntercampusLeg]? = nil
     ) {
         self.id = id
@@ -329,6 +385,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.trainLegs = trainLegs ?? train.map { [$0] } ?? []
         self.busLegs = busLegs ?? bus.map { [$0] } ?? []
         self.metraLegs = metraLegs ?? metra.map { [$0] } ?? []
+        self.amtrakLegs = amtrakLegs ?? []
         self.intercampusLegs = intercampusLegs ?? []
     }
 
@@ -348,6 +405,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         case trainLegs
         case busLegs
         case metraLegs
+        case amtrakLegs
         case intercampusLegs
     }
 
@@ -369,6 +427,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         self.trainLegs = (try? c.decode([TrainLeg].self, forKey: .trainLegs)) ?? legacyTrain.map { [$0] } ?? []
         self.busLegs = (try? c.decode([BusLeg].self, forKey: .busLegs)) ?? legacyBus.map { [$0] } ?? []
         self.metraLegs = (try? c.decode([MetraLeg].self, forKey: .metraLegs)) ?? legacyMetra.map { [$0] } ?? []
+        self.amtrakLegs = (try? c.decode([AmtrakLeg].self, forKey: .amtrakLegs)) ?? []
         self.intercampusLegs = (try? c.decode([IntercampusLeg].self, forKey: .intercampusLegs)) ?? []
     }
 
@@ -389,6 +448,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
         try c.encode(trainLegs, forKey: .trainLegs)
         try c.encode(busLegs, forKey: .busLegs)
         try c.encode(metraLegs, forKey: .metraLegs)
+        try c.encode(amtrakLegs, forKey: .amtrakLegs)
         try c.encode(intercampusLegs, forKey: .intercampusLegs)
     }
 
@@ -409,6 +469,7 @@ public struct PlannedTripPin: Codable, Sendable, Hashable, Identifiable {
             trainLegs: trainLegs,
             busLegs: busLegs,
             metraLegs: metraLegs,
+            amtrakLegs: amtrakLegs,
             intercampusLegs: intercampusLegs
         )
     }
@@ -426,6 +487,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var trains: [TrainPreference]
     public var buses: [BusPreference]
     public var metra: [MetraPreference]
+    public var amtrak: [AmtrakPreference]
     public var includeFreeFloatingBikes: Bool
     /// Modes hidden from discovery, pickers, widgets, planning, and default
     /// refresh targets. Existing pinned items still render until cleared.
@@ -436,6 +498,8 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var hiddenBusRoutes: Set<String>
     /// Individual Metra routes hidden from discovery and route pickers.
     public var hiddenMetraRoutes: Set<String>
+    /// Individual Amtrak routes hidden from discovery and route pickers.
+    public var hiddenAmtrakRoutes: Set<String>
     /// Auto-start a Live Activity on region exit (leaving home/work).
     /// Only meaningful when `alwaysShowLiveActivity == false`.
     public var autoStartLiveActivity: Bool
@@ -483,6 +547,16 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public var pinnedMetraDirectionId: Int?
     /// Destination/headsign label for the pinned Metra direction.
     public var pinnedMetraDestination: String?
+    /// User has explicitly pinned an Amtrak route. The refresh path
+    /// surfaces schedule-backed departures at a nearby or selected station.
+    public var pinnedAmtrakRoute: String?
+    /// Specific Amtrak station id on the pinned route. When nil, the
+    /// dashboard picks the nearest station on `pinnedAmtrakRoute`.
+    public var pinnedAmtrakStationId: String?
+    /// Optional GTFS direction id for the pinned Amtrak route/station.
+    public var pinnedAmtrakDirectionId: Int?
+    /// Destination/headsign label for the pinned Amtrak direction.
+    public var pinnedAmtrakDestination: String?
     /// Whether the dashboard should surface Northwestern Intercampus
     /// arrivals near the user's current location.
     public var includeIntercampus: Bool
@@ -551,11 +625,13 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         trains: [TrainPreference] = [],
         buses: [BusPreference] = [],
         metra: [MetraPreference] = [],
+        amtrak: [AmtrakPreference] = [],
         includeFreeFloatingBikes: Bool = true,
         hiddenModes: Set<TransitVisibilityMode> = [],
         hiddenTrainLines: Set<LineColor> = [],
         hiddenBusRoutes: Set<String> = [],
         hiddenMetraRoutes: Set<String> = [],
+        hiddenAmtrakRoutes: Set<String> = [],
         autoStartLiveActivity: Bool = true,
         alwaysShowLiveActivity: Bool = true,
         pinnedLine: LineColor? = nil,
@@ -568,6 +644,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         pinnedMetraStationId: String? = nil,
         pinnedMetraDirectionId: Int? = nil,
         pinnedMetraDestination: String? = nil,
+        pinnedAmtrakRoute: String? = nil,
+        pinnedAmtrakStationId: String? = nil,
+        pinnedAmtrakDirectionId: Int? = nil,
+        pinnedAmtrakDestination: String? = nil,
         includeIntercampus: Bool = false,
         pinnedIntercampusDirection: IntercampusDirection? = nil,
         pinnedIntercampusStopId: String? = nil,
@@ -588,11 +668,13 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.trains = trains
         self.buses = buses
         self.metra = metra
+        self.amtrak = amtrak
         self.includeFreeFloatingBikes = includeFreeFloatingBikes
         self.hiddenModes = hiddenModes
         self.hiddenTrainLines = hiddenTrainLines
         self.hiddenBusRoutes = hiddenBusRoutes
         self.hiddenMetraRoutes = hiddenMetraRoutes
+        self.hiddenAmtrakRoutes = hiddenAmtrakRoutes
         self.autoStartLiveActivity = autoStartLiveActivity
         self.alwaysShowLiveActivity = alwaysShowLiveActivity
         self.pinnedLine = pinnedLine
@@ -605,6 +687,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedMetraStationId = pinnedMetraStationId
         self.pinnedMetraDirectionId = pinnedMetraDirectionId
         self.pinnedMetraDestination = pinnedMetraDestination
+        self.pinnedAmtrakRoute = pinnedAmtrakRoute
+        self.pinnedAmtrakStationId = pinnedAmtrakStationId
+        self.pinnedAmtrakDirectionId = pinnedAmtrakDirectionId
+        self.pinnedAmtrakDestination = pinnedAmtrakDestination
         self.includeIntercampus = includeIntercampus
         self.pinnedIntercampusDirection = pinnedIntercampusDirection
         self.pinnedIntercampusStopId = pinnedIntercampusStopId
@@ -638,11 +724,13 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.trains = (try? c.decode([TrainPreference].self, forKey: .trains)) ?? []
         self.buses = (try? c.decode([BusPreference].self, forKey: .buses)) ?? []
         self.metra = (try? c.decode([MetraPreference].self, forKey: .metra)) ?? []
+        self.amtrak = (try? c.decode([AmtrakPreference].self, forKey: .amtrak)) ?? []
         self.includeFreeFloatingBikes = (try? c.decode(Bool.self, forKey: .includeFreeFloatingBikes)) ?? true
         self.hiddenModes = (try? c.decode(Set<TransitVisibilityMode>.self, forKey: .hiddenModes)) ?? []
         self.hiddenTrainLines = (try? c.decode(Set<LineColor>.self, forKey: .hiddenTrainLines)) ?? []
         self.hiddenBusRoutes = (try? c.decode(Set<String>.self, forKey: .hiddenBusRoutes)) ?? []
         self.hiddenMetraRoutes = (try? c.decode(Set<String>.self, forKey: .hiddenMetraRoutes)) ?? []
+        self.hiddenAmtrakRoutes = (try? c.decode(Set<String>.self, forKey: .hiddenAmtrakRoutes)) ?? []
         self.autoStartLiveActivity = (try? c.decode(Bool.self, forKey: .autoStartLiveActivity)) ?? true
         self.alwaysShowLiveActivity = (try? c.decode(Bool.self, forKey: .alwaysShowLiveActivity)) ?? true
         self.pinnedLine = try? c.decode(LineColor.self, forKey: .pinnedLine)
@@ -666,6 +754,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.pinnedMetraStationId = try? c.decode(String.self, forKey: .pinnedMetraStationId)
         self.pinnedMetraDirectionId = try? c.decode(Int.self, forKey: .pinnedMetraDirectionId)
         self.pinnedMetraDestination = try? c.decode(String.self, forKey: .pinnedMetraDestination)
+        self.pinnedAmtrakRoute = try? c.decode(String.self, forKey: .pinnedAmtrakRoute)
+        self.pinnedAmtrakStationId = try? c.decode(String.self, forKey: .pinnedAmtrakStationId)
+        self.pinnedAmtrakDirectionId = try? c.decode(Int.self, forKey: .pinnedAmtrakDirectionId)
+        self.pinnedAmtrakDestination = try? c.decode(String.self, forKey: .pinnedAmtrakDestination)
         self.includeIntercampus = (try? c.decode(Bool.self, forKey: .includeIntercampus)) ?? false
         self.pinnedIntercampusDirection = try? c.decode(IntercampusDirection.self, forKey: .pinnedIntercampusDirection)
         self.pinnedIntercampusStopId = try? c.decode(String.self, forKey: .pinnedIntercampusStopId)
@@ -692,7 +784,7 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     public static let empty = UserRoutePreferences()
 
     public var hasPinnedTransit: Bool {
-        pinnedLine != nil || pinnedBusRoute != nil || pinnedMetraRoute != nil || plannedTripPin != nil
+        pinnedLine != nil || pinnedBusRoute != nil || pinnedMetraRoute != nil || pinnedAmtrakRoute != nil || plannedTripPin != nil
     }
 
     public func isModeVisible(_ mode: TransitVisibilityMode) -> Bool {
@@ -709,6 +801,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
 
     public func isMetraRouteVisible(_ routeId: String) -> Bool {
         isModeVisible(.metra) && !hiddenMetraRoutes.contains(routeId)
+    }
+
+    public func isAmtrakRouteVisible(_ routeId: String) -> Bool {
+        isModeVisible(.amtrak) && !hiddenAmtrakRoutes.contains(routeId)
     }
 
     public mutating func markManualPin(at date: Date = .now) {
