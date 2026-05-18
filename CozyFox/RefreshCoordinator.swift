@@ -106,6 +106,11 @@ final class RefreshCoordinator {
     /// state copy ("Fetching arrivals…" vs "No upcoming X arrivals") branches
     /// off this so a timeout doesn't masquerade as "no service".
     private(set) var feedFetchStates: FeedFetchStates = .init()
+    /// Targets with a live network request currently in flight. This drives
+    /// the dashboard freshness dot flash and is deliberately narrower than
+    /// the whole refresh cycle.
+    private(set) var activeFetchTargets: Set<TargetFetchKey> = []
+    var onActiveFetchTargetsChanged: (@MainActor (Set<TargetFetchKey>) -> Void)?
 
     /// Latest Divvy GBFS station + free-bike snapshot, held in memory only.
     /// The dashboard's trip-pin Divvy chips read directly from this — the
@@ -202,6 +207,8 @@ final class RefreshCoordinator {
     /// closed before recommending nearby trains; the rest run in parallel.
     @discardableResult
     func refreshAll() async -> Bool {
+        defer { clearActiveFetchTargets() }
+
         let expiredTripChanged = clearExpiredPlannedTripPinIfNeeded()
         let autopinChanged = await applyAutopinIfNeeded()
         let prefs = preferences.loadRoutePreferences()
@@ -587,6 +594,8 @@ final class RefreshCoordinator {
         // per-target staleness instead of one feed-level rollup that lies
         // when a sibling target succeeds while the pinned one fails.
         let client = trainClient
+        let activeTargets = Set(targets.map { TargetFetchKey.train(stationId: $0.mapId) })
+        beginFetching(activeTargets)
         let outcomes: [TrainFetchOutcome] = await withTaskGroup(
             of: TrainFetchOutcome.self,
             returning: [TrainFetchOutcome].self
@@ -622,6 +631,7 @@ final class RefreshCoordinator {
             }
             return results
         }
+        endFetching(activeTargets)
 
         let collected = outcomes.flatMap(\.arrivals)
         let anySucceeded = outcomes.contains(where: \.didSucceed)
@@ -733,6 +743,8 @@ final class RefreshCoordinator {
         }
 
         let client = busClient
+        let activeTargets = Set(targets.map { TargetFetchKey.bus(route: $0.route, stopId: $0.stopId) })
+        beginFetching(activeTargets)
         let outcomes: [BusFetchOutcome] = await withTaskGroup(
             of: BusFetchOutcome.self,
             returning: [BusFetchOutcome].self
@@ -757,6 +769,7 @@ final class RefreshCoordinator {
             }
             return results
         }
+        endFetching(activeTargets)
 
         let collected = outcomes.flatMap(\.predictions)
         let anySucceeded = outcomes.contains(where: \.didSucceed)
@@ -1100,6 +1113,30 @@ final class RefreshCoordinator {
     }
 
     // MARK: - Feed fetch state
+
+    private func beginFetching(_ targets: Set<TargetFetchKey>) {
+        guard !targets.isEmpty else { return }
+        let previous = activeFetchTargets
+        activeFetchTargets.formUnion(targets)
+        if activeFetchTargets != previous {
+            onActiveFetchTargetsChanged?(activeFetchTargets)
+        }
+    }
+
+    private func endFetching(_ targets: Set<TargetFetchKey>) {
+        guard !targets.isEmpty else { return }
+        let previous = activeFetchTargets
+        activeFetchTargets.subtract(targets)
+        if activeFetchTargets != previous {
+            onActiveFetchTargetsChanged?(activeFetchTargets)
+        }
+    }
+
+    private func clearActiveFetchTargets() {
+        guard !activeFetchTargets.isEmpty else { return }
+        activeFetchTargets.removeAll()
+        onActiveFetchTargetsChanged?(activeFetchTargets)
+    }
 
     private func recordFeedSuccess(_ feed: TransitFeed) {
         let now = Date()

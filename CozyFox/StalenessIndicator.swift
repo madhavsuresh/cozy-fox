@@ -8,22 +8,22 @@ import ChicagoTheme
 ///
 /// Visual hierarchy is deliberately quiet: a 6pt dot and `.caption2`
 /// text, both colored against the medium-gray neutral until the data
-/// actually ages. The dot only flashes while a refresh is in flight, so
-/// the rider can tell that the visible age is about to be replaced.
+/// actually ages. The dot only flashes while this target's upstream
+/// request is in flight, so the rider can tell new data is coming.
 ///
 /// `Staleness` is the source of truth for thresholds; this view just
 /// renders it. Update `Staleness.liveCutoff` / `agingCutoff` /
 /// `staleCutoff` if the upstream cadence ever changes.
 struct StalenessIndicator: View {
     let staleness: Staleness
-    let isRefreshing: Bool
+    let isFetching: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var flashPhase = false
 
-    init(staleness: Staleness, isRefreshing: Bool = false) {
+    init(staleness: Staleness, isFetching: Bool = false) {
         self.staleness = staleness
-        self.isRefreshing = isRefreshing
+        self.isFetching = isFetching
     }
 
     var body: some View {
@@ -73,7 +73,7 @@ struct StalenessIndicator: View {
     }
 
     private var shouldFlash: Bool {
-        isRefreshing && !reduceMotion
+        isFetching && !reduceMotion
     }
 
     private var dotOpacity: Double {
@@ -85,8 +85,8 @@ struct StalenessIndicator: View {
     }
 
     private var accessibilityLabel: String {
-        isRefreshing
-            ? "Updating. \(staleness.accessibilityLabel)"
+        isFetching
+            ? "Fetching new data. \(staleness.accessibilityLabel)"
             : staleness.accessibilityLabel
     }
 }
@@ -95,7 +95,7 @@ struct StalenessIndicator: View {
     VStack(alignment: .leading, spacing: 8) {
         StalenessIndicator(staleness: .unknown)
         StalenessIndicator(staleness: .live)
-        StalenessIndicator(staleness: .live, isRefreshing: true)
+        StalenessIndicator(staleness: .live, isFetching: true)
         StalenessIndicator(staleness: .current(seconds: 45))
         StalenessIndicator(staleness: .aging(minutes: 2))
         StalenessIndicator(staleness: .stale(minutes: 7))
