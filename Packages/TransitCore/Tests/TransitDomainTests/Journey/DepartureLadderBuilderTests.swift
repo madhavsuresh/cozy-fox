@@ -210,6 +210,80 @@ struct DepartureLadderBuilderTests {
         #expect(ladder.lineHealth.count == 2)
     }
 
+    @Test func rowsCarryWalkRideWalkLegsForSingleLegCandidate() {
+        let builder = DepartureLadderBuilder()
+        let ladder = builder.build(
+            destinationTitle: "Work",
+            origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
+            snapshot: .empty,
+            candidates: [candidate(liveDepartures: liveDepartures([7, 15, 23]))],
+            walkSpeedEstimate: .empty,
+            walkingTimeFetcher: walkingFetcher,
+            clock: clock
+        )
+        guard let first = ladder.rows.first else {
+            #expect(Bool(false), "expected at least one row")
+            return
+        }
+        #expect(first.legs.count == 3)
+        #expect(first.legs[0].mode == .walk)
+        #expect(first.legs[1].mode == .ctaTrain)
+        #expect(first.legs[2].mode == .walk)
+        // Per-leg arrivals must be non-decreasing.
+        for i in 1..<first.legs.count {
+            #expect(first.legs[i].arrivalMean >= first.legs[i - 1].arrivalMean)
+        }
+    }
+
+    @Test func bikeFinalMileShortensArrivalVsWalk() {
+        let builder = DepartureLadderBuilder()
+        let walkCandidate = candidate(liveDepartures: liveDepartures([7, 15, 23]))
+        let bikeCandidate = LadderCandidateSpec(
+            title: walkCandidate.title,
+            mode: walkCandidate.mode,
+            routeIdentifier: walkCandidate.routeIdentifier,
+            direction: walkCandidate.direction,
+            boardingPoint: walkCandidate.boardingPoint,
+            alightingPoint: walkCandidate.alightingPoint,
+            inVehicleSeconds: walkCandidate.inVehicleSeconds,
+            inVehicleSigmaSeconds: walkCandidate.inVehicleSigmaSeconds,
+            finalMileSeconds: walkCandidate.finalMileSeconds * 0.4, // bike ≈ 40% of walk time
+            finalMileSigmaSeconds: walkCandidate.finalMileSigmaSeconds,
+            finalMileMode: .divvyClassic,
+            scheduleHeadwaySeconds: walkCandidate.scheduleHeadwaySeconds,
+            liveDepartures: walkCandidate.liveDepartures,
+            feedState: walkCandidate.feedState
+        )
+        let walkLadder = builder.build(
+            destinationTitle: "Work",
+            origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
+            snapshot: .empty,
+            candidates: [walkCandidate],
+            walkSpeedEstimate: .empty,
+            walkingTimeFetcher: walkingFetcher,
+            clock: clock
+        )
+        let bikeLadder = builder.build(
+            destinationTitle: "Work",
+            origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
+            snapshot: .empty,
+            candidates: [bikeCandidate],
+            walkSpeedEstimate: .empty,
+            walkingTimeFetcher: walkingFetcher,
+            clock: clock
+        )
+        guard let walkRow = walkLadder.rows.first, let bikeRow = bikeLadder.rows.first else {
+            #expect(Bool(false), "expected at least one row in each ladder")
+            return
+        }
+        #expect(bikeRow.arrivalAt.low < walkRow.arrivalAt.low)
+        #expect(bikeRow.legs.last?.mode == .divvyClassic)
+        #expect(walkRow.legs.last?.mode == .walk)
+    }
+
     @Test func deterministicOutputForFixedInputs() {
         let builder = DepartureLadderBuilder()
         let runA = builder.build(

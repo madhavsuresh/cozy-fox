@@ -1,5 +1,30 @@
 import Foundation
 
+/// One leg of a `DepartureLadderRow`'s door-to-door trip — e.g. walk to
+/// the boarding stop, ride the train, walk the final mile. Means only;
+/// the row's `arrivalAt` window still carries the spread.
+public struct DepartureLadderLeg: Sendable, Hashable, Codable, Identifiable {
+    public let id: UUID
+    public let mode: LegMode
+    public let label: String
+    public let meanSeconds: TimeInterval
+    public let arrivalMean: Date
+
+    public init(
+        id: UUID = UUID(),
+        mode: LegMode,
+        label: String,
+        meanSeconds: TimeInterval,
+        arrivalMean: Date
+    ) {
+        self.id = id
+        self.mode = mode
+        self.label = label
+        self.meanSeconds = max(0, meanSeconds)
+        self.arrivalMean = arrivalMean
+    }
+}
+
 public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
     public let id: UUID
     public let leaveByAt: Date
@@ -11,6 +36,7 @@ public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
     public let note: String?
     public let catchProbability: Double
     public let missCostSeconds: TimeInterval?
+    public let legs: [DepartureLadderLeg]
 
     public struct ArrivalWindow: Sendable, Hashable, Codable {
         public let low: Date
@@ -39,7 +65,8 @@ public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
         risk: WaitReasonableness,
         note: String? = nil,
         catchProbability: Double,
-        missCostSeconds: TimeInterval? = nil
+        missCostSeconds: TimeInterval? = nil,
+        legs: [DepartureLadderLeg] = []
     ) {
         self.id = id
         self.leaveByAt = leaveByAt
@@ -51,6 +78,7 @@ public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
         self.note = note
         self.catchProbability = max(0, min(1, catchProbability))
         self.missCostSeconds = missCostSeconds
+        self.legs = legs
     }
 }
 
