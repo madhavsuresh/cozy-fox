@@ -1,5 +1,6 @@
 import Foundation
 import MapKit
+import TransitDomain
 import TransitModels
 
 @MainActor
@@ -30,7 +31,8 @@ final class IntercampusTrafficETAResolver {
         var newRequestCount = 0
 
         for arrival in candidates {
-            guard let key = CacheKey(arrival: arrival) else { continue }
+            guard let plan = legPlan(for: arrival) else { continue }
+            let key = CacheKey(arrival: arrival, plan: plan)
             if let cached = cache[key], cached.expiresAt > now {
                 if let estimate = cached.estimate {
                     adjustedById[arrival.id] = arrival.applyingTrafficEstimate(estimate)
@@ -40,7 +42,12 @@ final class IntercampusTrafficETAResolver {
             guard newRequestCount < maxTrafficEstimatesPerRefresh else { continue }
             newRequestCount += 1
 
-            let estimate = await fetchTrafficEstimate(for: arrival, cacheKey: key, now: now)
+            let estimate = await fetchTrafficEstimate(
+                for: arrival,
+                plan: plan,
+                cacheKey: key,
+                now: now
+            )
             if let estimate {
                 adjustedById[arrival.id] = arrival.applyingTrafficEstimate(estimate)
             }
@@ -78,21 +85,71 @@ final class IntercampusTrafficETAResolver {
         return abs(now.timeIntervalSince(location.observedAt)) <= maxVehiclePositionAge
     }
 
+    /// Plan a per-leg ETA: drive from the bus's current GPS to the next stop it must service
+    /// on this trip, then ride the schedule from there through every intermediate stop to the
+    /// user's target. MapKit alone would route point-to-point and skip the intermediate dwells,
+    /// which is how a Mudd-bound southbound shuttle could show ~5 min when it's actually ~30 min
+    /// out behind Sherman/Foster/Sheridan stops.
+    private func legPlan(for arrival: IntercampusArrival) -> LegPlan? {
+        guard let location = arrival.vehicleLocation,
+              let targetStop = IntercampusCatalog.stop(id: arrival.stopId)
+        else { return nil }
+
+        guard let tripStops = IntercampusCatalog.tripStops(forTrip: arrival.tripId),
+              let targetEntry = tripStops.first(where: { $0.stopId == arrival.stopId })
+        else {
+            // No catalog trip — degrade to a single-leg MapKit route to the target stop.
+            return LegPlan(nextStop: targetStop, scheduledRemainingSeconds: 0)
+        }
+
+        let upstream = tripStops.filter { $0.sequence <= targetEntry.sequence }
+        let stopsWithCoords = upstream.compactMap { entry -> (entry: IntercampusTripStop, stop: IntercampusStop)? in
+            guard let stop = IntercampusCatalog.stop(id: entry.stopId) else { return nil }
+            return (entry, stop)
+        }
+        let closest = stopsWithCoords.min { lhs, rhs in
+            let lhsDist = Distance.meters(
+                from: (location.latitude, location.longitude),
+                to: (lhs.stop.latitude, lhs.stop.longitude)
+            )
+            let rhsDist = Distance.meters(
+                from: (location.latitude, location.longitude),
+                to: (rhs.stop.latitude, rhs.stop.longitude)
+            )
+            return lhsDist < rhsDist
+        }
+        guard let pivot = closest else {
+            return LegPlan(nextStop: targetStop, scheduledRemainingSeconds: 0)
+        }
+
+        let remainingSeconds: TimeInterval
+        if pivot.entry.stopId == arrival.stopId {
+            remainingSeconds = 0
+        } else {
+            remainingSeconds = IntercampusCatalog.scheduledRemainingSeconds(
+                tripId: arrival.tripId,
+                from: pivot.entry.stopId,
+                to: arrival.stopId
+            ) ?? TimeInterval(max(0, targetEntry.arrivalSeconds - pivot.entry.departureSeconds))
+        }
+
+        return LegPlan(nextStop: pivot.stop, scheduledRemainingSeconds: remainingSeconds)
+    }
+
     private func fetchTrafficEstimate(
         for arrival: IntercampusArrival,
+        plan: LegPlan,
         cacheKey: CacheKey,
         now: Date
     ) async -> IntercampusTrafficEstimate? {
-        guard let location = arrival.vehicleLocation,
-              let stop = IntercampusCatalog.stop(id: arrival.stopId)
-        else { return nil }
+        guard let location = arrival.vehicleLocation else { return nil }
 
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(
             coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
         ))
         request.destination = MKMapItem(placemark: MKPlacemark(
-            coordinate: CLLocationCoordinate2D(latitude: stop.latitude, longitude: stop.longitude)
+            coordinate: CLLocationCoordinate2D(latitude: plan.nextStop.latitude, longitude: plan.nextStop.longitude)
         ))
         request.transportType = .automobile
         request.requestsAlternateRoutes = false
@@ -111,12 +168,17 @@ final class IntercampusTrafficETAResolver {
                 cache[cacheKey] = CacheEntry(estimate: nil, expiresAt: now.addingTimeInterval(failureTTL))
                 return nil
             }
+            let totalTravel = route.expectedTravelTime + plan.scheduledRemainingSeconds
+            guard totalTravel <= 2 * 60 * 60 else {
+                cache[cacheKey] = CacheEntry(estimate: nil, expiresAt: now.addingTimeInterval(failureTTL))
+                return nil
+            }
             let estimate = IntercampusTrafficEstimate(
                 generatedAt: now,
                 sourceArrivalAt: arrival.arrivalAt,
                 scheduledArrivalAt: arrival.scheduledArrivalAt,
-                arrivalAt: now.addingTimeInterval(route.expectedTravelTime),
-                travelTime: route.expectedTravelTime,
+                arrivalAt: now.addingTimeInterval(totalTravel),
+                travelTime: totalTravel,
                 distanceMeters: route.distance
             )
             cache[cacheKey] = CacheEntry(estimate: estimate, expiresAt: now.addingTimeInterval(estimateTTL))
@@ -132,20 +194,27 @@ final class IntercampusTrafficETAResolver {
         cache = cache.filter { $0.value.expiresAt > now }
     }
 
+    private struct LegPlan {
+        let nextStop: IntercampusStop
+        let scheduledRemainingSeconds: TimeInterval
+    }
+
     private struct CacheKey: Hashable {
         let tripId: String
-        let stopId: String
+        let targetStopId: String
+        let nextStopId: String
         let vehicleId: String
         let latitudeBucket: Int
         let longitudeBucket: Int
 
-        init?(arrival: IntercampusArrival) {
-            guard let location = arrival.vehicleLocation else { return nil }
+        init(arrival: IntercampusArrival, plan: LegPlan) {
+            let location = arrival.vehicleLocation
             self.tripId = arrival.tripId
-            self.stopId = arrival.stopId
-            self.vehicleId = location.id ?? arrival.vehicleId ?? arrival.tripId
-            self.latitudeBucket = Int((location.latitude * 10_000).rounded())
-            self.longitudeBucket = Int((location.longitude * 10_000).rounded())
+            self.targetStopId = arrival.stopId
+            self.nextStopId = plan.nextStop.id
+            self.vehicleId = location?.id ?? arrival.vehicleId ?? arrival.tripId
+            self.latitudeBucket = Int(((location?.latitude ?? 0) * 10_000).rounded())
+            self.longitudeBucket = Int(((location?.longitude ?? 0) * 10_000).rounded())
         }
     }
 

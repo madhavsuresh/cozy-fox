@@ -55,6 +55,20 @@ public struct IntercampusStop: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+public struct IntercampusTripStop: Sendable, Hashable {
+    public let stopId: String
+    public let sequence: Int
+    public let arrivalSeconds: Int
+    public let departureSeconds: Int
+
+    public init(stopId: String, sequence: Int, arrivalSeconds: Int, departureSeconds: Int) {
+        self.stopId = stopId
+        self.sequence = sequence
+        self.arrivalSeconds = arrivalSeconds
+        self.departureSeconds = departureSeconds
+    }
+}
+
 public enum IntercampusArrivalTimeSource: String, Codable, Sendable, Hashable {
     /// Time came from TripShot realtime stop-time updates.
     case liveMap
@@ -298,6 +312,29 @@ public enum IntercampusCatalog {
             lookaheadDays: lookaheadDays
         )
     }
+
+    /// Returns the static GTFS stop sequence for a specific trip in sequence order, or `nil`
+    /// if the trip isn't in the catalog. Use this to walk the remaining stops the bus must
+    /// service before reaching a downstream stop.
+    public static func tripStops(forTrip tripId: String) -> [IntercampusTripStop]? {
+        IntercampusCatalogStore.shared.tripStops(forTrip: tripId)
+    }
+
+    /// Scheduled travel duration between two stops on the same trip. Inherently includes
+    /// the dwell time at every intermediate stop because we just diff the two arrival offsets.
+    /// Returns `nil` if either stop is missing from the trip, the stops are out of order, or
+    /// the diff is non-positive.
+    public static func scheduledRemainingSeconds(
+        tripId: String,
+        from fromStopId: String,
+        to toStopId: String
+    ) -> TimeInterval? {
+        IntercampusCatalogStore.shared.scheduledRemainingSeconds(
+            tripId: tripId,
+            from: fromStopId,
+            to: toStopId
+        )
+    }
 }
 
 private struct IntercampusCatalogStore: Sendable {
@@ -459,6 +496,33 @@ private struct IntercampusCatalogStore: Sendable {
             .sorted()
         guard !durations.isEmpty else { return nil }
         return durations[durations.count / 2]
+    }
+
+    func tripStops(forTrip tripId: String) -> [IntercampusTripStop]? {
+        guard let entries = stopTimesByTripId[tripId] else { return nil }
+        return entries.map {
+            IntercampusTripStop(
+                stopId: $0.stopId,
+                sequence: $0.sequence,
+                arrivalSeconds: $0.arrivalSeconds,
+                departureSeconds: $0.departureSeconds
+            )
+        }
+    }
+
+    func scheduledRemainingSeconds(
+        tripId: String,
+        from fromStopId: String,
+        to toStopId: String
+    ) -> TimeInterval? {
+        guard fromStopId != toStopId,
+              let entries = stopTimesByTripId[tripId],
+              let fromEntry = entries.first(where: { $0.stopId == fromStopId }),
+              let toEntry = entries.first(where: { $0.stopId == toStopId }),
+              toEntry.sequence > fromEntry.sequence
+        else { return nil }
+        let delta = TimeInterval(toEntry.arrivalSeconds - fromEntry.departureSeconds)
+        return delta > 0 ? delta : nil
     }
 
     private func activeServiceIds(on serviceDay: ServiceDay) -> Set<String> {
