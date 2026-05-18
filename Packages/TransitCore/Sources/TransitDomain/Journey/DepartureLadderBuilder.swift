@@ -54,6 +54,11 @@ public struct LadderCandidateSpec: Sendable {
     public let alightingPoint: JourneyPoint
     public let inVehicleSeconds: TimeInterval
     public let inVehicleSigmaSeconds: TimeInterval
+    /// Mean seconds for the origin-to-boarding leg, already paced for the
+    /// chosen `boardingMode`. The viewmodel passes this in via the walking
+    /// time fetcher; the builder still applies a walk-speed ratio on top
+    /// when the mode is `.walk` (see `build`).
+    public let boardingMode: LegMode
     public let finalMileSeconds: TimeInterval
     public let finalMileSigmaSeconds: TimeInterval
     public let finalMileMode: LegMode
@@ -71,6 +76,7 @@ public struct LadderCandidateSpec: Sendable {
         alightingPoint: JourneyPoint,
         inVehicleSeconds: TimeInterval,
         inVehicleSigmaSeconds: TimeInterval,
+        boardingMode: LegMode = .walk,
         finalMileSeconds: TimeInterval,
         finalMileSigmaSeconds: TimeInterval,
         finalMileMode: LegMode = .walk,
@@ -87,6 +93,7 @@ public struct LadderCandidateSpec: Sendable {
         self.alightingPoint = alightingPoint
         self.inVehicleSeconds = max(0, inVehicleSeconds)
         self.inVehicleSigmaSeconds = max(0, inVehicleSigmaSeconds)
+        self.boardingMode = boardingMode
         self.finalMileSeconds = max(0, finalMileSeconds)
         self.finalMileSigmaSeconds = max(0, finalMileSigmaSeconds)
         self.finalMileMode = finalMileMode
@@ -190,13 +197,17 @@ public struct DepartureLadderBuilder: Sendable {
                 _ = transferStopProcess
             }
 
-            let baseWalkSeconds = walkingTimeFetcher(origin, spec.boardingPoint)
-            let walkMean = baseWalkSeconds * walkRatio
-            let walkSigma = max(30, walkMean * 0.12)
-            let walkConservative = walkMean + 0.8416 * walkSigma
+            let baseBoardingSeconds = walkingTimeFetcher(origin, spec.boardingPoint)
+            // Walk-equivalent ratio only applies to legs the user actually walks.
+            // Biking comes in already paced from the viewmodel; applying the
+            // walking-confidence ratio to it would double-discount.
+            let boardingWalkAdjusted = spec.boardingMode == .walk
+            let boardingMean = boardingWalkAdjusted
+                ? baseBoardingSeconds * walkRatio
+                : baseBoardingSeconds
+            let boardingSigma = max(30, boardingMean * 0.12)
+            let boardingConservative = boardingMean + 0.8416 * boardingSigma
 
-            // Walk-equivalent ratio only applies if the final mile is on foot;
-            // bike means already account for cycling pace before they reach us.
             let finalMileWalkAdjusted = spec.finalMileMode == .walk
             let finalMileMean = finalMileWalkAdjusted
                 ? spec.finalMileSeconds * walkRatio
@@ -209,8 +220,8 @@ public struct DepartureLadderBuilder: Sendable {
                 transferStopProcess: transferStopProcess,
                 origin: origin,
                 destinationPoint: destinationPoint,
-                walkMean: walkMean,
-                walkSigma: walkSigma,
+                boardingMean: boardingMean,
+                boardingSigma: boardingSigma,
                 walkConfidence: walkConfidence,
                 walkSpeedSamples: walkSpeedEstimate.count,
                 finalMileMean: finalMileMean,
@@ -219,10 +230,10 @@ public struct DepartureLadderBuilder: Sendable {
             )
 
             for departure in spec.liveDepartures where departure.arrivalAt <= horizonEnd {
-                let leaveBy = departure.arrivalAt.addingTimeInterval(-(walkConservative + walkSlackSeconds))
+                let leaveBy = departure.arrivalAt.addingTimeInterval(-(boardingConservative + walkSlackSeconds))
                 if leaveBy < now.addingTimeInterval(-60) { continue }
 
-                let userAtStop = leaveBy.addingTimeInterval(walkMean)
+                let userAtStop = leaveBy.addingTimeInterval(boardingMean)
                 let waitForecast = stopProcess.waitDistribution(arrivingAt: userAtStop)
                 let downstreamRisk = downgradeIfFeedShaky(waitForecast.state, feedState: spec.feedState)
 
@@ -245,7 +256,7 @@ public struct DepartureLadderBuilder: Sendable {
                 let legs = buildLegs(
                     spec: spec,
                     leaveBy: leaveBy,
-                    walkToBoardingSeconds: walkMean,
+                    boardingSeconds: boardingMean,
                     departureAt: departure.arrivalAt,
                     finalMileSeconds: finalMileMean
                 )
@@ -296,24 +307,26 @@ public struct DepartureLadderBuilder: Sendable {
         transferStopProcess: StopArrivalProcess?,
         origin: JourneyPoint,
         destinationPoint: JourneyPoint,
-        walkMean: TimeInterval,
-        walkSigma: TimeInterval,
+        boardingMean: TimeInterval,
+        boardingSigma: TimeInterval,
         walkConfidence: Double,
         walkSpeedSamples: Int,
         finalMileMean: TimeInterval,
         finalMileSigma: TimeInterval,
         walkRatio: Double
     ) -> (JourneyOption, [UUID: any PreparedLegProcess]) {
-        let walkToBoarding = LegCandidate(
-            mode: .walk,
-            displayLabel: "Walk to boarding",
+        let boardingLeg = LegCandidate(
+            mode: spec.boardingMode,
+            displayLabel: boardingDisplayLabel(spec.boardingMode),
             fromPoint: origin,
             toPoint: spec.boardingPoint
         )
-        let walkPrepared: any PreparedLegProcess = PreparedWalkProcess(
-            expectedSeconds: walkMean,
+        // The composer kernel still operates as a Gaussian draw whether the
+        // user walks or bikes; the only difference is the mean we feed it.
+        let boardingPrepared: any PreparedLegProcess = PreparedWalkProcess(
+            expectedSeconds: boardingMean,
             appliedRatio: 1.0,
-            jitterCoefficient: walkSigma / max(1, walkMean),
+            jitterCoefficient: boardingSigma / max(1, boardingMean),
             confidence: walkConfidence,
             sampleCount: walkSpeedSamples
         )
@@ -331,9 +344,9 @@ public struct DepartureLadderBuilder: Sendable {
             inVehicleSigma: spec.inVehicleSigmaSeconds
         )
 
-        var slots: [JourneySlot] = [.fixed(walkToBoarding), .fixed(transit)]
+        var slots: [JourneySlot] = [.fixed(boardingLeg), .fixed(transit)]
         var kernels: [UUID: any PreparedLegProcess] = [
-            walkToBoarding.id: walkPrepared,
+            boardingLeg.id: boardingPrepared,
             transit.id: transitPrepared
         ]
 
@@ -381,8 +394,6 @@ public struct DepartureLadderBuilder: Sendable {
             fromPoint: spec.transfer?.nextAlightingPoint ?? spec.alightingPoint,
             toPoint: destinationPoint
         )
-        // The composer kernel still operates as a Gaussian draw whether the
-        // user walks or bikes; the only difference is the mean we feed it.
         let finalPrepared: any PreparedLegProcess = PreparedWalkProcess(
             expectedSeconds: finalMileMean,
             appliedRatio: 1.0,
@@ -397,29 +408,38 @@ public struct DepartureLadderBuilder: Sendable {
         return (option, kernels)
     }
 
+    private func boardingDisplayLabel(_ mode: LegMode) -> String {
+        isBikeMode(mode) ? "Bike to boarding" : "Walk to boarding"
+    }
+
     private func finalMileDisplayLabel(_ mode: LegMode) -> String {
+        isBikeMode(mode) ? "Bike to destination" : "Walk to destination"
+    }
+
+    private func isBikeMode(_ mode: LegMode) -> Bool {
         switch mode {
-        case .divvyClassic, .divvyEBike, .freeBikeParking: "Bike to destination"
-        default: "Walk to destination"
+        case .divvyClassic, .divvyEBike, .freeBikeParking: true
+        default: false
         }
     }
 
     private func buildLegs(
         spec: LadderCandidateSpec,
         leaveBy: Date,
-        walkToBoardingSeconds: TimeInterval,
+        boardingSeconds: TimeInterval,
         departureAt: Date,
         finalMileSeconds: TimeInterval
     ) -> [DepartureLadderLeg] {
         var legs: [DepartureLadderLeg] = []
 
-        let walkArrival = leaveBy.addingTimeInterval(walkToBoardingSeconds)
+        let boardingArrival = leaveBy.addingTimeInterval(boardingSeconds)
+        let boardingVerb = isBikeMode(spec.boardingMode) ? "Bike" : "Walk"
         legs.append(
             DepartureLadderLeg(
-                mode: .walk,
-                label: "Walk to \(spec.boardingPoint.displayTitle)",
-                meanSeconds: walkToBoardingSeconds,
-                arrivalMean: walkArrival
+                mode: spec.boardingMode,
+                label: "\(boardingVerb) to \(spec.boardingPoint.displayTitle)",
+                meanSeconds: boardingSeconds,
+                arrivalMean: boardingArrival
             )
         )
 

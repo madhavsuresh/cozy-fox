@@ -6,7 +6,7 @@ import TransitModels
 struct DepartureLadderDebugCard: View {
     @Environment(AppViewModel.self) private var model
     @State private var viewModel = DepartureLadderDebugViewModel()
-    @State private var lastMileMode: DepartureLadderDebugViewModel.LastMileMode = .walk
+    @State private var mileMode: DepartureLadderDebugViewModel.MileMode = .walk
 
     var body: some View {
         ChicagoCard(
@@ -15,7 +15,7 @@ struct DepartureLadderDebugCard: View {
             accent: ChicagoPalette.flagBlue
         ) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
-                lastMileToggle
+                mileModeToggle
                 if let ladder = viewModel.ladder {
                     if let headline = ladder.headline {
                         Text(headline)
@@ -42,18 +42,18 @@ struct DepartureLadderDebugCard: View {
         .onAppear { rebuild() }
         .onChange(of: model.snapshot) { _, _ in rebuild() }
         .onChange(of: model.pinRevision) { _, _ in rebuild() }
-        .onChange(of: lastMileMode) { _, _ in rebuild() }
+        .onChange(of: mileMode) { _, _ in rebuild() }
     }
 
     @ViewBuilder
-    private var lastMileToggle: some View {
+    private var mileModeToggle: some View {
         HStack(spacing: ChicagoSpacing.sm) {
-            Text("Last mile")
+            Text("First/last mile")
                 .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                 .foregroundStyle(ChicagoPalette.Gray.dark)
-            Picker("Last mile", selection: $lastMileMode) {
-                Text("Walk").tag(DepartureLadderDebugViewModel.LastMileMode.walk)
-                Text("Bike").tag(DepartureLadderDebugViewModel.LastMileMode.bike)
+            Picker("First/last mile", selection: $mileMode) {
+                Text("Walk").tag(DepartureLadderDebugViewModel.MileMode.walk)
+                Text("Bike").tag(DepartureLadderDebugViewModel.MileMode.bike)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -190,7 +190,7 @@ struct DepartureLadderDebugCard: View {
             anchors: model.preferences.loadCommuteAnchors(),
             walkingResolver: model.walkingResolver,
             walkSpeedEstimate: model.walkingStore.walkSpeedEstimate,
-            lastMileMode: lastMileMode
+            mileMode: mileMode
         )
     }
 
