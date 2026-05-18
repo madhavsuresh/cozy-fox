@@ -1077,7 +1077,10 @@ struct DashboardScreen: View {
                     .foregroundStyle(ChicagoPalette.Gray.darkest)
                 Spacer()
                 if let targetKey {
-                    StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                    StalenessIndicator(
+                        staleness: model.staleness(forTarget: targetKey),
+                        isRefreshing: model.isRefreshing
+                    )
                 }
             }
             if !alerts.isEmpty {
@@ -1152,7 +1155,10 @@ struct DashboardScreen: View {
                 }
                 Spacer()
                 if let targetKey {
-                    StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                    StalenessIndicator(
+                        staleness: model.staleness(forTarget: targetKey),
+                        isRefreshing: model.isRefreshing
+                    )
                 }
             }
             if !alerts.isEmpty {
@@ -3330,7 +3336,10 @@ struct DashboardScreen: View {
         // when the dot changes color or the label widens.
         HStack {
             Spacer()
-            StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+            StalenessIndicator(
+                staleness: model.staleness(forTarget: targetKey),
+                isRefreshing: model.isRefreshing
+            )
         }
 
         if arrivals.isEmpty {
@@ -3966,7 +3975,10 @@ struct DashboardScreen: View {
                     .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
                     .foregroundStyle(ChicagoPalette.Mode.bus)
                 Spacer()
-                StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                StalenessIndicator(
+                    staleness: model.staleness(forTarget: targetKey),
+                    isRefreshing: model.isRefreshing
+                )
                 Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .monospacedDigit()
