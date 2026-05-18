@@ -83,6 +83,8 @@ public enum TransitStopRef: Codable, Sendable, Hashable {
     case bus(Int)
     /// `MetraStation.id` — Metra station identifier (e.g. "PALATINE").
     case metra(String)
+    /// `AmtrakStation.id` — Amtrak station code (e.g. "CHI").
+    case amtrak(String)
     /// `IntercampusStop.id` — Northwestern TripShot stop identifier.
     case intercampus(String)
 }

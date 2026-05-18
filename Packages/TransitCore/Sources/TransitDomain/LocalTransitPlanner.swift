@@ -1140,6 +1140,8 @@ public struct LocalTransitPlanner: Sendable {
             return "bus:\(route)"
         case .metra(let route):
             return "metra:\(route)"
+        case .amtrak(let route):
+            return "amtrak:\(route)"
         case .unknown(let raw):
             return "unknown:\(raw)"
         }

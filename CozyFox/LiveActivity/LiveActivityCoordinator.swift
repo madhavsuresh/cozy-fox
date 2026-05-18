@@ -468,7 +468,7 @@ actor LiveActivityCoordinator {
             arrivals = arrivals.filter { $0.stationId == id }
         case .lPlatform(let id):
             arrivals = arrivals.filter { $0.stopId == id }
-        case .bus, .metra, .intercampus:
+        case .bus, .metra, .amtrak, .intercampus:
             return nil
         }
         let now = Date()

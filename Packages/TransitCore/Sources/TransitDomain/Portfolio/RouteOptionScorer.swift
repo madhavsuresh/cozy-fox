@@ -72,7 +72,7 @@ private enum LegSpeed {
             switch leg.transit?.resolution {
             case .line: return leg.approximateDistanceMeters / lTrain
             case .bus: return leg.approximateDistanceMeters / bus
-            case .metra: return leg.approximateDistanceMeters / metra
+            case .metra, .amtrak: return leg.approximateDistanceMeters / metra
             case .unknown, .none: return leg.approximateDistanceMeters / bus
             }
         case .other:

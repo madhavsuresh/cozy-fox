@@ -249,6 +249,10 @@ final class WalkingDistanceStore {
         "metra-\(stationId)"
     }
 
+    nonisolated static func amtrakStationDestinationKey(stationId: String) -> String {
+        "amtrak-\(stationId)"
+    }
+
     nonisolated static func intercampusStopDestinationKey(stopId: String) -> String {
         "intercampus-\(stopId)"
     }

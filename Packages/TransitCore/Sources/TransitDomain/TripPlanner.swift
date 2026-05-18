@@ -316,6 +316,8 @@ private extension TransitResolution {
             return "bus:\(route)"
         case .metra(let route):
             return "metra:\(route)"
+        case .amtrak(let route):
+            return "amtrak:\(route)"
         case .unknown(let raw):
             return "unknown:\(raw)"
         }
@@ -347,6 +349,14 @@ public enum TransitMatcher {
             return TransitLegInfo(
                 rawName: line?.displayName ?? "Metra \(route)",
                 resolution: .metra(route)
+            )
+        }
+
+        if let route = matchAmtrakRoute(in: combined) {
+            let line = AmtrakStationCatalog.route(id: route)
+            return TransitLegInfo(
+                rawName: line?.displayName ?? "Amtrak \(route)",
+                resolution: .amtrak(route)
             )
         }
 
@@ -412,6 +422,21 @@ public enum TransitMatcher {
             let longName = line.longName.lowercased()
             if lower.contains(longName) || lower.contains("metra \(shortName)") || containsRouteToken(shortName, in: lower) {
                 return line.id
+            }
+        }
+        return nil
+    }
+
+    static func matchAmtrakRoute(in text: String) -> String? {
+        let lower = text.lowercased()
+        for route in AmtrakStationCatalog.routes.sorted(by: { $0.displayName.count > $1.displayName.count }) {
+            let shortName = route.shortName.lowercased()
+            let longName = route.longName.lowercased()
+            if (!longName.isEmpty && lower.contains(longName))
+                || (!shortName.isEmpty && lower.contains("amtrak \(shortName)"))
+                || (!shortName.isEmpty && containsRouteToken(shortName, in: lower))
+            {
+                return route.id
             }
         }
         return nil

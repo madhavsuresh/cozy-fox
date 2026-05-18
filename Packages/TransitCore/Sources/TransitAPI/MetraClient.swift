@@ -207,6 +207,8 @@ private enum GTFSRealtimeParser {
             headline: headline,
             shortDescription: description,
             severity: severity,
+            provider: .metra,
+            sourceLabel: "Metra alert",
             impactedRoutes: Array(Set(routes)).sorted(),
             impactedLineColors: [],
             beginsAt: beginsAt,

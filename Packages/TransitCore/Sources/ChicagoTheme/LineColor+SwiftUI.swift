@@ -35,6 +35,24 @@ public extension MetraLine {
     }
 }
 
+public extension AmtrakRoute {
+    var swiftUIColor: Color {
+        Color(
+            red: Double((hex >> 16) & 0xFF) / 255.0,
+            green: Double((hex >> 8) & 0xFF) / 255.0,
+            blue: Double(hex & 0xFF) / 255.0
+        )
+    }
+
+    var contrastingText: Color {
+        Color(
+            red: Double((textHex >> 16) & 0xFF) / 255.0,
+            green: Double((textHex >> 8) & 0xFF) / 255.0,
+            blue: Double(textHex & 0xFF) / 255.0
+        )
+    }
+}
+
 private func textContrast(for hex: UInt32) -> Color {
     let whiteContrast = contrastRatio(foreground: 0xFFFFFF, background: hex)
     let blackContrast = contrastRatio(foreground: 0x000000, background: hex)

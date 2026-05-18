@@ -19,6 +19,10 @@ struct DashboardScreen: View {
     @State private var pinnedMetraStationId: String?
     @State private var pinnedMetraDirectionId: Int?
     @State private var pinnedMetraDestination: String?
+    @State private var pinnedAmtrakRoute: String?
+    @State private var pinnedAmtrakStationId: String?
+    @State private var pinnedAmtrakDirectionId: Int?
+    @State private var pinnedAmtrakDestination: String?
     @State private var includeIntercampus: Bool = false
     @State private var pinnedIntercampusDirection: IntercampusDirection?
     @State private var pinnedIntercampusStopId: String?
@@ -110,6 +114,14 @@ struct DashboardScreen: View {
                             pinnedMetraCard(route: route)
                                 .id(DashboardRailDestination.pinnedMetra)
                         }
+                        if shouldShowAmtrakSurfaces {
+                            amtrakRoutePickerCard
+                                .id(DashboardRailDestination.amtrakPicker)
+                        }
+                        if let route = pinnedAmtrakRoute {
+                            pinnedAmtrakCard(route: route)
+                                .id(DashboardRailDestination.pinnedAmtrak)
+                        }
                         if routePreferences.isModeVisible(.bikes) {
                             bikeCard
                         }
@@ -191,6 +203,10 @@ struct DashboardScreen: View {
         pinnedMetraStationId = prefs.pinnedMetraStationId
         pinnedMetraDirectionId = prefs.pinnedMetraDirectionId
         pinnedMetraDestination = prefs.pinnedMetraDestination
+        pinnedAmtrakRoute = prefs.pinnedAmtrakRoute
+        pinnedAmtrakStationId = prefs.pinnedAmtrakStationId
+        pinnedAmtrakDirectionId = prefs.pinnedAmtrakDirectionId
+        pinnedAmtrakDestination = prefs.pinnedAmtrakDestination
         includeIntercampus = prefs.includeIntercampus
         pinnedIntercampusDirection = prefs.pinnedIntercampusDirection
         pinnedIntercampusStopId = prefs.pinnedIntercampusStopId
@@ -213,6 +229,10 @@ struct DashboardScreen: View {
         routePreferences.isModeVisible(.metra)
     }
 
+    private var shouldShowAmtrakSurfaces: Bool {
+        routePreferences.isModeVisible(.amtrak)
+    }
+
     private var shouldShowIntercampusSurface: Bool {
         (includeIntercampus
             && (routePreferences.isModeVisible(.intercampus) || pinnedIntercampusStopId != nil)
@@ -232,6 +252,7 @@ struct DashboardScreen: View {
         return routePreferences.isModeVisible(.trains)
             || routePreferences.isModeVisible(.buses)
             || routePreferences.isModeVisible(.metra)
+            || routePreferences.isModeVisible(.amtrak)
     }
 
     /// `true` when at least one transit mode is visible — i.e. nearby
@@ -242,6 +263,7 @@ struct DashboardScreen: View {
         routePreferences.isModeVisible(.trains)
             || routePreferences.isModeVisible(.buses)
             || routePreferences.isModeVisible(.metra)
+            || routePreferences.isModeVisible(.amtrak)
     }
 
     private func isTrainLineDiscoverable(_ line: LineColor) -> Bool {
@@ -254,6 +276,10 @@ struct DashboardScreen: View {
 
     private func isMetraRouteDiscoverable(_ routeId: String) -> Bool {
         routePreferences.isMetraRouteVisible(routeId)
+    }
+
+    private func isAmtrakRouteDiscoverable(_ routeId: String) -> Bool {
+        routePreferences.isAmtrakRouteVisible(routeId)
     }
 
     // MARK: - Head home tile
@@ -970,6 +996,9 @@ struct DashboardScreen: View {
                 ForEach(pin.metraLegs, id: \.self) { metra in
                     tripMetraRow(metra)
                 }
+                ForEach(pin.amtrakLegs, id: \.self) { amtrak in
+                    tripAmtrakRow(amtrak)
+                }
                 ForEach(pin.intercampusLegs, id: \.self) { intercampus in
                     tripIntercampusRow(intercampus)
                 }
@@ -1237,6 +1266,57 @@ struct DashboardScreen: View {
                                 urgencies: tripMetraUrgencies)
             } else {
                 Text(isFresh ? "No upcoming Metra trains." : "Fetching Metra trains…")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            }
+        }
+        .padding(ChicagoSpacing.md)
+        .background(ChicagoPalette.Surface.elevated,
+                    in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
+    }
+
+    private func tripAmtrakRow(_ amtrak: PlannedTripPin.AmtrakLeg) -> some View {
+        let alerts = alerts(forAmtrakRoute: amtrak.routeId)
+        let predictions = model.snapshot.amtrakPredictions
+            .filter { $0.routeId == amtrak.routeId }
+            .filter { amtrak.stationId == nil || $0.stationId == amtrak.stationId }
+            .filter { amtrak.directionId == nil || $0.directionId == amtrak.directionId }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+        let group = AmtrakDepartureGrouper.groups(from: predictions, limitPerGroup: 3).first
+        let targetKey: TargetFetchKey? = amtrak.stationId.map {
+            .amtrak(routeId: amtrak.routeId, stationId: $0)
+        }
+        let isFresh: Bool = targetKey.map(model.hasFreshFetch(forTarget:)) ?? model.hasFreshFetch(for: .amtrak)
+        return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(spacing: ChicagoSpacing.xs) {
+                RouteBadge(amtrak: amtrak.routeId, size: .sm)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(amtrak.stationName)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    if let group {
+                        Text(group.title)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                    }
+                }
+                Spacer()
+                if let targetKey {
+                    StalenessIndicator(staleness: model.staleness(forTarget: targetKey))
+                }
+            }
+            if !alerts.isEmpty {
+                pinAlertInlineSummary(alerts)
+            }
+            if let group {
+                AmtrakDepartureListView(
+                    predictions: group.departures,
+                    maxCount: 3,
+                    density: .regular,
+                    accessibilityPrefix: "Amtrak \(group.title.lowercased()) departures"
+                )
+            } else {
+                Text(isFresh ? "No upcoming Amtrak departures." : "Fetching Amtrak departures…")
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
                     .foregroundStyle(ChicagoPalette.Gray.medium)
             }
@@ -1621,6 +1701,8 @@ struct DashboardScreen: View {
                         leg: leg,
                         fallbackOrigin: origin
                     ))
+                case .amtrak:
+                    continue
                 case .unknown:
                     continue
                 }
@@ -1705,6 +1787,8 @@ struct DashboardScreen: View {
                 destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: choice.stationId),
                 directDistanceMeters: accessMeters
             )
+        case .amtrak:
+            return nil
         case .unknown:
             return nil
         }
@@ -4342,6 +4426,289 @@ struct DashboardScreen: View {
         Task { await model.refreshIfNeeded(force: true) }
     }
 
+    // MARK: - Amtrak route picker
+
+    private var amtrakRoutePickerCard: some View {
+        ChicagoCard(title: "Pin an Amtrak route",
+                    eyebrow: "Amtrak",
+                    ornament: .icon(systemName: "tram")) {
+            VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                if let route = visiblePinnedAmtrakRoute {
+                    pickerPinnedConfirmationRow(
+                        title: AmtrakStationCatalog.route(id: route)?.displayName ?? route,
+                        clearLabel: "Clear pinned Amtrak \(route)",
+                        clearAction: { setPinnedAmtrak(nil) }
+                    ) {
+                        RouteBadge(amtrak: route, size: .sm)
+                    }
+                }
+                Menu {
+                    if visiblePinnedAmtrakRoute != nil {
+                        Button("Unpin", role: .destructive) { setPinnedAmtrak(nil) }
+                        Divider()
+                    }
+                    ForEach(amtrakPickerRoutes, id: \.id) { route in
+                        Button(route.displayName) { setPinnedAmtrak(route.id) }
+                    }
+                } label: {
+                    HStack(spacing: ChicagoSpacing.xs) {
+                        Image(systemName: "tram")
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                        Text(visiblePinnedAmtrakRoute == nil ? "Choose a route" : "Change route")
+                            .font(ChicagoTypography.body(.medium, relativeTo: .subheadline))
+                            .foregroundStyle(ChicagoPalette.Gray.darkest)
+                            .lineLimit(1)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(ChicagoPalette.Gray.light)
+                    }
+                    .padding(.horizontal, ChicagoSpacing.md)
+                    .padding(.vertical, ChicagoSpacing.sm)
+                    .background(ChicagoPalette.Surface.elevated,
+                                in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md))
+                }
+            }
+        }
+    }
+
+    private var visiblePinnedAmtrakRoute: String? {
+        guard let pinnedAmtrakRoute, isAmtrakRouteDiscoverable(pinnedAmtrakRoute) else { return nil }
+        return pinnedAmtrakRoute
+    }
+
+    private var amtrakPickerRoutes: [AmtrakRoute] {
+        AmtrakStationCatalog.routes.filter { isAmtrakRouteDiscoverable($0.id) }
+    }
+
+    private func pinnedAmtrakCard(route: String) -> some View {
+        ChicagoCard(title: "Pinned Amtrak",
+                    eyebrow: "Pinned Amtrak",
+                    ornament: .icon(systemName: "tram")) {
+            pinnedAmtrakBody(route: route)
+        }
+    }
+
+    @ViewBuilder
+    private func pinnedAmtrakBody(route: String) -> some View {
+        if let origin {
+            let choices = amtrakStationChoices(route: route, origin: origin)
+            if choices.isEmpty {
+                Text("No \(AmtrakStationCatalog.route(id: route)?.displayName ?? route) station within 30 km of your location.")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else {
+                let selected = effectivePinnedAmtrakStation(in: choices)
+                VStack(alignment: .leading, spacing: ChicagoSpacing.md) {
+                    pinnedRouteControlRow(
+                        title: AmtrakStationCatalog.route(id: route)?.displayName ?? route,
+                        detail: AmtrakStationCatalog.route(id: route)?.kind.label ?? "Amtrak",
+                        alerts: alerts(forAmtrakRoute: route),
+                        clearLabel: "Clear pinned Amtrak \(route)",
+                        clearAction: { setPinnedAmtrak(nil) }
+                    ) {
+                        RouteBadge(amtrak: route, size: .md)
+                    }
+                    pinnedAmtrakStationRow(route: route, station: selected.station, origin: origin)
+                    directionPickerForAmtrak(route: route, station: selected.station)
+                    amtrakStationSelector(choices: choices, origin: origin)
+                }
+                .task(id: accessTaskKey(prefix: "amtrak-\(route)", origin: origin)) {
+                    model.walkingResolver.ensureFresh(
+                        origin: origin,
+                        amtrakStations: choices.map(\.station)
+                    )
+                }
+            }
+        } else {
+            Text("Waiting for a location fix…")
+                .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+        }
+    }
+
+    private func amtrakStationChoices(
+        route: String,
+        origin: (lat: Double, lon: Double)
+    ) -> [AmtrakStationChoice] {
+        NearestAmtrakStationResolver(maxDistanceMeters: 30_000)
+            .closestStations(
+                onRoute: route,
+                to: origin,
+                limit: 6,
+                catalog: AmtrakStationCatalog.all
+            )
+            .map { AmtrakStationChoice(station: $0.station, distance: $0.distance) }
+    }
+
+    private func amtrakStationSelector(
+        choices: [AmtrakStationChoice],
+        origin: (lat: Double, lon: Double)
+    ) -> some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            sectionLabel("Pick a station")
+            StationChipStrip {
+                ForEach(choices) { entry in
+                    AmtrakStationChip(
+                        station: entry.station,
+                        accessTime: accessTimeSummary(
+                            origin: origin,
+                            destinationKey: WalkingDistanceStore.amtrakStationDestinationKey(stationId: entry.station.id),
+                            directDistanceMeters: entry.distance
+                        ),
+                        isSelected: entry.station.id == effectivePinnedAmtrakStation(in: choices).station.id,
+                        accent: pinnedAmtrakAccent,
+                        action: { setPinnedAmtrakStation(entry.station) }
+                    )
+                }
+            }
+        }
+    }
+
+    private func effectivePinnedAmtrakStation(
+        in choices: [AmtrakStationChoice]
+    ) -> AmtrakStationChoice {
+        if let id = pinnedAmtrakStationId,
+           let selected = choices.first(where: { $0.station.id == id })
+        {
+            return selected
+        }
+        return choices.first!
+    }
+
+    @ViewBuilder
+    private func directionPickerForAmtrak(route: String, station: AmtrakStation) -> some View {
+        let groups = AmtrakStationCatalog.departureGroups(routeId: route, stationId: station.id)
+        if groups.count > 1 {
+            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                sectionLabel("Pick a direction")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: ChicagoSpacing.xs) {
+                        ForEach(groups) { group in
+                            DirectionChip(
+                                label: group.title,
+                                isSelected: pinnedAmtrakDirectionId == group.directionId,
+                                accent: pinnedAmtrakAccent,
+                                action: { togglePinnedAmtrakDirection(group) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func pinnedAmtrakStationRow(
+        route: String,
+        station: AmtrakStation,
+        origin: (lat: Double, lon: Double)
+    ) -> some View {
+        let distance = Distance.meters(
+            from: origin,
+            to: (station.latitude, station.longitude)
+        )
+        let accessTime = accessTimeSummary(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.amtrakStationDestinationKey(stationId: station.id),
+            directDistanceMeters: distance
+        )
+        let predictions = amtrakPredictions(route: route, station: station)
+        let group = AmtrakDepartureGrouper.groups(from: predictions, limitPerGroup: 3).first
+        return VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(station.name)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                    .foregroundStyle(ChicagoPalette.bahama)
+                Spacer()
+                Text(AccessTimeFormatter.short(accessTime))
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            }
+            Text(station.timeZoneIdentifier ?? "Amtrak schedule")
+                .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                .foregroundStyle(ChicagoPalette.Gray.light)
+            if predictions.isEmpty {
+                Text(model.hasFreshFetch(for: .amtrak)
+                     ? "No upcoming Amtrak departures in the schedule window."
+                     : "Fetching Amtrak departures…")
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+            } else if let group {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.title)
+                        .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                        .lineLimit(1)
+                    AmtrakDepartureListView(
+                        predictions: group.departures,
+                        maxCount: 3,
+                        density: .regular,
+                        accessibilityPrefix: "Amtrak \(group.title.lowercased()) departures"
+                    )
+                }
+            }
+        }
+    }
+
+    private func amtrakPredictions(route: String, station: AmtrakStation) -> [AmtrakPrediction] {
+        model.snapshot.amtrakPredictions
+            .filter { prediction in
+                guard prediction.routeId == route, prediction.stationId == station.id else { return false }
+                if let directionId = pinnedAmtrakDirectionId,
+                   prediction.directionId != directionId {
+                    return false
+                }
+                return true
+            }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+    }
+
+    private var pinnedAmtrakAccent: Color {
+        pinnedAmtrakRoute
+            .flatMap { AmtrakStationCatalog.route(id: $0)?.swiftUIColor }
+            ?? ChicagoPalette.flagBlue
+    }
+
+    private func setPinnedAmtrak(_ route: String?) {
+        pinnedAmtrakRoute = route
+        pinnedAmtrakStationId = nil
+        pinnedAmtrakDirectionId = nil
+        pinnedAmtrakDestination = nil
+        model.saveManualRoutePreferences {
+            $0.pinnedAmtrakRoute = route
+            $0.pinnedAmtrakStationId = nil
+            $0.pinnedAmtrakDirectionId = nil
+            $0.pinnedAmtrakDestination = nil
+        }
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
+    private func setPinnedAmtrakStation(_ station: AmtrakStation) {
+        pinnedAmtrakStationId = station.id
+        pinnedAmtrakDirectionId = nil
+        pinnedAmtrakDestination = nil
+        model.saveManualRoutePreferences {
+            $0.pinnedAmtrakStationId = station.id
+            $0.pinnedAmtrakDirectionId = nil
+            $0.pinnedAmtrakDestination = nil
+        }
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
+    private func togglePinnedAmtrakDirection(_ group: AmtrakDepartureGroup) {
+        let isSame = pinnedAmtrakDirectionId == group.directionId
+        pinnedAmtrakDirectionId = isSame ? nil : group.directionId
+        pinnedAmtrakDestination = nil
+        model.saveManualRoutePreferences {
+            $0.pinnedAmtrakDirectionId = isSame ? nil : group.directionId
+            $0.pinnedAmtrakDestination = nil
+        }
+        Task { await model.refreshIfNeeded(force: true) }
+    }
+
     // MARK: - Bikes
 
     private var bikeCard: some View {
@@ -4436,6 +4803,7 @@ struct DashboardScreen: View {
         let trainCorridors = nearbyTrainCorridors
         let busCorridors = nearbyBusCorridors
         let metraRoutes = nearbyMetraRoutes
+        let amtrakRoutes = nearbyAmtrakRoutes
         return ChicagoCard(title: "Near you",
                     eyebrow: "Discover",
                     ornament: .icon(systemName: "location.fill")) {
@@ -4449,6 +4817,7 @@ struct DashboardScreen: View {
                     if !trainCorridors.isEmpty
                         || !busCorridors.isEmpty
                         || !metraRoutes.isEmpty
+                        || !amtrakRoutes.isEmpty
                     {
                         Rectangle()
                             .fill(ChicagoPalette.Gray.light.opacity(0.28))
@@ -4456,6 +4825,7 @@ struct DashboardScreen: View {
                     }
                     nearbyBuses(corridors: busCorridors)
                     nearbyMetra(routes: metraRoutes)
+                    nearbyAmtrak(routes: amtrakRoutes)
                     // Inline "hide" affordance so the user can collapse
                     // the section without opening Settings. Tucked at
                     // the bottom — discoverable when they're done
@@ -4535,6 +4905,34 @@ struct DashboardScreen: View {
             }
         } else {
             Text("No Metra lines within 3 km")
+                .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
+                .foregroundStyle(ChicagoPalette.Gray.medium)
+        }
+    }
+
+    @ViewBuilder
+    private func nearbyAmtrak(routes: [AmtrakEntry]) -> some View {
+        if !routePreferences.isModeVisible(.amtrak) {
+            EmptyView()
+        } else if !routes.isEmpty {
+            VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+                sectionLabel("Amtrak nearby")
+                SmallMultiplesRow(routes) { entry in
+                    let group = AmtrakDepartureGrouper.groups(
+                        from: amtrakPredictions(for: entry),
+                        limitPerGroup: 3
+                    ).first
+                    AmtrakDepartureTimesTile(
+                        badge: RouteBadge(amtrak: entry.routeId, size: .md),
+                        title: group?.title,
+                        departures: group?.departures ?? [],
+                        subtitle: entry.station.name
+                    )
+                    .onTapGesture { setPinnedAmtrak(entry.routeId) }
+                }
+            }
+        } else {
+            Text("No Amtrak routes within 5 km")
                 .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                 .foregroundStyle(ChicagoPalette.Gray.medium)
         }
@@ -4647,6 +5045,19 @@ struct DashboardScreen: View {
             .filter { $0.routeId != pinnedMetraRoute }
             .filter { isMetraRouteDiscoverable($0.routeId) }
             .map { MetraEntry(routeId: $0.routeId, station: $0.station, distance: $0.distance) }
+    }
+
+    private var nearbyAmtrakRoutes: [AmtrakEntry] {
+        guard routePreferences.isModeVisible(.amtrak), let origin else { return [] }
+        return NearestAmtrakStationResolver(maxDistanceMeters: 5_000)
+            .nearestPerRoute(
+                to: origin,
+                limit: 5,
+                catalog: AmtrakStationCatalog.all
+            )
+            .filter { $0.routeId != pinnedAmtrakRoute }
+            .filter { isAmtrakRouteDiscoverable($0.routeId) }
+            .map { AmtrakEntry(routeId: $0.routeId, station: $0.station, distance: $0.distance) }
     }
 
     private func arrivals(
@@ -4915,6 +5326,14 @@ struct DashboardScreen: View {
             .map { $0 }
     }
 
+    private func amtrakPredictions(for entry: AmtrakEntry) -> [AmtrakPrediction] {
+        model.snapshot.amtrakPredictions
+            .filter { $0.stationId == entry.station.id && $0.routeId == entry.routeId }
+            .sorted { $0.arrivalAt < $1.arrivalAt }
+            .prefix(3)
+            .map { $0 }
+    }
+
     // MARK: - Top rail
 
     private func topPinnedRoutesRail(scrollProxy: ScrollViewProxy) -> some View {
@@ -5011,6 +5430,8 @@ struct DashboardScreen: View {
             return pinnedBusRoute == nil ? .busPicker : .pinnedBus
         case .metra:
             return pinnedMetraRoute == nil ? .metraPicker : .pinnedMetra
+        case .amtrak:
+            return pinnedAmtrakRoute == nil ? .amtrakPicker : .pinnedAmtrak
         case .intercampus:
             return .intercampus
         }
@@ -5024,6 +5445,8 @@ struct DashboardScreen: View {
             return shouldShowBusSurfaces || pinnedBusRoute != nil
         case .metra:
             return shouldShowMetraSurfaces || pinnedMetraRoute != nil
+        case .amtrak:
+            return shouldShowAmtrakSurfaces || pinnedAmtrakRoute != nil
         case .intercampus:
             return shouldShowIntercampusSurface
         }
@@ -5037,6 +5460,8 @@ struct DashboardScreen: View {
             return pinnedBusRoute != nil
         case .metra:
             return pinnedMetraRoute != nil
+        case .amtrak:
+            return pinnedAmtrakRoute != nil
         case .intercampus:
             return pinnedIntercampusDirection != nil || pinnedIntercampusStopId != nil || plannedTripHasIntercampus
         }
@@ -5060,6 +5485,12 @@ struct DashboardScreen: View {
                 return "\(name) pinned. Jump to pinned Metra."
             }
             return "Metra lines. Jump to Metra picker."
+        case .amtrak:
+            if let pinnedAmtrakRoute {
+                let name = AmtrakStationCatalog.route(id: pinnedAmtrakRoute)?.displayName ?? pinnedAmtrakRoute
+                return "\(name) pinned. Jump to pinned Amtrak."
+            }
+            return "Amtrak routes. Jump to Amtrak picker."
         case .intercampus:
             if let direction = activeIntercampusRailDirection {
                 return "\(direction.label) Intercampus pinned. Jump to Intercampus."
@@ -5112,6 +5543,12 @@ struct DashboardScreen: View {
             } else {
                 railModeIcon(mode)
             }
+        case .amtrak:
+            if let route = pinnedAmtrakRoute {
+                RouteBadge(amtrak: route, size: .sm)
+            } else {
+                railModeIcon(mode)
+            }
         case .intercampus:
             if activeIntercampusRailDirection != nil || pinnedIntercampusStopId != nil || plannedTripHasIntercampus {
                 IntercampusRailBadge(direction: activeIntercampusRailDirection)
@@ -5138,6 +5575,9 @@ struct DashboardScreen: View {
         case .metra:
             return pinnedMetraRoute
                 .flatMap { MetraStationCatalog.route(id: $0)?.swiftUIColor } ?? ChicagoPalette.Gray.light
+        case .amtrak:
+            return pinnedAmtrakRoute
+                .flatMap { AmtrakStationCatalog.route(id: $0)?.swiftUIColor } ?? ChicagoPalette.Gray.light
         case .intercampus:
             return ChicagoPalette.Mode.intercampus
         }
@@ -5173,13 +5613,19 @@ struct DashboardScreen: View {
                 summaryLabel: "Metra \(MetraStationCatalog.route(id: $0.routeId)?.shortName ?? $0.routeId)"
             )
         }
+        let amtrakTokens = pin.amtrakLegs.map {
+            DashboardTripRouteToken(
+                kind: .amtrak($0.routeId),
+                summaryLabel: "Amtrak \(AmtrakStationCatalog.route(id: $0.routeId)?.displayCode ?? $0.routeId)"
+            )
+        }
         let intercampusTokens = pin.intercampusLegs.map {
             DashboardTripRouteToken(
                 kind: .intercampus($0.direction),
                 summaryLabel: "Intercampus"
             )
         }
-        let tokens = trainTokens + busTokens + metraTokens + intercampusTokens
+        let tokens = trainTokens + busTokens + metraTokens + amtrakTokens + intercampusTokens
         let summaryPieces = pin.summary
             .split(separator: "+")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -5232,6 +5678,8 @@ struct DashboardScreen: View {
             RouteBadge(bus: route, size: .sm)
         case .metra(let routeId):
             RouteBadge(metra: routeId, size: .sm)
+        case .amtrak(let routeId):
+            RouteBadge(amtrak: routeId, size: .sm)
         case .intercampus(let direction):
             IntercampusRailBadge(direction: direction)
         }
@@ -5265,6 +5713,17 @@ struct DashboardScreen: View {
                 forLines: [],
                 busRoutes: [],
                 metraRoutes: Set([route])
+            )
+        )
+    }
+
+    private func alerts(forAmtrakRoute route: String) -> [ServiceAlert] {
+        orderedAlerts(
+            model.snapshot.activeAlerts.filtered(
+                forLines: [],
+                busRoutes: [],
+                metraRoutes: [],
+                amtrakRoutes: Set([route])
             )
         )
     }
@@ -5542,6 +6001,8 @@ struct DashboardScreen: View {
                 RouteBadge(bus: route, size: .sm)
             case .metra(let route):
                 RouteBadge(metra: route, size: .sm)
+            case .amtrak(let route):
+                RouteBadge(amtrak: route, size: .sm)
             case .unknown:
                 Image(systemName: "questionmark.diamond")
                     .font(.caption)
@@ -5935,6 +6396,7 @@ private enum DashboardRailMode: String, CaseIterable, Identifiable {
     case train
     case bus
     case metra
+    case amtrak
     case intercampus
 
     var id: String { rawValue }
@@ -5944,6 +6406,7 @@ private enum DashboardRailMode: String, CaseIterable, Identifiable {
         case .train: "tram.fill"
         case .bus: "bus.fill"
         case .metra: "train.side.front.car"
+        case .amtrak: "tram"
         case .intercampus: "graduationcap.fill"
         }
     }
@@ -5957,6 +6420,8 @@ private enum DashboardRailDestination: Hashable {
     case pinnedBus
     case metraPicker
     case pinnedMetra
+    case amtrakPicker
+    case pinnedAmtrak
     case plannedTrip
 }
 
@@ -5965,6 +6430,7 @@ private struct DashboardTripRouteToken: Identifiable, Hashable {
         case train(LineColor)
         case bus(String)
         case metra(String)
+        case amtrak(String)
         case intercampus(IntercampusDirection)
     }
 
@@ -5979,6 +6445,8 @@ private struct DashboardTripRouteToken: Identifiable, Hashable {
             return "bus-\(route)"
         case .metra(let routeId):
             return "metra-\(routeId)"
+        case .amtrak(let routeId):
+            return "amtrak-\(routeId)"
         case .intercampus(let direction):
             return "intercampus-\(direction.rawValue)"
         }
@@ -6069,6 +6537,13 @@ private struct BusCorridorEntry: Identifiable {
 private struct MetraEntry: Identifiable {
     let routeId: String
     let station: MetraStation
+    let distance: Double
+    var id: String { "\(routeId)-\(station.id)" }
+}
+
+private struct AmtrakEntry: Identifiable {
+    let routeId: String
+    let station: AmtrakStation
     let distance: Double
     var id: String { "\(routeId)-\(station.id)" }
 }
@@ -6259,6 +6734,50 @@ private struct NearbyBusCorridorTile: View {
     }
 }
 
+private struct AmtrakDepartureTimesTile: View {
+    let badge: RouteBadge
+    let title: String?
+    let departures: [AmtrakPrediction]
+    let subtitle: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ChicagoSpacing.xs) {
+            badge
+            if let title {
+                Text(title)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            AmtrakDepartureListView(
+                predictions: departures,
+                maxCount: 2,
+                density: .compact,
+                accessibilityPrefix: "Amtrak departures"
+            )
+            if let subtitle {
+                Text(subtitle)
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .foregroundStyle(ChicagoPalette.Gray.medium)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(ChicagoSpacing.sm)
+        .frame(width: 132, height: 116, alignment: .leading)
+        .background(
+            ChicagoPalette.Surface.card,
+            in: RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                .strokeBorder(ChicagoPalette.Gray.light.opacity(0.26),
+                              lineWidth: ChicagoSpacing.Stroke.hairline)
+        )
+    }
+}
+
 private extension TransitCorridor {
     var shortLabel: String {
         switch self {
@@ -6329,6 +6848,13 @@ private struct BusStopChoice: Identifiable {
 
 private struct MetraStationChoice: Identifiable {
     let station: MetraStation
+    let distance: Double
+
+    var id: String { station.id }
+}
+
+private struct AmtrakStationChoice: Identifiable {
+    let station: AmtrakStation
     let distance: Double
 
     var id: String { station.id }
@@ -6603,6 +7129,47 @@ private struct BusStopChip: View {
 
 private struct MetraStationChip: View {
     let station: MetraStation
+    let accessTime: AccessTimeSummary
+    let isSelected: Bool
+    let accent: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(station.name)
+                    .font(ChicagoTypography.body(.medium, relativeTo: .caption))
+                    .foregroundStyle(isSelected ? .white : ChicagoPalette.Gray.darkest)
+                    .lineLimit(1)
+                Text(AccessTimeFormatter.short(accessTime))
+                    .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : ChicagoPalette.Gray.medium)
+            }
+            .padding(.horizontal, ChicagoSpacing.md)
+            .padding(.vertical, ChicagoSpacing.sm)
+            .frame(minWidth: 132, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .fill(isSelected ? accent : ChicagoPalette.Surface.elevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ChicagoSpacing.Radius.md)
+                    .strokeBorder(
+                        isSelected ? .clear : ChicagoPalette.Gray.light.opacity(0.34),
+                        lineWidth: ChicagoSpacing.Stroke.thin
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(station.name), \(AccessTimeFormatter.accessibility(accessTime))")
+    }
+}
+
+private struct AmtrakStationChip: View {
+    let station: AmtrakStation
     let accessTime: AccessTimeSummary
     let isSelected: Bool
     let accent: Color
