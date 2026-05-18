@@ -2816,8 +2816,19 @@ struct DashboardScreen: View {
             components.append("location \(intercampusLocationAgeText(location.observedAt))")
         }
 
+        if let scheduleComparison = intercampusTrafficScheduleComparisonText(arrival.trafficEstimate) {
+            components.append(scheduleComparison)
+        }
+
         guard !components.isEmpty else { return nil }
         return components.joined(separator: " · ")
+    }
+
+    private func intercampusTrafficScheduleComparisonText(_ estimate: IntercampusTrafficEstimate?) -> String? {
+        guard let delta = estimate?.scheduleDeltaSeconds, delta.isFinite else { return nil }
+        let minutes = Int((abs(delta) / 60).rounded())
+        guard minutes > 0 else { return "on schedule" }
+        return delta > 0 ? "+\(minutes)m vs schedule" : "-\(minutes)m vs schedule"
     }
 
     private func intercampusLocationAgeText(_ observedAt: Date) -> String {

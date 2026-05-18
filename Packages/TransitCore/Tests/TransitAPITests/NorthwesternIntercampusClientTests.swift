@@ -158,6 +158,48 @@ struct NorthwesternIntercampusClientTests {
         #expect(location.observedAt == now)
     }
 
+    @Test func carriesStaticScheduleTimeOntoRealtimeArrival() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        let now = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 5,
+            day: 14,
+            hour: 10,
+            minute: 38
+        ))!
+        let stopId = "60e7b447-b29d-4812-bf93-7a77a1d5ae5b"
+        let scheduled = try #require(IntercampusCatalog.scheduledArrivals(
+            stopIds: [stopId],
+            after: now,
+            generatedAt: now
+        ).first)
+        let tripId = scheduled.tripId
+        let realtimeArrivalAt = scheduled.arrivalAt.addingTimeInterval(2 * 60)
+        let stub = StubHTTPClient()
+        await stub.register(
+            path: "/v1/gtfs/realtime/tripUpdate",
+            data: FeedBuilder.feed([
+                FeedBuilder.tripUpdateEntity(
+                    entityId: "schedule-linked",
+                    tripId: tripId,
+                    routeId: nil,
+                    stopId: stopId,
+                    arrivalAt: realtimeArrivalAt
+                ),
+            ], timestamp: now)
+        )
+        let client = NorthwesternIntercampusClient(http: stub)
+
+        let arrivals = try await client.fetchArrivals(stopIds: [stopId], now: now)
+        let realtime = try #require(arrivals.first {
+            $0.tripId == tripId && $0.timeSource == .liveMap
+        })
+
+        #expect(realtime.arrivalAt == realtimeArrivalAt)
+        #expect(realtime.scheduledArrivalAt == scheduled.arrivalAt)
+    }
+
     @Test func fallsBackToStaticScheduleWhenRealtimeHasNoStopPredictions() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Chicago")!

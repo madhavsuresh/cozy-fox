@@ -391,7 +391,16 @@ final class DepartureLadderDebugViewModel {
         let walkSeconds = haversineWalkSeconds(from: home, to: (boarding.latitude, boarding.longitude), walkSpeedEstimate: walkSpeedEstimate)
         let finalMile = haversineWalkSeconds(from: (alighting.latitude, alighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
         let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
-        let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 14, stopPenaltyPerKm: 6)
+        let scheduledInVehicle = IntercampusCatalog.scheduledTravelSeconds(
+            direction: direction,
+            from: boarding.id,
+            to: alighting.id,
+            after: now
+        )
+        let inVehicle = scheduledInVehicle ?? stationToStationSeconds(meters: dist, modeSpeedMps: 14, stopPenaltyPerKm: 6)
+        let inVehicleSigma = scheduledInVehicle == nil
+            ? max(60, inVehicle * 0.20)
+            : max(90, inVehicle * 0.12)
 
         let live = adapter.liveIntercampusDepartures(from: snapshot, stopId: boarding.id, direction: direction, now: now)
         let feed = adapter.feedState(fetchedAt: snapshot.intercampusFetchedAt, now: now, freshnessTtlSeconds: 180)
@@ -406,7 +415,7 @@ final class DepartureLadderDebugViewModel {
                 boardingPoint: .stop(systemRef: "Intercampus:\(boarding.id)", name: boarding.name, latitude: boarding.latitude, longitude: boarding.longitude),
                 alightingPoint: .stop(systemRef: "Intercampus:\(alighting.id)", name: alighting.name, latitude: alighting.latitude, longitude: alighting.longitude),
                 inVehicleSeconds: inVehicle,
-                inVehicleSigmaSeconds: max(60, inVehicle * 0.20),
+                inVehicleSigmaSeconds: inVehicleSigma,
                 finalMileSeconds: finalMile,
                 finalMileSigmaSeconds: max(30, finalMile * 0.12),
                 scheduleHeadwaySeconds: 1200,

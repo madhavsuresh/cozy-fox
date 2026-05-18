@@ -101,6 +101,7 @@ public struct IntercampusVehicleLocation: Codable, Sendable, Hashable {
 public struct IntercampusTrafficEstimate: Codable, Sendable, Hashable {
     public let generatedAt: Date
     public let sourceArrivalAt: Date
+    public let scheduledArrivalAt: Date?
     public let arrivalAt: Date
     public let travelTime: TimeInterval
     public let distanceMeters: Double
@@ -108,15 +109,41 @@ public struct IntercampusTrafficEstimate: Codable, Sendable, Hashable {
     public init(
         generatedAt: Date,
         sourceArrivalAt: Date,
+        scheduledArrivalAt: Date? = nil,
         arrivalAt: Date,
         travelTime: TimeInterval,
         distanceMeters: Double
     ) {
         self.generatedAt = generatedAt
         self.sourceArrivalAt = sourceArrivalAt
+        self.scheduledArrivalAt = scheduledArrivalAt
         self.arrivalAt = arrivalAt
         self.travelTime = travelTime
         self.distanceMeters = distanceMeters
+    }
+
+    public var scheduleDeltaSeconds: TimeInterval? {
+        guard let scheduledArrivalAt else { return nil }
+        return arrivalAt.timeIntervalSince(scheduledArrivalAt)
+    }
+
+    public func boundedForStopCountdown(
+        nearStopDistanceMeters: Double = 75,
+        earlyArrivalTolerance: TimeInterval = 60
+    ) -> IntercampusTrafficEstimate {
+        let stopCountdownFloor = [sourceArrivalAt, scheduledArrivalAt].compactMap(\.self).max() ?? sourceArrivalAt
+        guard distanceMeters <= nearStopDistanceMeters,
+              arrivalAt < stopCountdownFloor.addingTimeInterval(-earlyArrivalTolerance)
+        else { return self }
+
+        return IntercampusTrafficEstimate(
+            generatedAt: generatedAt,
+            sourceArrivalAt: sourceArrivalAt,
+            scheduledArrivalAt: scheduledArrivalAt,
+            arrivalAt: stopCountdownFloor,
+            travelTime: travelTime,
+            distanceMeters: distanceMeters
+        )
     }
 }
 
@@ -132,6 +159,7 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
     public let destinationName: String
     public let generatedAt: Date
     public let arrivalAt: Date
+    public let scheduledArrivalAt: Date?
     public let delaySeconds: Int?
     public let isDelayed: Bool
     public let timeSource: IntercampusArrivalTimeSource
@@ -150,6 +178,7 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
         destinationName: String,
         generatedAt: Date,
         arrivalAt: Date,
+        scheduledArrivalAt: Date? = nil,
         delaySeconds: Int?,
         isDelayed: Bool,
         timeSource: IntercampusArrivalTimeSource = .liveMap,
@@ -167,6 +196,7 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
         self.destinationName = destinationName
         self.generatedAt = generatedAt
         self.arrivalAt = arrivalAt
+        self.scheduledArrivalAt = scheduledArrivalAt
         self.delaySeconds = delaySeconds
         self.isDelayed = isDelayed
         self.timeSource = timeSource
@@ -179,7 +209,8 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
     }
 
     public func applyingTrafficEstimate(_ estimate: IntercampusTrafficEstimate) -> IntercampusArrival {
-        IntercampusArrival(
+        let boundedEstimate = estimate.boundedForStopCountdown()
+        return IntercampusArrival(
             id: id,
             routeId: routeId,
             direction: direction,
@@ -190,12 +221,13 @@ public struct IntercampusArrival: Codable, Sendable, Hashable, Identifiable {
             stopName: stopName,
             destinationName: destinationName,
             generatedAt: generatedAt,
-            arrivalAt: estimate.arrivalAt,
+            arrivalAt: boundedEstimate.arrivalAt,
+            scheduledArrivalAt: scheduledArrivalAt,
             delaySeconds: delaySeconds,
             isDelayed: isDelayed,
             timeSource: .traffic,
             vehicleLocation: vehicleLocation,
-            trafficEstimate: estimate
+            trafficEstimate: boundedEstimate
         )
     }
 }
@@ -250,6 +282,22 @@ public enum IntercampusCatalog {
             lookaheadDays: lookaheadDays
         )
     }
+
+    public static func scheduledTravelSeconds(
+        direction: IntercampusDirection,
+        from boardingStopId: String,
+        to alightingStopId: String,
+        after now: Date,
+        lookaheadDays: Int = 2
+    ) -> TimeInterval? {
+        IntercampusCatalogStore.shared.scheduledTravelSeconds(
+            direction: direction,
+            from: boardingStopId,
+            to: alightingStopId,
+            after: now,
+            lookaheadDays: lookaheadDays
+        )
+    }
 }
 
 private struct IntercampusCatalogStore: Sendable {
@@ -263,6 +311,7 @@ private struct IntercampusCatalogStore: Sendable {
     let stopsByDirection: [IntercampusDirection: [IntercampusStop]]
     let tripById: [String: ScheduledTrip]
     let stopTimesByStopId: [String: [ScheduledStopTime]]
+    let stopTimesByTripId: [String: [ScheduledStopTime]]
     let calendarByServiceId: [String: ServiceCalendar]
     let calendarDatesByDate: [Int: [ServiceException]]
 
@@ -302,6 +351,15 @@ private struct IntercampusCatalogStore: Sendable {
                 return $0.arrivalSeconds < $1.arrivalSeconds
             }
         }
+        self.stopTimesByTripId = Dictionary(grouping: resource.stopTimes.compactMap(\.model), by: \.tripId)
+            .mapValues { entries in
+                entries.sorted {
+                    if $0.sequence == $1.sequence {
+                        return $0.arrivalSeconds < $1.arrivalSeconds
+                    }
+                    return $0.sequence < $1.sequence
+                }
+            }
         self.calendarByServiceId = Dictionary(
             uniqueKeysWithValues: resource.calendar.compactMap(\.model).map { ($0.serviceId, $0) }
         )
@@ -347,6 +405,7 @@ private struct IntercampusCatalogStore: Sendable {
                         destinationName: route.destinationName,
                         generatedAt: generatedAt,
                         arrivalAt: arrivalAt,
+                        scheduledArrivalAt: arrivalAt,
                         delaySeconds: nil,
                         isDelayed: false,
                         timeSource: .schedule
@@ -356,6 +415,50 @@ private struct IntercampusCatalogStore: Sendable {
         }
 
         return arrivals.sorted { $0.arrivalAt < $1.arrivalAt }
+    }
+
+    func scheduledTravelSeconds(
+        direction: IntercampusDirection,
+        from boardingStopId: String,
+        to alightingStopId: String,
+        after now: Date,
+        lookaheadDays: Int
+    ) -> TimeInterval? {
+        guard boardingStopId != alightingStopId else { return nil }
+
+        let serviceDays = Self.serviceDays(around: now, lookaheadDays: lookaheadDays)
+        let earliest = now.addingTimeInterval(-120)
+        let latest = now.addingTimeInterval(TimeInterval(max(1, lookaheadDays) * 24 * 60 * 60))
+        var candidates: [(boardingAt: Date, duration: TimeInterval)] = []
+
+        for serviceDay in serviceDays {
+            let activeServices = activeServiceIds(on: serviceDay)
+            guard !activeServices.isEmpty else { continue }
+
+            for trip in tripById.values {
+                guard activeServices.contains(trip.serviceId),
+                      routeById[trip.routeId]?.direction == direction,
+                      let stopTimes = stopTimesByTripId[trip.id],
+                      let boarding = stopTimes.first(where: { $0.stopId == boardingStopId }),
+                      let alighting = stopTimes.first(where: { $0.stopId == alightingStopId }),
+                      alighting.sequence > boarding.sequence
+                else { continue }
+
+                let boardingAt = serviceDay.midnight.addingTimeInterval(TimeInterval(boarding.departureSeconds))
+                let alightingAt = serviceDay.midnight.addingTimeInterval(TimeInterval(alighting.arrivalSeconds))
+                let duration = alightingAt.timeIntervalSince(boardingAt)
+                guard duration > 0, boardingAt >= earliest, boardingAt <= latest else { continue }
+                candidates.append((boardingAt, duration))
+            }
+        }
+
+        let durations = candidates
+            .sorted { $0.boardingAt < $1.boardingAt }
+            .prefix(6)
+            .map(\.duration)
+            .sorted()
+        guard !durations.isEmpty else { return nil }
+        return durations[durations.count / 2]
     }
 
     private func activeServiceIds(on serviceDay: ServiceDay) -> Set<String> {
