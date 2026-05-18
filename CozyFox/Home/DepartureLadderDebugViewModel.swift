@@ -14,6 +14,18 @@ final class DepartureLadderDebugViewModel {
         case noCandidates
     }
 
+    enum LastMileMode: String, Sendable, Equatable {
+        case walk
+        case bike
+
+        var legMode: LegMode {
+            switch self {
+            case .walk: .walk
+            case .bike: .divvyClassic
+            }
+        }
+    }
+
     private(set) var ladder: DepartureLadder?
     private(set) var status: Status = .missingHome
     private(set) var candidateSummaries: [String] = []
@@ -28,12 +40,19 @@ final class DepartureLadderDebugViewModel {
     private let unreachableAlightingMeters: Double = 3_000
     private let logStore = JourneyPredictionLogStore()
 
+    /// Effective walking pace, sec/m. ~1.28 m/s.
+    private let walkPaceSecondsPerMeter: Double = 0.78
+    /// Effective cycling pace, sec/m. ~3.3 m/s — slower than peak so that
+    /// unlock/light/parking penalties on a short last-mile aren't ignored.
+    private let bikePaceSecondsPerMeter: Double = 0.30
+
     func rebuild(
         snapshot: TransitSnapshot,
         prefs: UserRoutePreferences,
         anchors: CommuteAnchors,
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
+        lastMileMode: LastMileMode = .walk,
         now: Date = .now
     ) {
         guard let home = anchors.home else {
@@ -57,28 +76,28 @@ final class DepartureLadderDebugViewModel {
         var walkSecondsByBoardingKey: [String: TimeInterval] = [:]
 
         // CTA trains — pinned line first, then any other tracked preferences heading toward work
-        for spec in trainSpecs(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, now: now) {
+        for spec in trainSpecs(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, lastMileMode: lastMileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("\(spec.modeLabel): \(spec.candidate.title)")
         }
 
         // Metra
-        if let spec = metraSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, now: now) {
+        if let spec = metraSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, lastMileMode: lastMileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Metra: \(spec.candidate.title)")
         }
 
         // CTA Bus
-        if let spec = busSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, now: now) {
+        if let spec = busSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, lastMileMode: lastMileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Bus: \(spec.candidate.title)")
         }
 
         // Intercampus shuttle
-        if let spec = intercampusSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkSpeedEstimate: walkSpeedEstimate, now: now) {
+        if let spec = intercampusSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkSpeedEstimate: walkSpeedEstimate, lastMileMode: lastMileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Intercampus: \(spec.candidate.title)")
@@ -133,6 +152,7 @@ final class DepartureLadderDebugViewModel {
         work: (lat: Double, lon: Double),
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
+        lastMileMode: LastMileMode,
         now: Date
     ) -> [ResolvedSpec] {
         var seen: Set<String> = []
@@ -174,7 +194,12 @@ final class DepartureLadderDebugViewModel {
             }
 
             let finalAlighting = detected?.finalAlighting ?? alighting
-            let finalMile = haversineWalkSeconds(from: (finalAlighting.latitude, finalAlighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
+            let finalMile = finalMileSeconds(
+                from: (finalAlighting.latitude, finalAlighting.longitude),
+                to: work,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: lastMileMode
+            )
 
             let firstSegmentEnd = detected?.intermediate ?? alighting
             let stationDist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (firstSegmentEnd.latitude, firstSegmentEnd.longitude))
@@ -228,6 +253,7 @@ final class DepartureLadderDebugViewModel {
                 inVehicleSigmaSeconds: max(60, inVehicle * 0.12),
                 finalMileSeconds: finalMile,
                 finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                finalMileMode: lastMileMode.legMode,
                 scheduleHeadwaySeconds: 600,
                 liveDepartures: live,
                 feedState: feed,
@@ -268,6 +294,7 @@ final class DepartureLadderDebugViewModel {
         work: (lat: Double, lon: Double),
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
+        lastMileMode: LastMileMode,
         now: Date
     ) -> ResolvedSpec? {
         guard let routeId = prefs.pinnedMetraRoute else { return nil }
@@ -284,7 +311,12 @@ final class DepartureLadderDebugViewModel {
             .cached(origin: home, destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: boarding.id), mode: .walking)?.expectedTravelTime
             ?? haversineWalkSeconds(from: home, to: (boarding.latitude, boarding.longitude), walkSpeedEstimate: walkSpeedEstimate)
 
-        let finalMile = haversineWalkSeconds(from: (alighting.latitude, alighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
+        let finalMile = finalMileSeconds(
+            from: (alighting.latitude, alighting.longitude),
+            to: work,
+            walkSpeedEstimate: walkSpeedEstimate,
+            mode: lastMileMode
+        )
         let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
         let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 22, stopPenaltyPerKm: 8)
 
@@ -304,6 +336,7 @@ final class DepartureLadderDebugViewModel {
                 inVehicleSigmaSeconds: max(60, inVehicle * 0.10),
                 finalMileSeconds: finalMile,
                 finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                finalMileMode: lastMileMode.legMode,
                 scheduleHeadwaySeconds: 1800,
                 liveDepartures: live,
                 feedState: feed
@@ -321,6 +354,7 @@ final class DepartureLadderDebugViewModel {
         work: (lat: Double, lon: Double),
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
+        lastMileMode: LastMileMode,
         now: Date
     ) -> ResolvedSpec? {
         guard let route = prefs.pinnedBusRoute else { return nil }
@@ -339,7 +373,12 @@ final class DepartureLadderDebugViewModel {
             .cached(origin: home, destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: boarding.id), mode: .walking)?.expectedTravelTime
             ?? haversineWalkSeconds(from: home, to: (boarding.latitude, boarding.longitude), walkSpeedEstimate: walkSpeedEstimate)
 
-        let finalMile = haversineWalkSeconds(from: (alighting.latitude, alighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
+        let finalMile = finalMileSeconds(
+            from: (alighting.latitude, alighting.longitude),
+            to: work,
+            walkSpeedEstimate: walkSpeedEstimate,
+            mode: lastMileMode
+        )
         let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
         let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 6, stopPenaltyPerKm: 30)
 
@@ -359,6 +398,7 @@ final class DepartureLadderDebugViewModel {
                 inVehicleSigmaSeconds: max(60, inVehicle * 0.18),
                 finalMileSeconds: finalMile,
                 finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                finalMileMode: lastMileMode.legMode,
                 scheduleHeadwaySeconds: 720,
                 liveDepartures: live,
                 feedState: feed
@@ -375,6 +415,7 @@ final class DepartureLadderDebugViewModel {
         home: (lat: Double, lon: Double),
         work: (lat: Double, lon: Double),
         walkSpeedEstimate: WalkSpeedEstimate,
+        lastMileMode: LastMileMode,
         now: Date
     ) -> ResolvedSpec? {
         guard prefs.includeIntercampus, let direction = prefs.pinnedIntercampusDirection else { return nil }
@@ -389,7 +430,12 @@ final class DepartureLadderDebugViewModel {
               alighting.id != boarding.id else { return nil }
 
         let walkSeconds = haversineWalkSeconds(from: home, to: (boarding.latitude, boarding.longitude), walkSpeedEstimate: walkSpeedEstimate)
-        let finalMile = haversineWalkSeconds(from: (alighting.latitude, alighting.longitude), to: work, walkSpeedEstimate: walkSpeedEstimate)
+        let finalMile = finalMileSeconds(
+            from: (alighting.latitude, alighting.longitude),
+            to: work,
+            walkSpeedEstimate: walkSpeedEstimate,
+            mode: lastMileMode
+        )
         let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
         let scheduledInVehicle = IntercampusCatalog.scheduledTravelSeconds(
             direction: direction,
@@ -418,6 +464,7 @@ final class DepartureLadderDebugViewModel {
                 inVehicleSigmaSeconds: inVehicleSigma,
                 finalMileSeconds: finalMile,
                 finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                finalMileMode: lastMileMode.legMode,
                 scheduleHeadwaySeconds: 1200,
                 liveDepartures: live,
                 feedState: feed
@@ -449,9 +496,28 @@ final class DepartureLadderDebugViewModel {
         walkSpeedEstimate: WalkSpeedEstimate
     ) -> TimeInterval {
         let meters = haversineMeters(from: origin, to: dest)
-        let basePaceSecondsPerMeter: Double = 0.78
         let ratio = walkSpeedEstimate.confidentRatio() ?? 1.0
-        return meters * basePaceSecondsPerMeter * ratio
+        return meters * walkPaceSecondsPerMeter * ratio
+    }
+
+    /// Picks walking or cycling pace for the last-mile distance. Walking
+    /// applies the user's `WalkSpeedEstimate`; biking uses a flat pace
+    /// because the cycling estimate is anchor↔station-only and not
+    /// reliable for arbitrary final-mile geometries yet.
+    private func finalMileSeconds(
+        from origin: (lat: Double, lon: Double),
+        to dest: (lat: Double, lon: Double),
+        walkSpeedEstimate: WalkSpeedEstimate,
+        mode: LastMileMode
+    ) -> TimeInterval {
+        let meters = haversineMeters(from: origin, to: dest)
+        switch mode {
+        case .walk:
+            let ratio = walkSpeedEstimate.confidentRatio() ?? 1.0
+            return meters * walkPaceSecondsPerMeter * ratio
+        case .bike:
+            return meters * bikePaceSecondsPerMeter
+        }
     }
 
     private func stationToStationSeconds(meters: Double, modeSpeedMps: Double, stopPenaltyPerKm: TimeInterval) -> TimeInterval {

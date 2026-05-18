@@ -56,6 +56,7 @@ public struct LadderCandidateSpec: Sendable {
     public let inVehicleSigmaSeconds: TimeInterval
     public let finalMileSeconds: TimeInterval
     public let finalMileSigmaSeconds: TimeInterval
+    public let finalMileMode: LegMode
     public let scheduleHeadwaySeconds: TimeInterval?
     public let liveDepartures: [LiveDeparture]
     public let feedState: FeedState
@@ -72,6 +73,7 @@ public struct LadderCandidateSpec: Sendable {
         inVehicleSigmaSeconds: TimeInterval,
         finalMileSeconds: TimeInterval,
         finalMileSigmaSeconds: TimeInterval,
+        finalMileMode: LegMode = .walk,
         scheduleHeadwaySeconds: TimeInterval? = nil,
         liveDepartures: [LiveDeparture],
         feedState: FeedState = .fresh,
@@ -87,6 +89,7 @@ public struct LadderCandidateSpec: Sendable {
         self.inVehicleSigmaSeconds = max(0, inVehicleSigmaSeconds)
         self.finalMileSeconds = max(0, finalMileSeconds)
         self.finalMileSigmaSeconds = max(0, finalMileSigmaSeconds)
+        self.finalMileMode = finalMileMode
         self.scheduleHeadwaySeconds = scheduleHeadwaySeconds
         self.liveDepartures = liveDepartures.sorted { $0.arrivalAt < $1.arrivalAt }
         self.feedState = feedState
@@ -192,7 +195,12 @@ public struct DepartureLadderBuilder: Sendable {
             let walkSigma = max(30, walkMean * 0.12)
             let walkConservative = walkMean + 0.8416 * walkSigma
 
-            let finalMileMean = spec.finalMileSeconds * walkRatio
+            // Walk-equivalent ratio only applies if the final mile is on foot;
+            // bike means already account for cycling pace before they reach us.
+            let finalMileWalkAdjusted = spec.finalMileMode == .walk
+            let finalMileMean = finalMileWalkAdjusted
+                ? spec.finalMileSeconds * walkRatio
+                : spec.finalMileSeconds
             let finalMileSigma = max(30, finalMileMean * 0.12) + spec.finalMileSigmaSeconds
 
             let (option, kernels) = buildOption(
@@ -234,6 +242,14 @@ public struct DepartureLadderBuilder: Sendable {
                 let combinedRisk = combineRisk(downstreamRisk, failureProbability: distribution.failureProbability)
                 let secondary = secondaryLabel(risk: combinedRisk, spec: spec)
 
+                let legs = buildLegs(
+                    spec: spec,
+                    leaveBy: leaveBy,
+                    walkToBoardingSeconds: walkMean,
+                    departureAt: departure.arrivalAt,
+                    finalMileSeconds: finalMileMean
+                )
+
                 rowsAccumulator.append(
                     DepartureLadderRow(
                         leaveByAt: leaveBy,
@@ -244,7 +260,8 @@ public struct DepartureLadderBuilder: Sendable {
                         risk: combinedRisk,
                         note: waitForecast.explanation,
                         catchProbability: catchProbability,
-                        missCostSeconds: nil
+                        missCostSeconds: nil,
+                        legs: legs
                     )
                 )
             }
@@ -358,24 +375,108 @@ public struct DepartureLadderBuilder: Sendable {
             title = "\(spec.title) → \(transfer.nextRouteIdentifier)"
         }
 
-        let finalWalk = LegCandidate(
-            mode: .walk,
-            displayLabel: "Final mile",
+        let finalLeg = LegCandidate(
+            mode: spec.finalMileMode,
+            displayLabel: finalMileDisplayLabel(spec.finalMileMode),
             fromPoint: spec.transfer?.nextAlightingPoint ?? spec.alightingPoint,
             toPoint: destinationPoint
         )
-        let finalWalkPrepared: any PreparedLegProcess = PreparedWalkProcess(
+        // The composer kernel still operates as a Gaussian draw whether the
+        // user walks or bikes; the only difference is the mean we feed it.
+        let finalPrepared: any PreparedLegProcess = PreparedWalkProcess(
             expectedSeconds: finalMileMean,
             appliedRatio: 1.0,
             jitterCoefficient: finalMileSigma / max(1, finalMileMean),
             confidence: walkConfidence,
             sampleCount: walkSpeedSamples
         )
-        slots.append(.fixed(finalWalk))
-        kernels[finalWalk.id] = finalWalkPrepared
+        slots.append(.fixed(finalLeg))
+        kernels[finalLeg.id] = finalPrepared
 
         let option = JourneyOption(title: title, summary: spec.title, slots: slots)
         return (option, kernels)
+    }
+
+    private func finalMileDisplayLabel(_ mode: LegMode) -> String {
+        switch mode {
+        case .divvyClassic, .divvyEBike, .freeBikeParking: "Bike to destination"
+        default: "Walk to destination"
+        }
+    }
+
+    private func buildLegs(
+        spec: LadderCandidateSpec,
+        leaveBy: Date,
+        walkToBoardingSeconds: TimeInterval,
+        departureAt: Date,
+        finalMileSeconds: TimeInterval
+    ) -> [DepartureLadderLeg] {
+        var legs: [DepartureLadderLeg] = []
+
+        let walkArrival = leaveBy.addingTimeInterval(walkToBoardingSeconds)
+        legs.append(
+            DepartureLadderLeg(
+                mode: .walk,
+                label: "Walk to \(spec.boardingPoint.displayTitle)",
+                meanSeconds: walkToBoardingSeconds,
+                arrivalMean: walkArrival
+            )
+        )
+
+        let firstAlighting = spec.transfer?.nextBoardingPoint != nil ? spec.alightingPoint : spec.alightingPoint
+        let firstRideArrival = departureAt.addingTimeInterval(spec.inVehicleSeconds)
+        legs.append(
+            DepartureLadderLeg(
+                mode: spec.mode,
+                label: "\(transitLabel(mode: spec.mode, route: spec.routeIdentifier)) to \(firstAlighting.displayTitle)",
+                meanSeconds: spec.inVehicleSeconds,
+                arrivalMean: firstRideArrival
+            )
+        )
+
+        var lastClock = firstRideArrival
+        if let transfer = spec.transfer {
+            let transferArrival = lastClock.addingTimeInterval(transfer.transferWalkSeconds)
+            legs.append(
+                DepartureLadderLeg(
+                    mode: .walk,
+                    label: "Transfer walk to \(transfer.nextBoardingPoint.displayTitle)",
+                    meanSeconds: transfer.transferWalkSeconds,
+                    arrivalMean: transferArrival
+                )
+            )
+            let secondRideArrival = transferArrival.addingTimeInterval(transfer.nextInVehicleSeconds)
+            legs.append(
+                DepartureLadderLeg(
+                    mode: transfer.nextMode,
+                    label: "\(transitLabel(mode: transfer.nextMode, route: transfer.nextRouteIdentifier)) to \(transfer.nextAlightingPoint.displayTitle)",
+                    meanSeconds: transfer.nextInVehicleSeconds,
+                    arrivalMean: secondRideArrival
+                )
+            )
+            lastClock = secondRideArrival
+        }
+
+        let finalArrival = lastClock.addingTimeInterval(finalMileSeconds)
+        legs.append(
+            DepartureLadderLeg(
+                mode: spec.finalMileMode,
+                label: finalMileDisplayLabel(spec.finalMileMode),
+                meanSeconds: finalMileSeconds,
+                arrivalMean: finalArrival
+            )
+        )
+        return legs
+    }
+
+    private func transitLabel(mode: LegMode, route: String) -> String {
+        switch mode {
+        case .ctaTrain: "Ride \(route) Line"
+        case .ctaBus: "Bus \(route)"
+        case .metra: "Metra \(route)"
+        case .intercampus: "Intercampus shuttle"
+        default: "Ride \(route)"
+        }
     }
 
     private func secondaryLabel(risk: WaitReasonableness, spec: LadderCandidateSpec) -> String? {
@@ -428,7 +529,8 @@ public struct DepartureLadderBuilder: Sendable {
                     risk: row.risk,
                     note: row.note,
                     catchProbability: row.catchProbability,
-                    missCostSeconds: missCost
+                    missCostSeconds: missCost,
+                    legs: row.legs
                 )
             )
         }
