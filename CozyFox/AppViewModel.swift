@@ -65,6 +65,10 @@ final class AppViewModel {
     /// pattern of branching off the global `isRefreshing` flag, which flipped
     /// false the moment the fetch loop ended regardless of outcome.
     var feedFetchStates: FeedFetchStates = .init()
+    /// Targets with an actual upstream request currently in flight. This is
+    /// intentionally narrower than `isRefreshing`: location refreshes, cache
+    /// reads, and skipped ticks should not make card freshness dots flash.
+    var activeFetchTargets: Set<TargetFetchKey> = []
 
     /// Has this feed responded successfully recently enough that we trust an
     /// empty result for it? Convenience over `feedFetchStates.hasFreshFetch`.
@@ -89,6 +93,10 @@ final class AppViewModel {
     /// observation, so a 30 s ticker tick is enough to age the display.
     func staleness(forTarget key: TargetFetchKey, now: Date = .now) -> Staleness {
         Staleness.from(age: feedFetchStates.age(forTarget: key, now: now))
+    }
+
+    func isFetching(_ key: TargetFetchKey) -> Bool {
+        activeFetchTargets.contains(key)
     }
 
     /// User-controlled toggle for the 30 s ticker. Persisted to prefs.
@@ -260,6 +268,10 @@ final class AppViewModel {
         self.bikeRouteStore = bikeRouteStore ?? BikeRouteStore()
         self.suggestionSuppression = suggestionSuppression ?? SuggestionSuppression()
         self.isOnboardingComplete = preferences.isOnboardingComplete
+
+        refreshCoordinator.onActiveFetchTargetsChanged = { [weak self] targets in
+            self?.activeFetchTargets = targets
+        }
 
         location.onContextChanged = { [weak self] context in
             guard let self else { return }

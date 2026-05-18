@@ -1079,7 +1079,7 @@ struct DashboardScreen: View {
                 if let targetKey {
                     StalenessIndicator(
                         staleness: model.staleness(forTarget: targetKey),
-                        isRefreshing: model.isRefreshing
+                        isFetching: model.isFetching(targetKey)
                     )
                 }
             }
@@ -1157,7 +1157,7 @@ struct DashboardScreen: View {
                 if let targetKey {
                     StalenessIndicator(
                         staleness: model.staleness(forTarget: targetKey),
-                        isRefreshing: model.isRefreshing
+                        isFetching: model.isFetching(targetKey)
                     )
                 }
             }
@@ -3338,7 +3338,7 @@ struct DashboardScreen: View {
             Spacer()
             StalenessIndicator(
                 staleness: model.staleness(forTarget: targetKey),
-                isRefreshing: model.isRefreshing
+                isFetching: model.isFetching(targetKey)
             )
         }
 
@@ -3977,7 +3977,7 @@ struct DashboardScreen: View {
                 Spacer()
                 StalenessIndicator(
                     staleness: model.staleness(forTarget: targetKey),
-                    isRefreshing: model.isRefreshing
+                    isFetching: model.isFetching(targetKey)
                 )
                 Text(AccessTimeFormatter.short(accessTime))
                     .font(ChicagoTypography.body(.regular, relativeTo: .caption))
