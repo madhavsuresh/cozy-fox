@@ -2,6 +2,9 @@ import ChicagoTheme
 import SwiftUI
 import TransitDomain
 import TransitModels
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// A row of dots laid out on a 0…`window` minute axis, one per upcoming
 /// arrival. The first three dots are labelled with their minute value,
@@ -21,22 +24,29 @@ import TransitModels
 public struct HeadwayDotStrip: View {
     public enum Complication: Sendable, Hashable {
         /// Strongest positive marker: every signal the scorer has lines
-        /// up. Renders as a saturated green checkmark.
+        /// up. Renders as a saturated green checkmark, dot keeps full
+        /// route accent.
         case confirmed
         /// Weaker positive marker: we have a tracked vehicle but at
         /// least one signal is soft (mediumConfidence). Renders as a
-        /// muted-green checkmark so it reads as a step below
-        /// `.confirmed`.
+        /// muted-green checkmark, dot keeps full route accent — the
+        /// glyph carries the step down, the dot stays trustworthy.
         case tracked
+        /// Soft uncertainty: we don't have enough evidence to call
+        /// this confirmed. Gold `?` badge, dot fades partly toward
+        /// neutral.
         case unconfirmed
+        /// Strong uncertainty: matches Google Maps' "scheduled only"
+        /// red flag. Red `!` badge, dot fades hard toward neutral so
+        /// the eye reads "don't plan on this."
         case likelyGhost
-        case stale
         /// Stronger than `.likelyGhost`: we have evidence this row is
         /// positively wrong (CTA's `dyn` flagged it, the stop is on a
         /// removed-by-detour list, the vehicle's already crossed the
-        /// stop, etc.). Renders as a red X — distinct glyph from
-        /// `likelyGhost`'s `!`. Surfaces only when the user has set
-        /// the bus-prediction filter level to "Show everything";
+        /// stop, etc.). Renders as a red `X` — distinct glyph from
+        /// `likelyGhost`'s `!` — with the dot flattened to neutral
+        /// entirely. Surfaces only when the user has set the
+        /// bus-prediction filter level to "Show everything";
         /// `inclusive` (default) and stricter levels filter these out
         /// before the strip sees them.
         case cancelled
@@ -59,12 +69,14 @@ public struct HeadwayDotStrip: View {
     private let style: Style
     private let complications: [Complication?]
     /// Optional per-arrival "departure urgency" buckets. When present
-    /// and the bucket is non-nil for a dot, the dot picks up a very
-    /// subtle warm overlay (`.approaching` / `.imminent`) or grays out
-    /// (`.missed`). When the array is shorter than the arrival list
-    /// or the value is nil, the dot renders with the legacy neutral
-    /// style. Tints are intentionally faint — passive readout, not a
-    /// nudge.
+    /// and the bucket is `.missed`, the dot grays out so the eye stops
+    /// reading it as active service. Other buckets (`.approaching`,
+    /// `.imminent`) intentionally do **not** paint extra color over
+    /// the dot — the strip already encodes urgency through position
+    /// (left edge = sooner) and through the imminent size bump, so a
+    /// red glow would be a third overlapping signal that competes
+    /// with the reliability ladder for the same red hue. Glance
+    /// affordance: hue = trust, position+size = urgency.
     private let urgencies: [DepartureUrgency.Bucket?]
     /// Optional per-arrival confidence tones. When present and non-nil
     /// for a dot, `.weak` mutes the dot to ~60% of its computed opacity
@@ -180,12 +192,6 @@ public struct HeadwayDotStrip: View {
             Circle()
                 .fill(dotFill(dot))
                 .overlay {
-                    if let urgencyAlpha = urgencyOverlayAlpha(dot.urgency) {
-                        Circle()
-                            .fill(urgencyOverlayColor.opacity(urgencyAlpha))
-                    }
-                }
-                .overlay {
                     if let complication = dot.complication {
                         Circle()
                             .stroke(complicationColor(complication), lineWidth: 1.5)
@@ -276,67 +282,117 @@ public struct HeadwayDotStrip: View {
         }
     }
 
-    /// Base fill for a dot. `.missed` dots desaturate to neutral so
-    /// they read as "this one is gone" without the eye assuming the
-    /// accent color means it's still active.
+    /// Base fill for a dot. Two axes layer:
+    ///
+    /// 1. `.missed` urgency wins outright — those dots flatten to a
+    ///    medium neutral so the eye reads "this one is gone" without
+    ///    assuming the accent color means it's still active.
+    /// 2. Otherwise, the dot's *complication* (reliability) decides
+    ///    how much route accent survives. Confirmed/tracked dots
+    ///    render at full accent; unconfirmed/ghost/cancelled dots
+    ///    blend toward the neutral so untrustworthy arrivals visually
+    ///    fade — the badge glyph above them carries the verdict, the
+    ///    fade reinforces it. This is the single "hue = trust" rule
+    ///    the strip is meant to read by.
     private func dotFill(_ dot: Dot) -> Color {
-        switch dot.urgency {
-        case .missed:
+        if dot.urgency == .missed {
             switch style {
             case .standard: return ChicagoPalette.Gray.medium.opacity(dot.opacity * 0.45)
             case .onDark:   return ChicagoPalette.OnDarkSafe.tertiary.opacity(dot.opacity * 0.55)
             }
-        case .comfortable, .approaching, .imminent, .none:
+        }
+        let blend = trustBlend(dot.complication)
+        if blend >= 0.999 {
             return accent.opacity(dot.opacity)
         }
+        let neutral = trustNeutral
+        return blendedColor(accent: accent, neutral: neutral, accentShare: blend)
+            .opacity(dot.opacity)
     }
 
-    /// Faint warm overlay alpha for the approaching/imminent buckets.
-    /// Returns nil for `.comfortable`, `.missed`, and absent urgencies
-    /// — those don't paint anything over the base fill.
-    private func urgencyOverlayAlpha(_ bucket: DepartureUrgency.Bucket?) -> Double? {
-        switch bucket {
-        case .approaching: return 0.14
-        case .imminent:    return 0.28
-        case .comfortable, .missed, .none: return nil
+    private func trustBlend(_ complication: Complication?) -> Double {
+        HeadwayDotStrip.trustBlend(for: complication)
+    }
+
+    /// How much of the route accent survives at a given complication.
+    /// 1.0 = full accent. 0.0 = pure neutral. The ladder is meant to
+    /// be visually monotonic so a glance can read "more saturated =
+    /// more trustworthy" without parsing the glyph. `internal` so
+    /// `TransitUITests` can assert the ladder doesn't accidentally
+    /// regress as we tune values.
+    static func trustBlend(for complication: Complication?) -> Double {
+        switch complication {
+        case nil, .confirmed, .tracked: return 1.0
+        case .unconfirmed:              return 0.55
+        case .likelyGhost:              return 0.30
+        case .cancelled:                return 0.0
         }
     }
 
-    /// Warm overlay color — same hue across both styles, alpha-blended
-    /// onto whatever accent the dot already has.
-    private var urgencyOverlayColor: Color {
-        ChicagoPalette.starRed
+    /// The neutral the accent fades toward when trust drops. Picked
+    /// per-style so the dot remains legible on both light cards and
+    /// the system-imposed dark of the Live Activity chrome.
+    private var trustNeutral: Color {
+        switch style {
+        case .standard: return ChicagoPalette.Gray.medium
+        case .onDark:   return ChicagoPalette.OnDarkSafe.tertiary
+        }
+    }
+
+    /// Lerp two SwiftUI colors in sRGB via UIKit. SwiftUI has no
+    /// first-class blending primitive, and a `ZStack` of two `.fill`s
+    /// at varying opacity would also tint the underlying surface — we
+    /// want a fully-opaque blended hue so the dot stays crisp when
+    /// `dot.opacity` later modulates the whole thing.
+    private func blendedColor(accent: Color, neutral: Color, accentShare: Double) -> Color {
+        let share = max(0.0, min(1.0, accentShare))
+        #if canImport(UIKit)
+        let accentRGBA = UIColor(accent).rgbaComponents
+        let neutralRGBA = UIColor(neutral).rgbaComponents
+        return Color(
+            red:   accentRGBA.r * share + neutralRGBA.r * (1 - share),
+            green: accentRGBA.g * share + neutralRGBA.g * (1 - share),
+            blue:  accentRGBA.b * share + neutralRGBA.b * (1 - share),
+            opacity: accentRGBA.a * share + neutralRGBA.a * (1 - share)
+        )
+        #else
+        // macOS is preview/test-only for this package; fade the accent
+        // toward transparency as a close-enough stand-in.
+        return accent.opacity(share)
+        #endif
     }
 
     private func complicationSymbol(_ complication: Complication) -> String {
+        HeadwayDotStrip.glyphSymbol(for: complication)
+    }
+
+    /// SF Symbol that sits on top of each complication badge. Exposed
+    /// as `internal static` so tests can verify the bus/train modes
+    /// agree on the glyph vocabulary without a snapshot harness.
+    static func glyphSymbol(for complication: Complication) -> String {
         switch complication {
-        case .confirmed: "checkmark"
-        case .tracked: "checkmark"
+        case .confirmed:   "checkmark"
+        case .tracked:     "checkmark"
         case .unconfirmed: "questionmark"
         case .likelyGhost: "exclamationmark"
-        case .stale: "clock"
-        case .cancelled: "xmark"
+        case .cancelled:   "xmark"
         }
     }
 
     private func complicationColor(_ complication: Complication) -> Color {
-        switch (style, complication) {
-        case (_, .confirmed):
+        switch complication {
+        case .confirmed:
             ChicagoPalette.green
-        case (_, .tracked):
+        case .tracked:
             // Same hue as `.confirmed` but desaturated so a glance
             // reads the ladder confirmed → tracked → unconfirmed
             // without parsing the glyph.
             ChicagoPalette.green.opacity(0.55)
-        case (_, .likelyGhost):
-            ChicagoPalette.starRed
-        case (_, .unconfirmed):
+        case .unconfirmed:
             ChicagoPalette.gold
-        case (.standard, .stale):
-            ChicagoPalette.Gray.medium
-        case (.onDark, .stale):
-            ChicagoPalette.OnDarkSafe.tertiary
-        case (_, .cancelled):
+        case .likelyGhost:
+            ChicagoPalette.starRed
+        case .cancelled:
             // Same hue as likelyGhost so the family reads as
             // "warning" at a glance; the `X` glyph (vs `!`) escalates
             // to "positively wrong."
@@ -345,11 +401,21 @@ public struct HeadwayDotStrip: View {
     }
 
     private func complicationForeground(_ complication: Complication) -> Color {
+        HeadwayDotStrip.glyphUsesLightForeground(for: complication) ? .white : .black
+    }
+
+    /// Whether the glyph should render in white (true) or black
+    /// (false) on its complication badge. Hardcoded for stable WCAG
+    /// contrast across light/dark mode: gold is the one badge color
+    /// where black wins (`Gray.darkest` flips to near-white in dark
+    /// mode and loses contrast against CDS gold), white wins on the
+    /// green/red badges in either mode. Exposed as `internal static`
+    /// so tests can verify the contrast story without a render
+    /// harness.
+    static func glyphUsesLightForeground(for complication: Complication) -> Bool {
         switch complication {
-        case .unconfirmed:
-            ChicagoPalette.Gray.darkest
-        case .confirmed, .tracked, .likelyGhost, .stale, .cancelled:
-            .white
+        case .unconfirmed:                                 false
+        case .confirmed, .tracked, .likelyGhost, .cancelled: true
         }
     }
 
@@ -367,3 +433,19 @@ public struct HeadwayDotStrip: View {
         return "Upcoming arrivals at \(list) minutes"
     }
 }
+
+#if canImport(UIKit)
+private extension UIColor {
+    /// sRGB components of a resolved UIColor. Used to lerp two
+    /// SwiftUI `Color`s into a single opaque blended hue. Resolution
+    /// happens with `traitCollection.current`, so dark-mode variants
+    /// of asset-catalog colors are picked up correctly when the dot
+    /// strip is rendered in dark surfaces.
+    var rgbaComponents: (r: Double, g: Double, b: Double, a: Double) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        let resolved = self.resolvedColor(with: .current)
+        resolved.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (Double(r), Double(g), Double(b), Double(a))
+    }
+}
+#endif

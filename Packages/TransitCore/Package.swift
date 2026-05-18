@@ -73,6 +73,10 @@ let package = Package(
             name: "TransitLocationTests",
             dependencies: ["TransitLocation"]
         ),
+        .testTarget(
+            name: "TransitUITests",
+            dependencies: ["TransitUI"]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
