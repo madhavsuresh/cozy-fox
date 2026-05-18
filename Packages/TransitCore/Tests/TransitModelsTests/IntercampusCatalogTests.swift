@@ -74,4 +74,46 @@ struct IntercampusCatalogTests {
         #expect(travelSeconds > 10 * 60)
         #expect(travelSeconds < 60 * 60)
     }
+
+    @Test func exposesOrderedTripStops() throws {
+        let stops = try #require(IntercampusCatalog.tripStops(forTrip: "018217ea-d30f-463f-98fe-b5d720af25a8"))
+
+        #expect(stops.first?.stopId == "60e7b447-b29d-4812-bf93-7a77a1d5ae5b") // Ryan Field
+        #expect(stops.last?.stopId == "6983f6d3-fcd9-4932-b9fb-7120f8c2f999") // Ward
+        #expect(stops.map(\.sequence) == stops.map(\.sequence).sorted())
+        #expect(stops.count == 18)
+    }
+
+    @Test func returnsNilTripStopsForUnknownTrip() {
+        #expect(IntercampusCatalog.tripStops(forTrip: "not-a-real-trip") == nil)
+    }
+
+    @Test func remainingTimeFromIntermediateStopAccumulatesIntervals() throws {
+        // Southbound trip 018217ea has Sherman/Emerson at arrSec 53160 and Ward at arrSec 55680.
+        // The scheduled trip is 42 min between them — what a southbound shuttle actually
+        // takes once you include every Sheridan / Chicago Ave stop along the way.
+        let remaining = try #require(IntercampusCatalog.scheduledRemainingSeconds(
+            tripId: "018217ea-d30f-463f-98fe-b5d720af25a8",
+            from: "4b19acfa-ab9a-4514-a062-8f787b3fd421", // Sherman/Emerson (IB)
+            to: "6983f6d3-fcd9-4932-b9fb-7120f8c2f999"    // Ward
+        ))
+
+        #expect(remaining == TimeInterval(55_680 - 53_160))
+    }
+
+    @Test func remainingTimeRejectsReversedOrSelfPair() {
+        // Reverse direction along the trip → no positive remaining time.
+        #expect(IntercampusCatalog.scheduledRemainingSeconds(
+            tripId: "018217ea-d30f-463f-98fe-b5d720af25a8",
+            from: "6983f6d3-fcd9-4932-b9fb-7120f8c2f999", // Ward (last)
+            to: "4b19acfa-ab9a-4514-a062-8f787b3fd421"    // Sherman/Emerson (earlier)
+        ) == nil)
+
+        // Same stop, same trip → nil rather than 0 so callers can distinguish "no leg".
+        #expect(IntercampusCatalog.scheduledRemainingSeconds(
+            tripId: "018217ea-d30f-463f-98fe-b5d720af25a8",
+            from: "6983f6d3-fcd9-4932-b9fb-7120f8c2f999",
+            to: "6983f6d3-fcd9-4932-b9fb-7120f8c2f999"
+        ) == nil)
+    }
 }

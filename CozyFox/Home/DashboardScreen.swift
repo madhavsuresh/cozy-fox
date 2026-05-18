@@ -2747,6 +2747,12 @@ struct DashboardScreen: View {
                             .lineLimit(1)
                         intercampusTimeSourceBadge(first.timeSource)
                     }
+                    if let scheduledLine = intercampusScheduledLine(first) {
+                        Text(scheduledLine)
+                            .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                            .foregroundStyle(ChicagoPalette.Gray.medium)
+                            .lineLimit(1)
+                    }
                     if let vehicleStatus = intercampusVehicleStatusText(first) {
                         Text(vehicleStatus)
                             .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
@@ -2816,19 +2822,26 @@ struct DashboardScreen: View {
             components.append("location \(intercampusLocationAgeText(location.observedAt))")
         }
 
-        if let scheduleComparison = intercampusTrafficScheduleComparisonText(arrival.trafficEstimate) {
-            components.append(scheduleComparison)
-        }
-
         guard !components.isEmpty else { return nil }
         return components.joined(separator: " · ")
     }
 
-    private func intercampusTrafficScheduleComparisonText(_ estimate: IntercampusTrafficEstimate?) -> String? {
-        guard let delta = estimate?.scheduleDeltaSeconds, delta.isFinite else { return nil }
-        let minutes = Int((abs(delta) / 60).rounded())
-        guard minutes > 0 else { return "on schedule" }
-        return delta > 0 ? "+\(minutes)m vs schedule" : "-\(minutes)m vs schedule"
+    /// Render "scheduled HH:MM" (optionally with a +Nm late / -Nm early tail) for a live
+    /// arrival. The headline BigNumber is whatever Traffic / TripShot says is coming; this
+    /// line lets the rider sanity-check it against the GTFS timetable in one glance —
+    /// exactly the comparison they had to eyeball between the BigNumber and the schedule
+    /// list when traffic ETA went sideways at 4pm southbound.
+    private func intercampusScheduledLine(_ arrival: IntercampusArrival) -> String? {
+        guard arrival.timeSource != .schedule,
+              let scheduled = arrival.scheduledArrivalAt
+        else { return nil }
+        let clock = scheduled.formatted(date: .omitted, time: .shortened)
+        let deltaSeconds = arrival.arrivalAt.timeIntervalSince(scheduled)
+        guard deltaSeconds.isFinite else { return "scheduled \(clock)" }
+        let minutes = Int((abs(deltaSeconds) / 60).rounded())
+        if minutes < 1 { return "scheduled \(clock)" }
+        let suffix = deltaSeconds > 0 ? "\(minutes) min late" : "\(minutes) min early"
+        return "scheduled \(clock) · \(suffix)"
     }
 
     private func intercampusLocationAgeText(_ observedAt: Date) -> String {
