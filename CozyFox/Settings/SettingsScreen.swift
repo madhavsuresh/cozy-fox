@@ -250,7 +250,7 @@ struct SettingsScreen: View {
                 Toggle("Learn bike routes",
                        isOn: Binding(
                         get: { prefs.bikeRouteLearningEnabled },
-                        set: { prefs.bikeRouteLearningEnabled = $0; save() }
+                        set: { prefs.bikeRouteLearningEnabled = $0; save(refresh: true) }
                        ))
                 Text("Recorded rides: \(model.bikeRouteStore.routes.count)")
                     .font(.footnote)

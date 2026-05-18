@@ -354,15 +354,12 @@ final class RefreshCoordinator {
         )
     }
 
-    private func applyAutopinIfNeeded() async -> Bool {
+    func applyAutopinIfNeeded() async -> Bool {
         // Single load — `loadRoutePreferences` does a UserDefaults read +
-        // JSON decode. The function previously called it twice per
-        // refresh; reuse the same snapshot for the planned-trip gate and
-        // the autopin call.
+        // JSON decode. Reuse the same snapshot for learning side effects,
+        // the planned-trip gate, and the autopin call.
         let prefsSnapshot = preferences.loadRoutePreferences()
-        if prefsSnapshot.plannedTripPin != nil {
-            return false
-        }
+        let now = Date.now
         let motion = await location?.refreshMotion() ?? .unknown
         // Phase 4: check whether the user just boarded a train at a CTA
         // L station. Uses the *cached* `lastKnown` location instead of
@@ -406,33 +403,34 @@ final class RefreshCoordinator {
         if cyclingStarted, let loc = location?.lastKnown {
             bikeSpeedTracker.recordRideStart(
                 at: (lat: loc.latitude, lon: loc.longitude),
-                at: .now,
+                at: now,
                 anchors: preferences.loadCommuteAnchors()
             )
         } else if cyclingEnded, let loc = location?.lastKnown {
             bikeSpeedTracker.recordRideEnd(
                 at: (lat: loc.latitude, lon: loc.longitude),
-                at: .now
+                at: now
             )
         }
 
         // Tier 2 (GPS route sampling) — gated on the user setting AND
         // iOS Low Power Mode being off. The sampler manages its own
-        // CLLocationManager subscription; we just bracket the lifecycle
-        // on motion transitions so it's only active during a ride.
-        let bikeRouteEnabled = preferences.loadRoutePreferences().bikeRouteLearningEnabled
+        // CLLocationManager subscription; we make each tick converge on
+        // the desired state so enabling the setting mid-ride starts
+        // sampling and disabling it mid-ride stops cleanly.
+        let bikeRouteEnabled = prefsSnapshot.bikeRouteLearningEnabled
             && !ProcessInfo.processInfo.isLowPowerModeEnabled
-        if cyclingStarted, bikeRouteEnabled {
-            bikeRouteSampler.startRide(at: .now)
-        } else if cyclingEnded {
-            // Always stop on end, even if the toggle flipped mid-ride.
-            // The sampler's own state guards: if no ride was started,
-            // stopRide is a no-op that also defensively releases the
-            // CLLocationManager subscription in case the OS held it.
-            bikeRouteSampler.stopRide(at: .now)
+        if motion == .cycling, bikeRouteEnabled {
+            bikeRouteSampler.startRide(at: now)
+        } else if bikeRouteSampler.isRecording {
+            bikeRouteSampler.stopRide(at: now)
         }
 
         previousMotion = motion
+
+        guard prefsSnapshot.plannedTripPin == nil else {
+            return false
+        }
 
         let context = location?.context ?? .unknown
         let result = autopinner.apply(

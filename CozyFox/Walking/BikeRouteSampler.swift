@@ -78,8 +78,10 @@ final class BikeRouteSampler: NSObject, CLLocationManagerDelegate {
         return route
     }
 
-    /// Test hook.
-    var hasActiveRideForTests: Bool { currentRide != nil }
+    var isRecording: Bool { currentRide != nil }
+
+    /// Test hooks.
+    var hasActiveRideForTests: Bool { isRecording }
     var bufferedSampleCountForTests: Int { currentRide?.samples.count ?? 0 }
 
     /// Test hook — synthesize a sample as if it had arrived from the
