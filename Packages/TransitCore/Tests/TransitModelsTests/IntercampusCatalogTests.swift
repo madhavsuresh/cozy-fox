@@ -49,6 +49,29 @@ struct IntercampusCatalogTests {
         #expect(arrivals.count >= 2)
         #expect(arrivals.first?.direction == .southbound)
         #expect(arrivals.first?.arrivalAt ?? now > now)
+        #expect(arrivals.first?.scheduledArrivalAt == arrivals.first?.arrivalAt)
         #expect(arrivals.first?.timeSource == .schedule)
+    }
+
+    @Test func resolvesScheduledTravelTimeBetweenIntercampusStops() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Chicago")!
+        let now = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 5,
+            day: 14,
+            hour: 8,
+            minute: 25
+        ))!
+
+        let travelSeconds = try #require(IntercampusCatalog.scheduledTravelSeconds(
+            direction: .northbound,
+            from: "6983f6d3-fcd9-4932-b9fb-7120f8c2f999",
+            to: "afedecae-1527-498a-94d7-ab1949be7cb6",
+            after: now
+        ))
+
+        #expect(travelSeconds > 10 * 60)
+        #expect(travelSeconds < 60 * 60)
     }
 }

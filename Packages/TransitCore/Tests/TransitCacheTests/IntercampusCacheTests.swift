@@ -22,6 +22,7 @@ struct IntercampusCacheTests {
             destinationName: "Evanston",
             generatedAt: now,
             arrivalAt: now.addingTimeInterval(300),
+            scheduledArrivalAt: now.addingTimeInterval(360),
             delaySeconds: nil,
             isDelayed: false,
             timeSource: .traffic,
@@ -36,6 +37,7 @@ struct IntercampusCacheTests {
             trafficEstimate: IntercampusTrafficEstimate(
                 generatedAt: now,
                 sourceArrivalAt: now.addingTimeInterval(300),
+                scheduledArrivalAt: now.addingTimeInterval(360),
                 arrivalAt: now.addingTimeInterval(240),
                 travelTime: 240,
                 distanceMeters: 1_200
@@ -47,8 +49,10 @@ struct IntercampusCacheTests {
 
         #expect(snapshot.intercampusArrivals == [arrival])
         #expect(snapshot.intercampusArrivals.first?.timeSource == .traffic)
+        #expect(snapshot.intercampusArrivals.first?.scheduledArrivalAt == now.addingTimeInterval(360))
         #expect(snapshot.intercampusArrivals.first?.vehicleLocation?.heading == 181)
         #expect(snapshot.intercampusArrivals.first?.trafficEstimate?.distanceMeters == 1_200)
+        #expect(snapshot.intercampusArrivals.first?.trafficEstimate?.scheduleDeltaSeconds == -120)
         #expect(snapshot.intercampusFetchedAt != nil)
     }
 }

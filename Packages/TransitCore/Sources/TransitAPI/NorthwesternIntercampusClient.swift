@@ -63,6 +63,7 @@ public actor NorthwesternIntercampusClient: NorthwesternIntercampusClientProtoco
         now: Date
     ) -> [IntercampusArrival] {
         var arrivalsByTripStop: [String: IntercampusArrival] = [:]
+        let scheduledByTripStop = Dictionary(grouping: scheduledArrivals, by: tripStopKey)
 
         for arrival in scheduledArrivals {
             arrivalsByTripStop[tripStopKey(arrival)] = arrival.withVehicle(
@@ -70,7 +71,12 @@ public actor NorthwesternIntercampusClient: NorthwesternIntercampusClientProtoco
             )
         }
         for arrival in realtimeArrivals {
-            arrivalsByTripStop[tripStopKey(arrival)] = arrival.withVehicle(
+            let key = tripStopKey(arrival)
+            let scheduledArrivalAt = scheduledByTripStop[key]
+                .flatMap { scheduledCandidates in
+                    nearestScheduledArrival(to: arrival, from: scheduledCandidates)?.arrivalAt
+                }
+            arrivalsByTripStop[key] = arrival.withScheduledArrivalAt(scheduledArrivalAt).withVehicle(
                 vehiclesByTripId[arrival.tripId]
             )
         }
@@ -82,6 +88,16 @@ public actor NorthwesternIntercampusClient: NorthwesternIntercampusClientProtoco
 
     private static func tripStopKey(_ arrival: IntercampusArrival) -> String {
         "\(arrival.tripId)|\(arrival.stopId)"
+    }
+
+    private static func nearestScheduledArrival(
+        to arrival: IntercampusArrival,
+        from scheduledCandidates: [IntercampusArrival]
+    ) -> IntercampusArrival? {
+        scheduledCandidates.min {
+            abs($0.arrivalAt.timeIntervalSince(arrival.arrivalAt))
+                < abs($1.arrivalAt.timeIntervalSince(arrival.arrivalAt))
+        }
     }
 }
 
@@ -376,10 +392,34 @@ private extension IntercampusArrival {
             destinationName: destinationName,
             generatedAt: generatedAt,
             arrivalAt: arrivalAt,
+            scheduledArrivalAt: scheduledArrivalAt,
             delaySeconds: delaySeconds,
             isDelayed: isDelayed,
             timeSource: timeSource,
             vehicleLocation: vehicleLocation ?? vehicle.location,
+            trafficEstimate: trafficEstimate
+        )
+    }
+
+    func withScheduledArrivalAt(_ scheduledArrivalAt: Date?) -> IntercampusArrival {
+        guard let scheduledArrivalAt else { return self }
+        return IntercampusArrival(
+            id: id,
+            routeId: routeId,
+            direction: direction,
+            tripId: tripId,
+            vehicleId: vehicleId,
+            vehicleLabel: vehicleLabel,
+            stopId: stopId,
+            stopName: stopName,
+            destinationName: destinationName,
+            generatedAt: generatedAt,
+            arrivalAt: arrivalAt,
+            scheduledArrivalAt: scheduledArrivalAt,
+            delaySeconds: delaySeconds,
+            isDelayed: isDelayed,
+            timeSource: timeSource,
+            vehicleLocation: vehicleLocation,
             trafficEstimate: trafficEstimate
         )
     }

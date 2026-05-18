@@ -114,6 +114,7 @@ final class IntercampusTrafficETAResolver {
             let estimate = IntercampusTrafficEstimate(
                 generatedAt: now,
                 sourceArrivalAt: arrival.arrivalAt,
+                scheduledArrivalAt: arrival.scheduledArrivalAt,
                 arrivalAt: now.addingTimeInterval(route.expectedTravelTime),
                 travelTime: route.expectedTravelTime,
                 distanceMeters: route.distance

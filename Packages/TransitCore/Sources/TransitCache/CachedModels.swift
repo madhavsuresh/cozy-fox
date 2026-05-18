@@ -359,6 +359,7 @@ public final class CachedIntercampusArrival {
     public var destinationName: String
     public var generatedAt: Date
     public var arrivalAt: Date
+    public var scheduledArrivalAt: Date?
     public var delaySeconds: Int?
     public var isDelayed: Bool
     public var timeSourceRaw: String?
@@ -368,6 +369,7 @@ public final class CachedIntercampusArrival {
     public var vehicleObservedAt: Date?
     public var trafficGeneratedAt: Date?
     public var trafficSourceArrivalAt: Date?
+    public var trafficScheduledArrivalAt: Date?
     public var trafficArrivalAt: Date?
     public var trafficTravelTime: TimeInterval?
     public var trafficDistanceMeters: Double?
@@ -385,6 +387,7 @@ public final class CachedIntercampusArrival {
         self.destinationName = arrival.destinationName
         self.generatedAt = arrival.generatedAt
         self.arrivalAt = arrival.arrivalAt
+        self.scheduledArrivalAt = arrival.scheduledArrivalAt
         self.delaySeconds = arrival.delaySeconds
         self.isDelayed = arrival.isDelayed
         self.timeSourceRaw = arrival.timeSource.rawValue
@@ -394,6 +397,7 @@ public final class CachedIntercampusArrival {
         self.vehicleObservedAt = arrival.vehicleLocation?.observedAt
         self.trafficGeneratedAt = arrival.trafficEstimate?.generatedAt
         self.trafficSourceArrivalAt = arrival.trafficEstimate?.sourceArrivalAt
+        self.trafficScheduledArrivalAt = arrival.trafficEstimate?.scheduledArrivalAt
         self.trafficArrivalAt = arrival.trafficEstimate?.arrivalAt
         self.trafficTravelTime = arrival.trafficEstimate?.travelTime
         self.trafficDistanceMeters = arrival.trafficEstimate?.distanceMeters
@@ -430,6 +434,7 @@ public final class CachedIntercampusArrival {
             trafficEstimate = IntercampusTrafficEstimate(
                 generatedAt: trafficGeneratedAt,
                 sourceArrivalAt: trafficSourceArrivalAt,
+                scheduledArrivalAt: trafficScheduledArrivalAt,
                 arrivalAt: trafficArrivalAt,
                 travelTime: trafficTravelTime,
                 distanceMeters: trafficDistanceMeters
@@ -449,6 +454,7 @@ public final class CachedIntercampusArrival {
             destinationName: destinationName,
             generatedAt: generatedAt,
             arrivalAt: arrivalAt,
+            scheduledArrivalAt: scheduledArrivalAt,
             delaySeconds: delaySeconds,
             isDelayed: isDelayed,
             timeSource: timeSource,
