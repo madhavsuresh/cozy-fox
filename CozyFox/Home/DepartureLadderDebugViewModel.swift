@@ -87,6 +87,7 @@ final class DepartureLadderDebugViewModel {
         anchors: CommuteAnchors,
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
+        bikeInventory: BikeInventorySnapshot = .empty,
         mileMode: MileMode = .walk,
         now: Date = .now
     ) {
@@ -137,6 +138,22 @@ final class DepartureLadderDebugViewModel {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Intercampus: \(spec.candidate.title)")
+        }
+
+        // Full Divvy ride — walk to a nearby station with bikes, ride to a
+        // station near work, walk in. Always considered (separate from the
+        // mile-mode toggle, which is about how you reach a transit stop).
+        if let spec = divvySpec(
+            bikeInventory: bikeInventory,
+            home: homeOrigin,
+            work: workOrigin,
+            walkingResolver: walkingResolver,
+            walkSpeedEstimate: walkSpeedEstimate,
+            now: now
+        ) {
+            walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
+            specs.append(spec.candidate)
+            summaries.append("Divvy: \(spec.candidate.title)")
         }
 
         guard !specs.isEmpty else {
@@ -611,6 +628,167 @@ final class DepartureLadderDebugViewModel {
             ),
             walkSeconds: walkSeconds
         )
+    }
+
+    // MARK: - Full Divvy ride
+
+    /// Max walking distance home/work → Divvy station for a full-bike
+    /// candidate. Tighter than transit-stop radii because both ends of the
+    /// trip add walking; a 1.5 km walk each side wipes out the bike's
+    /// advantage over straight transit.
+    private let divvyAccessRadiusMeters: Double = 800
+
+    /// Build a "ride Divvy door-to-door" candidate: walk to the nearest
+    /// station with a bike, ride to the nearest station with an open dock
+    /// near work, walk in. Bike has no schedule, so we synthesize a single
+    /// live departure timed so `leaveBy ≈ now` and the row sits in the
+    /// ladder alongside the timed transit options.
+    ///
+    /// The cycling leg uses MapKit `.cycling` directions (via
+    /// `WalkingDistanceResolver`); on cache miss we fall back to a
+    /// haversine paced by `bikePaceSecondsPerMeter`. Bike-route *quality*
+    /// scoring (Mellow / CDOT infrastructure layer) would slot in here —
+    /// see `docs/BIKE_ROUTING.md` for the parked design.
+    private func divvySpec(
+        bikeInventory: BikeInventorySnapshot,
+        home: (lat: Double, lon: Double),
+        work: (lat: Double, lon: Double),
+        walkingResolver: WalkingDistanceResolver,
+        walkSpeedEstimate: WalkSpeedEstimate,
+        now: Date
+    ) -> ResolvedSpec? {
+        guard !bikeInventory.stations.isEmpty else { return nil }
+        guard let boarding = nearestStationWithBike(
+            to: home,
+            stations: bikeInventory.stations,
+            maxMeters: divvyAccessRadiusMeters
+        ) else { return nil }
+        guard let alighting = nearestStationWithDock(
+            to: work,
+            stations: bikeInventory.stations,
+            maxMeters: divvyAccessRadiusMeters
+        ), alighting.id != boarding.id else { return nil }
+
+        // Walk to the boarding dock.
+        walkingResolver.ensureFresh(origin: home, divvyStation: boarding, modes: [.walking])
+        let walkToDockSeconds = boardingLegSeconds(
+            from: home,
+            to: (boarding.latitude, boarding.longitude),
+            cachedWalkSeconds: walkingResolver
+                .cached(origin: home, divvyStationId: boarding.id, mode: .walking)?.expectedTravelTime,
+            walkSpeedEstimate: walkSpeedEstimate,
+            mode: .walk
+        )
+
+        // Cycle from boarding dock to alighting dock. Cache key origin =
+        // boarding-station coord, which is stable across runs.
+        let boardingCoord = (lat: boarding.latitude, lon: boarding.longitude)
+        walkingResolver.ensureFresh(origin: boardingCoord, divvyStation: alighting, modes: [.cycling])
+        let cycleMeters = haversineMeters(from: boardingCoord, to: (alighting.latitude, alighting.longitude))
+        let cachedCycle = walkingResolver
+            .cached(origin: boardingCoord, divvyStationId: alighting.id, mode: .cycling)?.expectedTravelTime
+        let rideSeconds = cachedCycle ?? cycleMeters * bikePaceSecondsPerMeter
+
+        // Walk from alighting dock to work. No MapKit fetch — the resolver's
+        // cache is keyed by anchor origins; "station → work" doesn't fit
+        // that shape, so we pace the haversine instead.
+        let finalMileSeconds = finalMileSeconds(
+            from: (alighting.latitude, alighting.longitude),
+            to: work,
+            walkSpeedEstimate: walkSpeedEstimate,
+            mode: .walk
+        )
+
+        // Pick the in-vehicle mode by what's actually available at the
+        // boarding dock. Classic preferred if present (cheaper, no surge);
+        // fall through to e-bike if it's the only option.
+        let inVehicleMode: LegMode = boarding.classicBikesAvailable > 0 ? .divvyClassic : .divvyEBike
+
+        // Synthesize one live "departure" so the builder produces a single
+        // bike row at `leaveBy ≈ now`. The builder subtracts a conservative
+        // boarding-walk + slack from `arrivalAt` to compute leaveBy, so we
+        // bias the synthetic departure forward by the same amount.
+        let walkSigma = max(30, walkToDockSeconds * 0.12)
+        let conservativeBoard = walkToDockSeconds + 0.8416 * walkSigma
+        let slackSeconds: TimeInterval = 60
+        let departureAt = now.addingTimeInterval(conservativeBoard + slackSeconds + 5)
+        let synthDeparture = LiveDeparture(
+            arrivalAt: departureAt,
+            isApproaching: true,
+            isScheduled: false,
+            toneHint: .strong
+        )
+
+        let title = "Divvy — \(boarding.name) → \(alighting.name)"
+        return ResolvedSpec(
+            modeLabel: "Divvy",
+            candidate: LadderCandidateSpec(
+                title: title,
+                mode: inVehicleMode,
+                routeIdentifier: "divvy",
+                direction: nil,
+                boardingPoint: .divvyStation(
+                    stationId: boarding.id,
+                    name: boarding.name,
+                    latitude: boarding.latitude,
+                    longitude: boarding.longitude
+                ),
+                alightingPoint: .divvyStation(
+                    stationId: alighting.id,
+                    name: alighting.name,
+                    latitude: alighting.latitude,
+                    longitude: alighting.longitude
+                ),
+                inVehicleSeconds: rideSeconds,
+                // MapKit cycling ETA already accounts for typical traffic
+                // delay on Chicago streets; 12% spread is roughly
+                // symmetric with the transit candidates so risk
+                // comparisons stay meaningful.
+                inVehicleSigmaSeconds: max(60, rideSeconds * 0.12),
+                boardingMode: .walk,
+                finalMileSeconds: finalMileSeconds,
+                finalMileSigmaSeconds: max(30, finalMileSeconds * 0.12),
+                finalMileMode: .walk,
+                scheduleHeadwaySeconds: nil,
+                liveDepartures: [synthDeparture],
+                feedState: .fresh
+            ),
+            walkSeconds: walkToDockSeconds
+        )
+    }
+
+    /// Nearest renting Divvy station within `maxMeters` that has at least
+    /// one bike (classic or e-bike).
+    private func nearestStationWithBike(
+        to origin: (lat: Double, lon: Double),
+        stations: [BikeStation],
+        maxMeters: Double
+    ) -> BikeStation? {
+        stations
+            .filter { $0.isRenting && ($0.classicBikesAvailable + $0.eBikesAvailable) > 0 }
+            .compactMap { station -> (BikeStation, Double)? in
+                let d = haversineMeters(from: origin, to: (station.latitude, station.longitude))
+                return d <= maxMeters ? (station, d) : nil
+            }
+            .min { $0.1 < $1.1 }
+            .map(\.0)
+    }
+
+    /// Nearest accepting Divvy station within `maxMeters` that has at least
+    /// one open dock.
+    private func nearestStationWithDock(
+        to origin: (lat: Double, lon: Double),
+        stations: [BikeStation],
+        maxMeters: Double
+    ) -> BikeStation? {
+        stations
+            .filter { $0.isReturning && $0.docksAvailable > 0 }
+            .compactMap { station -> (BikeStation, Double)? in
+                let d = haversineMeters(from: origin, to: (station.latitude, station.longitude))
+                return d <= maxMeters ? (station, d) : nil
+            }
+            .min { $0.1 < $1.1 }
+            .map(\.0)
     }
 
     // MARK: - Helpers

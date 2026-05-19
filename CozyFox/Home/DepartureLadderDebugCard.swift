@@ -42,6 +42,7 @@ struct DepartureLadderDebugCard: View {
         .onAppear { rebuild() }
         .onChange(of: model.snapshot) { _, _ in rebuild() }
         .onChange(of: model.pinRevision) { _, _ in rebuild() }
+        .onChange(of: model.bikeInventory) { _, _ in rebuild() }
         .onChange(of: mileMode) { _, _ in rebuild() }
     }
 
@@ -156,6 +157,7 @@ struct DepartureLadderDebugCard: View {
     private func isTransitRide(_ mode: LegMode) -> Bool {
         switch mode {
         case .ctaTrain, .ctaBus, .metra, .intercampus: true
+        case .divvyClassic, .divvyEBike: true
         default: false
         }
     }
@@ -210,6 +212,7 @@ struct DepartureLadderDebugCard: View {
             anchors: model.preferences.loadCommuteAnchors(),
             walkingResolver: model.walkingResolver,
             walkSpeedEstimate: model.walkingStore.walkSpeedEstimate,
+            bikeInventory: model.bikeInventory,
             mileMode: mileMode
         )
     }
