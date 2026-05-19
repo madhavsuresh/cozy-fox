@@ -28,6 +28,12 @@ public struct DepartureLadderLeg: Sendable, Hashable, Codable, Identifiable {
 public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
     public let id: UUID
     public let leaveByAt: Date
+    /// When the rider physically boards the first transit leg — i.e. the time
+    /// the train/bus reaches the boarding stop. Distinct from `leaveByAt`
+    /// (which subtracts walking or biking time) and `arrivalAt` (when the
+    /// rider reaches the destination). Surfacing this lets the rider sanity-
+    /// check the row against the live-departures board on the station sign.
+    public let boardingAt: Date?
     public let totalDuration: TimeDistributionSummary
     public let arrivalAt: ArrivalWindow
     public let primaryLabel: String
@@ -58,6 +64,7 @@ public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
     public init(
         id: UUID = UUID(),
         leaveByAt: Date,
+        boardingAt: Date? = nil,
         totalDuration: TimeDistributionSummary,
         arrivalAt: ArrivalWindow,
         primaryLabel: String,
@@ -70,6 +77,7 @@ public struct DepartureLadderRow: Sendable, Hashable, Codable, Identifiable {
     ) {
         self.id = id
         self.leaveByAt = leaveByAt
+        self.boardingAt = boardingAt
         self.totalDuration = totalDuration
         self.arrivalAt = arrivalAt
         self.primaryLabel = primaryLabel
