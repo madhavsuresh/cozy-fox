@@ -3703,6 +3703,14 @@ struct DashboardScreen: View {
                         Button("Unpin", role: .destructive) { setPinnedBus(nil) }
                         Divider()
                     }
+                    let recent = recentlyPinnedBusRoutesForPicker
+                    if !recent.isEmpty {
+                        Section("Recently pinned") {
+                            ForEach(recent, id: \.self) { route in
+                                Button("Route \(route)") { setPinnedBus(route) }
+                            }
+                        }
+                    }
                     let nearby = nearbyBusRoutesForPicker
                     if !nearby.isEmpty {
                         Section("Nearby") {
@@ -3756,6 +3764,15 @@ struct DashboardScreen: View {
         let route: String
         let distanceMeters: Double
         var id: String { route }
+    }
+
+    /// Bus routes the user has manually pinned in the past (newest first),
+    /// filtered to those that are still discoverable and not currently pinned.
+    /// Surfaced above "Nearby" so frequent choices stay one tap away.
+    private var recentlyPinnedBusRoutesForPicker: [String] {
+        routePreferences.recentlyPinnedBusRoutes
+            .filter { $0 != visiblePinnedBusRoute }
+            .filter { isBusRouteDiscoverable($0) }
     }
 
     /// Closest discoverable bus routes (deduplicated to one entry per route at
@@ -4083,6 +4100,7 @@ struct DashboardScreen: View {
             $0.pinnedBusRoute = route
             $0.pinnedBusDirection = defaultDirection
             $0.pinnedBusStopId = nil
+            if let route { $0.recordPinnedBusRoute(route) }
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
@@ -4483,6 +4501,14 @@ struct DashboardScreen: View {
                         Button("Unpin", role: .destructive) { setPinnedAmtrak(nil) }
                         Divider()
                     }
+                    let recent = recentlyPinnedAmtrakRoutesForPicker
+                    if !recent.isEmpty {
+                        Section("Recently pinned") {
+                            ForEach(recent) { entry in
+                                Button(entry.displayName) { setPinnedAmtrak(entry.routeId) }
+                            }
+                        }
+                    }
                     let nearby = nearbyAmtrakRoutesForPicker
                     if !nearby.isEmpty {
                         Section("Nearby") {
@@ -4538,6 +4564,28 @@ struct DashboardScreen: View {
         let displayName: String
         let distanceMeters: Double
         var id: String { routeId }
+    }
+
+    private struct RecentlyPinnedAmtrakEntry: Identifiable {
+        let routeId: String
+        let displayName: String
+        var id: String { routeId }
+    }
+
+    /// Amtrak routes the user has manually pinned in the past (newest first),
+    /// filtered to those still discoverable and not currently pinned. Surfaced
+    /// above "Nearby" so frequent choices stay one tap away even when several
+    /// hub routes crowd the nearby list.
+    private var recentlyPinnedAmtrakRoutesForPicker: [RecentlyPinnedAmtrakEntry] {
+        routePreferences.recentlyPinnedAmtrakRoutes
+            .filter { $0 != visiblePinnedAmtrakRoute }
+            .filter { isAmtrakRouteDiscoverable($0) }
+            .map { routeId in
+                RecentlyPinnedAmtrakEntry(
+                    routeId: routeId,
+                    displayName: AmtrakStationCatalog.route(id: routeId)?.displayName ?? routeId
+                )
+            }
     }
 
     private var nearbyAmtrakRoutesForPicker: [PinnedAmtrakPickerNearbyEntry] {
@@ -4769,6 +4817,7 @@ struct DashboardScreen: View {
             $0.pinnedAmtrakStationId = nil
             $0.pinnedAmtrakDirectionId = nil
             $0.pinnedAmtrakDestination = nil
+            if let route { $0.recordPinnedAmtrakRoute(route) }
         }
         Task { await model.refreshIfNeeded(force: true) }
     }
