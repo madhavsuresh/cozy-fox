@@ -103,36 +103,37 @@ final class DepartureLadderDebugViewModel {
             return
         }
 
-        let homeOrigin: (lat: Double, lon: Double) = (home.latitude, home.longitude)
-        let workOrigin: (lat: Double, lon: Double) = (work.latitude, work.longitude)
+        let target = resolveTarget(prefs: prefs, home: home, work: work)
+        let origin = target.origin
+        let destination = target.destination
 
         var specs: [LadderCandidateSpec] = []
         var summaries: [String] = []
         var walkSecondsByBoardingKey: [String: TimeInterval] = [:]
 
-        // CTA trains — pinned line first, then any other tracked preferences heading toward work
-        for spec in trainSpecs(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        // CTA trains — pinned line first, then any other tracked preferences heading the right way
+        for spec in trainSpecs(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, excludedTrainDirection: target.excludedTrainDirection, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("\(spec.modeLabel): \(spec.candidate.title)")
         }
 
         // Metra
-        if let spec = metraSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        if let spec = metraSpec(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Metra: \(spec.candidate.title)")
         }
 
         // CTA Bus
-        if let spec = busSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        if let spec = busSpec(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Bus: \(spec.candidate.title)")
         }
 
         // Intercampus shuttle
-        if let spec = intercampusSpec(prefs: prefs, snapshot: snapshot, home: homeOrigin, work: workOrigin, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        if let spec = intercampusSpec(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Intercampus: \(spec.candidate.title)")
@@ -153,9 +154,9 @@ final class DepartureLadderDebugViewModel {
         }
 
         let built = builder.build(
-            destinationTitle: work.label,
-            origin: .anchor(.home),
-            destinationPoint: .coordinate(latitude: work.latitude, longitude: work.longitude),
+            destinationTitle: target.destinationTitle,
+            origin: target.originPoint,
+            destinationPoint: target.destinationPoint,
             snapshot: snapshot,
             candidates: specs,
             walkSpeedEstimate: walkSpeedEstimate,
@@ -165,11 +166,85 @@ final class DepartureLadderDebugViewModel {
         ladder = built
         status = .ready
 
-        let originLabel = home.label
+        let originLabel = target.originLabel
         let store = logStore
         Task.detached(priority: .background) {
             await store.appendLadder(built, origin: originLabel)
         }
+    }
+
+    // MARK: - Target resolution
+
+    /// Chooses the origin/destination the ladder is plotting. A user-entered
+    /// `plannedTripPin` wins; otherwise we follow `autoPinnedDirection`.
+    /// Fallback is the historical home → work pair.
+    private struct LadderTarget {
+        let origin: (lat: Double, lon: Double)
+        let originPoint: JourneyPoint
+        let originLabel: String
+        let destination: (lat: Double, lon: Double)
+        let destinationPoint: JourneyPoint
+        let destinationTitle: String
+        /// Excluded commute direction when filtering `prefs.trains`. `nil` means
+        /// keep every entry (used for custom planned-trip destinations where
+        /// the toHome/toWork buckets don't map cleanly).
+        let excludedTrainDirection: CommuteDirection?
+    }
+
+    private func resolveTarget(
+        prefs: UserRoutePreferences,
+        home: CommuteAnchors.Anchor,
+        work: CommuteAnchors.Anchor
+    ) -> LadderTarget {
+        let toWork = LadderTarget(
+            origin: (home.latitude, home.longitude),
+            originPoint: .anchor(.home),
+            originLabel: home.label,
+            destination: (work.latitude, work.longitude),
+            destinationPoint: .anchor(.work),
+            destinationTitle: work.label,
+            excludedTrainDirection: .toHome
+        )
+        let toHome = LadderTarget(
+            origin: (work.latitude, work.longitude),
+            originPoint: .anchor(.work),
+            originLabel: work.label,
+            destination: (home.latitude, home.longitude),
+            destinationPoint: .anchor(.home),
+            destinationTitle: home.label,
+            excludedTrainDirection: .toWork
+        )
+
+        if let trip = prefs.plannedTripPin,
+           let lat = trip.destination.latitude,
+           let lon = trip.destination.longitude {
+            switch trip.destination.kind {
+            case .home:
+                return toHome
+            case .work:
+                return toWork
+            case .custom:
+                return LadderTarget(
+                    origin: (home.latitude, home.longitude),
+                    originPoint: .anchor(.home),
+                    originLabel: home.label,
+                    destination: (lat, lon),
+                    destinationPoint: .namedPlace(
+                        title: trip.destination.title,
+                        subtitle: trip.destination.subtitle,
+                        latitude: lat,
+                        longitude: lon
+                    ),
+                    destinationTitle: trip.destination.title,
+                    excludedTrainDirection: nil
+                )
+            }
+        }
+
+        if prefs.autoPinnedDirection == .toHome {
+            return toHome
+        }
+        return toWork
     }
 
     // MARK: - CTA trains
@@ -183,8 +258,9 @@ final class DepartureLadderDebugViewModel {
     private func trainSpecs(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
-        home: (lat: Double, lon: Double),
-        work: (lat: Double, lon: Double),
+        origin: (lat: Double, lon: Double),
+        destination: (lat: Double, lon: Double),
+        excludedTrainDirection: CommuteDirection?,
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
@@ -193,50 +269,51 @@ final class DepartureLadderDebugViewModel {
         var seen: Set<String> = []
         var out: [ResolvedSpec] = []
 
-        // Build a deduped list: pinned line first, then explicit train preferences heading toward work
+        // Build a deduped list: pinned line first, then explicit train preferences not going the wrong way
         var attempts: [(line: LineColor, stationId: Int?, directionLabel: String?)] = []
         if let pinned = prefs.pinnedLine {
             attempts.append((pinned, prefs.pinnedStationId, nil))
         }
-        for entry in prefs.trains where entry.direction != .toHome {
+        for entry in prefs.trains {
+            if let excluded = excludedTrainDirection, entry.direction == excluded { continue }
             attempts.append((entry.line, entry.mapId, entry.directionLabel))
         }
 
         let resolver = trainResolver(mileMode)
         for attempt in attempts {
-            guard let boarding = boardingStation(line: attempt.line, preferredStationId: attempt.stationId, near: home, resolver: resolver) else { continue }
-            guard let alighting = resolver.nearest(onLine: attempt.line, to: work), alighting.id != boarding.id else { continue }
+            guard let boarding = boardingStation(line: attempt.line, preferredStationId: attempt.stationId, near: origin, resolver: resolver) else { continue }
+            guard let alighting = resolver.nearest(onLine: attempt.line, to: destination), alighting.id != boarding.id else { continue }
             let key = "train-\(attempt.line.rawValue)-\(boarding.id)"
             if !seen.insert(key).inserted { continue }
 
-            walkingResolver.ensureFresh(origin: home, station: boarding)
+            walkingResolver.ensureFresh(origin: origin, station: boarding)
             let walkSeconds = boardingLegSeconds(
-                from: home,
+                from: origin,
                 to: (boarding.latitude, boarding.longitude),
-                cachedWalkSeconds: walkingResolver.cached(origin: home, stationId: boarding.id)?.expectedTravelTime,
+                cachedWalkSeconds: walkingResolver.cached(origin: origin, stationId: boarding.id)?.expectedTravelTime,
                 walkSpeedEstimate: walkSpeedEstimate,
                 mode: mileMode
             )
 
-            let alightingDistanceToWork = haversineMeters(from: (alighting.latitude, alighting.longitude), to: work)
+            let alightingDistanceToDestination = haversineMeters(from: (alighting.latitude, alighting.longitude), to: destination)
             let detected = transferDetector.detect(
                 sourceLine: attempt.line,
                 boardingStation: boarding,
                 directAlighting: alighting,
-                home: home,
-                work: work,
+                home: origin,
+                work: destination,
                 snapshot: snapshot,
                 now: now
             )
 
-            if detected == nil && alightingDistanceToWork > unreachableAlightingMeters {
+            if detected == nil && alightingDistanceToDestination > unreachableAlightingMeters {
                 continue
             }
 
             let finalAlighting = detected?.finalAlighting ?? alighting
             let finalMile = finalMileSeconds(
                 from: (finalAlighting.latitude, finalAlighting.longitude),
-                to: work,
+                to: destination,
                 walkSpeedEstimate: walkSpeedEstimate,
                 mode: mileMode
             )
@@ -331,8 +408,8 @@ final class DepartureLadderDebugViewModel {
     private func metraSpec(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
-        home: (lat: Double, lon: Double),
-        work: (lat: Double, lon: Double),
+        origin: (lat: Double, lon: Double),
+        destination: (lat: Double, lon: Double),
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
@@ -342,25 +419,25 @@ final class DepartureLadderDebugViewModel {
         let resolver = metraResolver(mileMode)
         let boardingStation: MetraStation? = {
             if let id = prefs.pinnedMetraStationId, let s = MetraStationCatalog.station(id: id) { return s }
-            return resolver.closestStations(onRoute: routeId, to: home, limit: 1).first?.station
+            return resolver.closestStations(onRoute: routeId, to: origin, limit: 1).first?.station
         }()
         guard let boarding = boardingStation else { return nil }
-        guard let alighting = resolver.closestStations(onRoute: routeId, to: work, limit: 1).first?.station,
+        guard let alighting = resolver.closestStations(onRoute: routeId, to: destination, limit: 1).first?.station,
               alighting.id != boarding.id else { return nil }
 
-        walkingResolver.ensureFresh(origin: home, metraStation: boarding)
+        walkingResolver.ensureFresh(origin: origin, metraStation: boarding)
         let walkSeconds = boardingLegSeconds(
-            from: home,
+            from: origin,
             to: (boarding.latitude, boarding.longitude),
             cachedWalkSeconds: walkingResolver
-                .cached(origin: home, destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: boarding.id), mode: .walking)?.expectedTravelTime,
+                .cached(origin: origin, destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: boarding.id), mode: .walking)?.expectedTravelTime,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: mileMode
         )
 
         let finalMile = finalMileSeconds(
             from: (alighting.latitude, alighting.longitude),
-            to: work,
+            to: destination,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: mileMode
         )
@@ -398,8 +475,8 @@ final class DepartureLadderDebugViewModel {
     private func busSpec(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
-        home: (lat: Double, lon: Double),
-        work: (lat: Double, lon: Double),
+        origin: (lat: Double, lon: Double),
+        destination: (lat: Double, lon: Double),
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
@@ -411,25 +488,25 @@ final class DepartureLadderDebugViewModel {
         let resolver = busResolver(mileMode)
         let boardingStop: BusStop? = {
             if let id = prefs.pinnedBusStopId, let s = routeCatalog.first(where: { $0.id == id }) { return s }
-            return matchingStop(route: route, direction: directionLabel, near: home, resolver: resolver)
+            return matchingStop(route: route, direction: directionLabel, near: origin, resolver: resolver)
         }()
         guard let boarding = boardingStop else { return nil }
-        guard let alighting = matchingStop(route: route, direction: directionLabel ?? boarding.directionLabel, near: work, resolver: resolver),
+        guard let alighting = matchingStop(route: route, direction: directionLabel ?? boarding.directionLabel, near: destination, resolver: resolver),
               alighting.id != boarding.id else { return nil }
 
-        walkingResolver.ensureFresh(origin: home, stop: boarding)
+        walkingResolver.ensureFresh(origin: origin, stop: boarding)
         let walkSeconds = boardingLegSeconds(
-            from: home,
+            from: origin,
             to: (boarding.latitude, boarding.longitude),
             cachedWalkSeconds: walkingResolver
-                .cached(origin: home, destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: boarding.id), mode: .walking)?.expectedTravelTime,
+                .cached(origin: origin, destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: boarding.id), mode: .walking)?.expectedTravelTime,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: mileMode
         )
 
         let finalMile = finalMileSeconds(
             from: (alighting.latitude, alighting.longitude),
-            to: work,
+            to: destination,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: mileMode
         )
@@ -467,8 +544,8 @@ final class DepartureLadderDebugViewModel {
     private func intercampusSpec(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
-        home: (lat: Double, lon: Double),
-        work: (lat: Double, lon: Double),
+        origin: (lat: Double, lon: Double),
+        destination: (lat: Double, lon: Double),
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
         now: Date
@@ -477,16 +554,16 @@ final class DepartureLadderDebugViewModel {
         let resolver = intercampusResolver(mileMode)
         let boardingStop: IntercampusStop? = {
             if let id = prefs.pinnedIntercampusStopId, let s = IntercampusCatalog.stop(id: id) { return s }
-            return resolver.closestStops(direction: direction, to: home, limit: 1).first?.stop
+            return resolver.closestStops(direction: direction, to: origin, limit: 1).first?.stop
         }()
         guard let boarding = boardingStop else { return nil }
         let oppositeDirection: IntercampusDirection = direction == .northbound ? .southbound : .northbound
         _ = oppositeDirection
-        guard let alighting = resolver.closestStops(direction: direction, to: work, limit: 1).first?.stop,
+        guard let alighting = resolver.closestStops(direction: direction, to: destination, limit: 1).first?.stop,
               alighting.id != boarding.id else { return nil }
 
         let walkSeconds = boardingLegSeconds(
-            from: home,
+            from: origin,
             to: (boarding.latitude, boarding.longitude),
             cachedWalkSeconds: nil,
             walkSpeedEstimate: walkSpeedEstimate,
@@ -494,7 +571,7 @@ final class DepartureLadderDebugViewModel {
         )
         let finalMile = finalMileSeconds(
             from: (alighting.latitude, alighting.longitude),
-            to: work,
+            to: destination,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: mileMode
         )
