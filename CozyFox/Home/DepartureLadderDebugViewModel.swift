@@ -28,16 +28,47 @@ final class DepartureLadderDebugViewModel {
             case .bike: .divvyClassic
             }
         }
+
+        /// Time-budget-preserving scaling for candidate-search radii. A 1.5 km
+        /// bus stop is ~20 min at walking pace and ~7.5 min at biking pace; the
+        /// rider's implicit time budget is the same either way, so the radius
+        /// should grow by the pace ratio (~0.78 s/m ÷ ~0.30 s/m ≈ 2.6×) when
+        /// biking. Empirical anchor: TCRP Report 95 and Pucher/Buehler's
+        /// bike-and-ride catchment work peg cycling access radius at 2-3× a
+        /// walking baseline, so 2.6× sits in the middle of the field rather
+        /// than being made up.
+        var radiusMultiplier: Double {
+            switch self {
+            case .walk: 1.0
+            case .bike: 2.6
+            }
+        }
     }
 
     private(set) var ladder: DepartureLadder?
     private(set) var status: Status = .missingHome
     private(set) var candidateSummaries: [String] = []
 
-    private let trainResolver = NearestStationResolver(maxDistanceMeters: 5_000)
-    private let metraResolver = NearestMetraStationResolver(maxDistanceMeters: 30_000)
-    private let busResolver = NearestBusStopResolver(maxDistanceMeters: 1_500)
-    private let intercampusResolver = NearestIntercampusStopResolver(maxDistanceMeters: 2_000)
+    /// Walking-paced radii. Bike mode multiplies each by `MileMode.radiusMultiplier`
+    /// so distant lines that were unreachable on foot become candidates.
+    private let baseTrainRadius: Double = 5_000
+    private let baseMetraRadius: Double = 30_000
+    private let baseBusRadius: Double = 1_500
+    private let baseIntercampusRadius: Double = 2_000
+
+    private func trainResolver(_ mode: MileMode) -> NearestStationResolver {
+        NearestStationResolver(maxDistanceMeters: baseTrainRadius * mode.radiusMultiplier)
+    }
+    private func metraResolver(_ mode: MileMode) -> NearestMetraStationResolver {
+        NearestMetraStationResolver(maxDistanceMeters: baseMetraRadius * mode.radiusMultiplier)
+    }
+    private func busResolver(_ mode: MileMode) -> NearestBusStopResolver {
+        NearestBusStopResolver(maxDistanceMeters: baseBusRadius * mode.radiusMultiplier)
+    }
+    private func intercampusResolver(_ mode: MileMode) -> NearestIntercampusStopResolver {
+        NearestIntercampusStopResolver(maxDistanceMeters: baseIntercampusRadius * mode.radiusMultiplier)
+    }
+
     private let adapter = DepartureLadderSnapshotAdapter()
     private let builder = DepartureLadderBuilder()
     private let transferDetector = TransferDetector()
@@ -171,9 +202,10 @@ final class DepartureLadderDebugViewModel {
             attempts.append((entry.line, entry.mapId, entry.directionLabel))
         }
 
+        let resolver = trainResolver(mileMode)
         for attempt in attempts {
-            guard let boarding = boardingStation(line: attempt.line, preferredStationId: attempt.stationId, near: home) else { continue }
-            guard let alighting = trainResolver.nearest(onLine: attempt.line, to: work), alighting.id != boarding.id else { continue }
+            guard let boarding = boardingStation(line: attempt.line, preferredStationId: attempt.stationId, near: home, resolver: resolver) else { continue }
+            guard let alighting = resolver.nearest(onLine: attempt.line, to: work), alighting.id != boarding.id else { continue }
             let key = "train-\(attempt.line.rawValue)-\(boarding.id)"
             if !seen.insert(key).inserted { continue }
 
@@ -273,15 +305,15 @@ final class DepartureLadderDebugViewModel {
         return out
     }
 
-    private func boardingStation(line: LineColor, preferredStationId: Int?, near origin: (lat: Double, lon: Double)) -> LStation? {
+    private func boardingStation(line: LineColor, preferredStationId: Int?, near origin: (lat: Double, lon: Double), resolver: NearestStationResolver) -> LStation? {
         if let id = preferredStationId, let pinned = LStationCatalog.byId[id], pinned.servedLines.contains(line) {
             return pinned
         }
-        return trainResolver.nearest(onLine: line, to: origin)
+        return resolver.nearest(onLine: line, to: origin)
     }
 
-    private func matchingStop(route: String, direction: String?, near origin: (lat: Double, lon: Double)) -> BusStop? {
-        let perDirection = busResolver.nearestStopsPerDirection(
+    private func matchingStop(route: String, direction: String?, near origin: (lat: Double, lon: Double), resolver: NearestBusStopResolver) -> BusStop? {
+        let perDirection = resolver.nearestStopsPerDirection(
             onRoute: route,
             to: origin,
             limitPerDirection: 1,
@@ -307,12 +339,13 @@ final class DepartureLadderDebugViewModel {
         now: Date
     ) -> ResolvedSpec? {
         guard let routeId = prefs.pinnedMetraRoute else { return nil }
+        let resolver = metraResolver(mileMode)
         let boardingStation: MetraStation? = {
             if let id = prefs.pinnedMetraStationId, let s = MetraStationCatalog.station(id: id) { return s }
-            return metraResolver.closestStations(onRoute: routeId, to: home, limit: 1).first?.station
+            return resolver.closestStations(onRoute: routeId, to: home, limit: 1).first?.station
         }()
         guard let boarding = boardingStation else { return nil }
-        guard let alighting = metraResolver.closestStations(onRoute: routeId, to: work, limit: 1).first?.station,
+        guard let alighting = resolver.closestStations(onRoute: routeId, to: work, limit: 1).first?.station,
               alighting.id != boarding.id else { return nil }
 
         walkingResolver.ensureFresh(origin: home, metraStation: boarding)
@@ -375,12 +408,13 @@ final class DepartureLadderDebugViewModel {
         guard let route = prefs.pinnedBusRoute else { return nil }
         let directionLabel = prefs.pinnedBusDirection
         let routeCatalog = BusStopCatalog.stops(onRoute: route)
+        let resolver = busResolver(mileMode)
         let boardingStop: BusStop? = {
             if let id = prefs.pinnedBusStopId, let s = routeCatalog.first(where: { $0.id == id }) { return s }
-            return matchingStop(route: route, direction: directionLabel, near: home)
+            return matchingStop(route: route, direction: directionLabel, near: home, resolver: resolver)
         }()
         guard let boarding = boardingStop else { return nil }
-        guard let alighting = matchingStop(route: route, direction: directionLabel ?? boarding.directionLabel, near: work),
+        guard let alighting = matchingStop(route: route, direction: directionLabel ?? boarding.directionLabel, near: work, resolver: resolver),
               alighting.id != boarding.id else { return nil }
 
         walkingResolver.ensureFresh(origin: home, stop: boarding)
@@ -440,14 +474,15 @@ final class DepartureLadderDebugViewModel {
         now: Date
     ) -> ResolvedSpec? {
         guard prefs.includeIntercampus, let direction = prefs.pinnedIntercampusDirection else { return nil }
+        let resolver = intercampusResolver(mileMode)
         let boardingStop: IntercampusStop? = {
             if let id = prefs.pinnedIntercampusStopId, let s = IntercampusCatalog.stop(id: id) { return s }
-            return intercampusResolver.closestStops(direction: direction, to: home, limit: 1).first?.stop
+            return resolver.closestStops(direction: direction, to: home, limit: 1).first?.stop
         }()
         guard let boarding = boardingStop else { return nil }
         let oppositeDirection: IntercampusDirection = direction == .northbound ? .southbound : .northbound
         _ = oppositeDirection
-        guard let alighting = intercampusResolver.closestStops(direction: direction, to: work, limit: 1).first?.stop,
+        guard let alighting = resolver.closestStops(direction: direction, to: work, limit: 1).first?.stop,
               alighting.id != boarding.id else { return nil }
 
         let walkSeconds = boardingLegSeconds(
