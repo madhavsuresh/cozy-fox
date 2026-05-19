@@ -48,6 +48,22 @@ final class DepartureLadderDebugViewModel {
     private(set) var ladder: DepartureLadder?
     private(set) var status: Status = .missingHome
     private(set) var candidateSummaries: [String] = []
+    /// Mirrors how the destination was chosen so the card can label it and
+    /// expose an unpin affordance for user-pinned trips.
+    private(set) var destinationSource: DestinationSource = .defaultHomeWork
+    /// Set whenever the target resolver runs, so the destination label stays
+    /// visible during `noCandidates` (and any other empty-ladder state where
+    /// we still know where the user intended to go).
+    private(set) var resolvedDestinationTitle: String?
+
+    enum DestinationSource: Sendable, Equatable {
+        /// Resolved from `prefs.plannedTripPin` — the user picked it.
+        case plannedTrip
+        /// Resolved from `prefs.autoPinnedDirection` — the local predictor.
+        case autopin
+        /// Fallback: no pin, no autopin direction.
+        case defaultHomeWork
+    }
 
     /// Walking-paced radii. Bike mode multiplies each by `MileMode.radiusMultiplier`
     /// so distant lines that were unreachable on foot become candidates.
@@ -95,18 +111,22 @@ final class DepartureLadderDebugViewModel {
             status = .missingHome
             ladder = nil
             candidateSummaries = []
+            resolvedDestinationTitle = nil
             return
         }
         guard let work = anchors.work else {
             status = .missingWork
             ladder = nil
             candidateSummaries = []
+            resolvedDestinationTitle = nil
             return
         }
 
         let target = resolveTarget(prefs: prefs, home: home, work: work)
         let origin = target.origin
         let destination = target.destination
+        destinationSource = target.source
+        resolvedDestinationTitle = target.destinationTitle
 
         var specs: [LadderCandidateSpec] = []
         var summaries: [String] = []
@@ -141,12 +161,13 @@ final class DepartureLadderDebugViewModel {
         }
 
         // Full Divvy ride — walk to a nearby station with bikes, ride to a
-        // station near work, walk in. Always considered (separate from the
-        // mile-mode toggle, which is about how you reach a transit stop).
+        // station near the destination, walk in. Always considered (separate
+        // from the mile-mode toggle, which is about how you reach a transit
+        // stop).
         if let spec = divvySpec(
             bikeInventory: bikeInventory,
-            home: homeOrigin,
-            work: workOrigin,
+            origin: origin,
+            destination: destination,
             walkingResolver: walkingResolver,
             walkSpeedEstimate: walkSpeedEstimate,
             now: now
@@ -206,6 +227,7 @@ final class DepartureLadderDebugViewModel {
         /// keep every entry (used for custom planned-trip destinations where
         /// the toHome/toWork buckets don't map cleanly).
         let excludedTrainDirection: CommuteDirection?
+        let source: DestinationSource
     }
 
     private func resolveTarget(
@@ -213,33 +235,39 @@ final class DepartureLadderDebugViewModel {
         home: CommuteAnchors.Anchor,
         work: CommuteAnchors.Anchor
     ) -> LadderTarget {
-        let toWork = LadderTarget(
-            origin: (home.latitude, home.longitude),
-            originPoint: .anchor(.home),
-            originLabel: home.label,
-            destination: (work.latitude, work.longitude),
-            destinationPoint: .anchor(.work),
-            destinationTitle: work.label,
-            excludedTrainDirection: .toHome
-        )
-        let toHome = LadderTarget(
-            origin: (work.latitude, work.longitude),
-            originPoint: .anchor(.work),
-            originLabel: work.label,
-            destination: (home.latitude, home.longitude),
-            destinationPoint: .anchor(.home),
-            destinationTitle: home.label,
-            excludedTrainDirection: .toWork
-        )
+        func toWork(source: DestinationSource) -> LadderTarget {
+            LadderTarget(
+                origin: (home.latitude, home.longitude),
+                originPoint: .anchor(.home),
+                originLabel: home.label,
+                destination: (work.latitude, work.longitude),
+                destinationPoint: .anchor(.work),
+                destinationTitle: work.label,
+                excludedTrainDirection: .toHome,
+                source: source
+            )
+        }
+        func toHome(source: DestinationSource) -> LadderTarget {
+            LadderTarget(
+                origin: (work.latitude, work.longitude),
+                originPoint: .anchor(.work),
+                originLabel: work.label,
+                destination: (home.latitude, home.longitude),
+                destinationPoint: .anchor(.home),
+                destinationTitle: home.label,
+                excludedTrainDirection: .toWork,
+                source: source
+            )
+        }
 
         if let trip = prefs.plannedTripPin,
            let lat = trip.destination.latitude,
            let lon = trip.destination.longitude {
             switch trip.destination.kind {
             case .home:
-                return toHome
+                return toHome(source: .plannedTrip)
             case .work:
-                return toWork
+                return toWork(source: .plannedTrip)
             case .custom:
                 return LadderTarget(
                     origin: (home.latitude, home.longitude),
@@ -253,15 +281,19 @@ final class DepartureLadderDebugViewModel {
                         longitude: lon
                     ),
                     destinationTitle: trip.destination.title,
-                    excludedTrainDirection: nil
+                    excludedTrainDirection: nil,
+                    source: .plannedTrip
                 )
             }
         }
 
         if prefs.autoPinnedDirection == .toHome {
-            return toHome
+            return toHome(source: .autopin)
         }
-        return toWork
+        if prefs.autoPinnedDirection == .toWork {
+            return toWork(source: .autopin)
+        }
+        return toWork(source: .defaultHomeWork)
     }
 
     // MARK: - CTA trains
@@ -651,31 +683,31 @@ final class DepartureLadderDebugViewModel {
     /// see `docs/BIKE_ROUTING.md` for the parked design.
     private func divvySpec(
         bikeInventory: BikeInventorySnapshot,
-        home: (lat: Double, lon: Double),
-        work: (lat: Double, lon: Double),
+        origin: (lat: Double, lon: Double),
+        destination: (lat: Double, lon: Double),
         walkingResolver: WalkingDistanceResolver,
         walkSpeedEstimate: WalkSpeedEstimate,
         now: Date
     ) -> ResolvedSpec? {
         guard !bikeInventory.stations.isEmpty else { return nil }
         guard let boarding = nearestStationWithBike(
-            to: home,
+            to: origin,
             stations: bikeInventory.stations,
             maxMeters: divvyAccessRadiusMeters
         ) else { return nil }
         guard let alighting = nearestStationWithDock(
-            to: work,
+            to: destination,
             stations: bikeInventory.stations,
             maxMeters: divvyAccessRadiusMeters
         ), alighting.id != boarding.id else { return nil }
 
         // Walk to the boarding dock.
-        walkingResolver.ensureFresh(origin: home, divvyStation: boarding, modes: [.walking])
+        walkingResolver.ensureFresh(origin: origin, divvyStation: boarding, modes: [.walking])
         let walkToDockSeconds = boardingLegSeconds(
-            from: home,
+            from: origin,
             to: (boarding.latitude, boarding.longitude),
             cachedWalkSeconds: walkingResolver
-                .cached(origin: home, divvyStationId: boarding.id, mode: .walking)?.expectedTravelTime,
+                .cached(origin: origin, divvyStationId: boarding.id, mode: .walking)?.expectedTravelTime,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: .walk
         )
@@ -689,12 +721,12 @@ final class DepartureLadderDebugViewModel {
             .cached(origin: boardingCoord, divvyStationId: alighting.id, mode: .cycling)?.expectedTravelTime
         let rideSeconds = cachedCycle ?? cycleMeters * bikePaceSecondsPerMeter
 
-        // Walk from alighting dock to work. No MapKit fetch — the resolver's
-        // cache is keyed by anchor origins; "station → work" doesn't fit
-        // that shape, so we pace the haversine instead.
+        // Walk from alighting dock to the destination. No MapKit fetch — the
+        // resolver's cache is keyed by anchor origins; "station → arbitrary
+        // point" doesn't fit that shape, so we pace the haversine instead.
         let finalMileSeconds = finalMileSeconds(
             from: (alighting.latitude, alighting.longitude),
-            to: work,
+            to: destination,
             walkSpeedEstimate: walkSpeedEstimate,
             mode: .walk
         )
