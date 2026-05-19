@@ -139,22 +139,22 @@ final class DepartureLadderDebugViewModel {
             summaries.append("\(spec.modeLabel): \(spec.candidate.title)")
         }
 
-        // Metra
-        if let spec = metraSpec(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        // Metra — planned-trip legs first, then the daily pinned Metra route
+        for spec in metraSpecs(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Metra: \(spec.candidate.title)")
         }
 
-        // CTA Bus
-        if let spec = busSpec(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        // CTA Bus — planned-trip bus legs first, then the daily pinned bus
+        for spec in busSpecs(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkingResolver: walkingResolver, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Bus: \(spec.candidate.title)")
         }
 
-        // Intercampus shuttle
-        if let spec = intercampusSpec(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
+        // Intercampus shuttle — planned-trip legs first, then daily pinned direction
+        for spec in intercampusSpecs(prefs: prefs, snapshot: snapshot, origin: origin, destination: destination, walkSpeedEstimate: walkSpeedEstimate, mileMode: mileMode, now: now) {
             walkSecondsByBoardingKey[boardingKey(spec)] = spec.walkSeconds
             specs.append(spec.candidate)
             summaries.append("Intercampus: \(spec.candidate.title)")
@@ -318,8 +318,13 @@ final class DepartureLadderDebugViewModel {
         var seen: Set<String> = []
         var out: [ResolvedSpec] = []
 
-        // Build a deduped list: pinned line first, then explicit train preferences not going the wrong way
+        // Build a deduped list: planned-trip legs first (the user explicitly
+        // chose them for this trip), then the daily pinned line, then any
+        // remaining tracked train preferences not going the wrong way.
         var attempts: [(line: LineColor, stationId: Int?, directionLabel: String?)] = []
+        for leg in prefs.plannedTripPin?.trainLegs ?? [] {
+            attempts.append((leg.line, leg.stationId, leg.destinationName))
+        }
         if let pinned = prefs.pinnedLine {
             attempts.append((pinned, prefs.pinnedStationId, nil))
         }
@@ -454,7 +459,7 @@ final class DepartureLadderDebugViewModel {
 
     // MARK: - Metra
 
-    private func metraSpec(
+    private func metraSpecs(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
         origin: (lat: Double, lon: Double),
@@ -463,65 +468,83 @@ final class DepartureLadderDebugViewModel {
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
         now: Date
-    ) -> ResolvedSpec? {
-        guard let routeId = prefs.pinnedMetraRoute else { return nil }
+    ) -> [ResolvedSpec] {
+        // Planned-trip Metra legs first, then the daily pinned Metra route.
+        var attempts: [(routeId: String, stationId: String?, directionId: Int?, destinationLabel: String?)] = []
+        for leg in prefs.plannedTripPin?.metraLegs ?? [] {
+            attempts.append((leg.routeId, leg.stationId, leg.directionId, leg.destinationName))
+        }
+        if let routeId = prefs.pinnedMetraRoute {
+            attempts.append((routeId, prefs.pinnedMetraStationId, prefs.pinnedMetraDirectionId, prefs.pinnedMetraDestination))
+        }
+        guard !attempts.isEmpty else { return [] }
+
         let resolver = metraResolver(mileMode)
-        let boardingStation: MetraStation? = {
-            if let id = prefs.pinnedMetraStationId, let s = MetraStationCatalog.station(id: id) { return s }
-            return resolver.closestStations(onRoute: routeId, to: origin, limit: 1).first?.station
-        }()
-        guard let boarding = boardingStation else { return nil }
-        guard let alighting = resolver.closestStations(onRoute: routeId, to: destination, limit: 1).first?.station,
-              alighting.id != boarding.id else { return nil }
+        var seen: Set<String> = []
+        var out: [ResolvedSpec] = []
 
-        walkingResolver.ensureFresh(origin: origin, metraStation: boarding)
-        let walkSeconds = boardingLegSeconds(
-            from: origin,
-            to: (boarding.latitude, boarding.longitude),
-            cachedWalkSeconds: walkingResolver
-                .cached(origin: origin, destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: boarding.id), mode: .walking)?.expectedTravelTime,
-            walkSpeedEstimate: walkSpeedEstimate,
-            mode: mileMode
-        )
+        for attempt in attempts {
+            let boardingStation: MetraStation? = {
+                if let id = attempt.stationId, let s = MetraStationCatalog.station(id: id) { return s }
+                return resolver.closestStations(onRoute: attempt.routeId, to: origin, limit: 1).first?.station
+            }()
+            guard let boarding = boardingStation else { continue }
+            guard let alighting = resolver.closestStations(onRoute: attempt.routeId, to: destination, limit: 1).first?.station,
+                  alighting.id != boarding.id else { continue }
 
-        let finalMile = finalMileSeconds(
-            from: (alighting.latitude, alighting.longitude),
-            to: destination,
-            walkSpeedEstimate: walkSpeedEstimate,
-            mode: mileMode
-        )
-        let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
-        let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 22, stopPenaltyPerKm: 8)
+            let key = "metra-\(attempt.routeId)-\(boarding.id)"
+            if !seen.insert(key).inserted { continue }
 
-        let live = adapter.liveMetraDepartures(from: snapshot, routeId: routeId, stationId: boarding.id, directionId: prefs.pinnedMetraDirectionId, now: now)
-        let feed = adapter.feedState(fetchedAt: snapshot.metraFetchedAt, now: now, freshnessTtlSeconds: 300)
+            walkingResolver.ensureFresh(origin: origin, metraStation: boarding)
+            let walkSeconds = boardingLegSeconds(
+                from: origin,
+                to: (boarding.latitude, boarding.longitude),
+                cachedWalkSeconds: walkingResolver
+                    .cached(origin: origin, destinationKey: WalkingDistanceStore.metraStationDestinationKey(stationId: boarding.id), mode: .walking)?.expectedTravelTime,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: mileMode
+            )
 
-        return ResolvedSpec(
-            modeLabel: "Metra",
-            candidate: LadderCandidateSpec(
-                title: "Metra \(routeId) — \(boarding.name)",
-                mode: .metra,
-                routeIdentifier: routeId,
-                direction: prefs.pinnedMetraDestination,
-                boardingPoint: .station(systemRef: "Metra:\(boarding.id)", name: boarding.name, lineHint: routeId),
-                alightingPoint: .station(systemRef: "Metra:\(alighting.id)", name: alighting.name, lineHint: routeId),
-                inVehicleSeconds: inVehicle,
-                inVehicleSigmaSeconds: max(60, inVehicle * 0.10),
-                boardingMode: mileMode.legMode,
-                finalMileSeconds: finalMile,
-                finalMileSigmaSeconds: max(30, finalMile * 0.12),
-                finalMileMode: mileMode.legMode,
-                scheduleHeadwaySeconds: 1800,
-                liveDepartures: live,
-                feedState: feed
-            ),
-            walkSeconds: walkSeconds
-        )
+            let finalMile = finalMileSeconds(
+                from: (alighting.latitude, alighting.longitude),
+                to: destination,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: mileMode
+            )
+            let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
+            let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 22, stopPenaltyPerKm: 8)
+
+            let live = adapter.liveMetraDepartures(from: snapshot, routeId: attempt.routeId, stationId: boarding.id, directionId: attempt.directionId, now: now)
+            let feed = adapter.feedState(fetchedAt: snapshot.metraFetchedAt, now: now, freshnessTtlSeconds: 300)
+
+            out.append(ResolvedSpec(
+                modeLabel: "Metra",
+                candidate: LadderCandidateSpec(
+                    title: "Metra \(attempt.routeId) — \(boarding.name)",
+                    mode: .metra,
+                    routeIdentifier: attempt.routeId,
+                    direction: attempt.destinationLabel,
+                    boardingPoint: .station(systemRef: "Metra:\(boarding.id)", name: boarding.name, lineHint: attempt.routeId),
+                    alightingPoint: .station(systemRef: "Metra:\(alighting.id)", name: alighting.name, lineHint: attempt.routeId),
+                    inVehicleSeconds: inVehicle,
+                    inVehicleSigmaSeconds: max(60, inVehicle * 0.10),
+                    boardingMode: mileMode.legMode,
+                    finalMileSeconds: finalMile,
+                    finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                    finalMileMode: mileMode.legMode,
+                    scheduleHeadwaySeconds: 1800,
+                    liveDepartures: live,
+                    feedState: feed
+                ),
+                walkSeconds: walkSeconds
+            ))
+        }
+        return out
     }
 
     // MARK: - CTA Bus
 
-    private func busSpec(
+    private func busSpecs(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
         origin: (lat: Double, lon: Double),
@@ -530,67 +553,85 @@ final class DepartureLadderDebugViewModel {
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
         now: Date
-    ) -> ResolvedSpec? {
-        guard let route = prefs.pinnedBusRoute else { return nil }
-        let directionLabel = prefs.pinnedBusDirection
-        let routeCatalog = BusStopCatalog.stops(onRoute: route)
+    ) -> [ResolvedSpec] {
+        // Planned-trip legs first (the user explicitly picked them), then the
+        // daily pinned bus route. Deduped by (route, boarding stop id).
+        var attempts: [(route: String, stopId: Int?, directionLabel: String?)] = []
+        for leg in prefs.plannedTripPin?.busLegs ?? [] {
+            attempts.append((leg.route, leg.stopId, leg.directionLabel))
+        }
+        if let route = prefs.pinnedBusRoute {
+            attempts.append((route, prefs.pinnedBusStopId, prefs.pinnedBusDirection))
+        }
+        guard !attempts.isEmpty else { return [] }
+
         let resolver = busResolver(mileMode)
-        let boardingStop: BusStop? = {
-            if let id = prefs.pinnedBusStopId, let s = routeCatalog.first(where: { $0.id == id }) { return s }
-            return matchingStop(route: route, direction: directionLabel, near: origin, resolver: resolver)
-        }()
-        guard let boarding = boardingStop else { return nil }
-        guard let alighting = matchingStop(route: route, direction: directionLabel ?? boarding.directionLabel, near: destination, resolver: resolver),
-              alighting.id != boarding.id else { return nil }
+        var seen: Set<String> = []
+        var out: [ResolvedSpec] = []
 
-        walkingResolver.ensureFresh(origin: origin, stop: boarding)
-        let walkSeconds = boardingLegSeconds(
-            from: origin,
-            to: (boarding.latitude, boarding.longitude),
-            cachedWalkSeconds: walkingResolver
-                .cached(origin: origin, destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: boarding.id), mode: .walking)?.expectedTravelTime,
-            walkSpeedEstimate: walkSpeedEstimate,
-            mode: mileMode
-        )
+        for attempt in attempts {
+            let routeCatalog = BusStopCatalog.stops(onRoute: attempt.route)
+            let boardingStop: BusStop? = {
+                if let id = attempt.stopId, let s = routeCatalog.first(where: { $0.id == id }) { return s }
+                return matchingStop(route: attempt.route, direction: attempt.directionLabel, near: origin, resolver: resolver)
+            }()
+            guard let boarding = boardingStop else { continue }
+            guard let alighting = matchingStop(route: attempt.route, direction: attempt.directionLabel ?? boarding.directionLabel, near: destination, resolver: resolver),
+                  alighting.id != boarding.id else { continue }
 
-        let finalMile = finalMileSeconds(
-            from: (alighting.latitude, alighting.longitude),
-            to: destination,
-            walkSpeedEstimate: walkSpeedEstimate,
-            mode: mileMode
-        )
-        let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
-        let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 6, stopPenaltyPerKm: 30)
+            let key = "bus-\(attempt.route)-\(boarding.id)"
+            if !seen.insert(key).inserted { continue }
 
-        let live = adapter.liveBusDepartures(from: snapshot, route: route, stopId: boarding.id, directionLabel: directionLabel, now: now)
-        let feed = adapter.feedState(fetchedAt: snapshot.busesFetchedAt, now: now)
+            walkingResolver.ensureFresh(origin: origin, stop: boarding)
+            let walkSeconds = boardingLegSeconds(
+                from: origin,
+                to: (boarding.latitude, boarding.longitude),
+                cachedWalkSeconds: walkingResolver
+                    .cached(origin: origin, destinationKey: WalkingDistanceStore.busStopDestinationKey(stopId: boarding.id), mode: .walking)?.expectedTravelTime,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: mileMode
+            )
 
-        return ResolvedSpec(
-            modeLabel: "Bus",
-            candidate: LadderCandidateSpec(
-                title: "Bus \(route) — \(boarding.name)",
-                mode: .ctaBus,
-                routeIdentifier: route,
-                direction: directionLabel,
-                boardingPoint: .stop(systemRef: "Bus:\(boarding.id)", name: boarding.name, latitude: boarding.latitude, longitude: boarding.longitude),
-                alightingPoint: .stop(systemRef: "Bus:\(alighting.id)", name: alighting.name, latitude: alighting.latitude, longitude: alighting.longitude),
-                inVehicleSeconds: inVehicle,
-                inVehicleSigmaSeconds: max(60, inVehicle * 0.18),
-                boardingMode: mileMode.legMode,
-                finalMileSeconds: finalMile,
-                finalMileSigmaSeconds: max(30, finalMile * 0.12),
-                finalMileMode: mileMode.legMode,
-                scheduleHeadwaySeconds: 720,
-                liveDepartures: live,
-                feedState: feed
-            ),
-            walkSeconds: walkSeconds
-        )
+            let finalMile = finalMileSeconds(
+                from: (alighting.latitude, alighting.longitude),
+                to: destination,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: mileMode
+            )
+            let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
+            let inVehicle = stationToStationSeconds(meters: dist, modeSpeedMps: 6, stopPenaltyPerKm: 30)
+
+            let live = adapter.liveBusDepartures(from: snapshot, route: attempt.route, stopId: boarding.id, directionLabel: attempt.directionLabel, now: now)
+            let feed = adapter.feedState(fetchedAt: snapshot.busesFetchedAt, now: now)
+
+            out.append(ResolvedSpec(
+                modeLabel: "Bus",
+                candidate: LadderCandidateSpec(
+                    title: "Bus \(attempt.route) — \(boarding.name)",
+                    mode: .ctaBus,
+                    routeIdentifier: attempt.route,
+                    direction: attempt.directionLabel,
+                    boardingPoint: .stop(systemRef: "Bus:\(boarding.id)", name: boarding.name, latitude: boarding.latitude, longitude: boarding.longitude),
+                    alightingPoint: .stop(systemRef: "Bus:\(alighting.id)", name: alighting.name, latitude: alighting.latitude, longitude: alighting.longitude),
+                    inVehicleSeconds: inVehicle,
+                    inVehicleSigmaSeconds: max(60, inVehicle * 0.18),
+                    boardingMode: mileMode.legMode,
+                    finalMileSeconds: finalMile,
+                    finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                    finalMileMode: mileMode.legMode,
+                    scheduleHeadwaySeconds: 720,
+                    liveDepartures: live,
+                    feedState: feed
+                ),
+                walkSeconds: walkSeconds
+            ))
+        }
+        return out
     }
 
     // MARK: - Intercampus
 
-    private func intercampusSpec(
+    private func intercampusSpecs(
         prefs: UserRoutePreferences,
         snapshot: TransitSnapshot,
         origin: (lat: Double, lon: Double),
@@ -598,68 +639,85 @@ final class DepartureLadderDebugViewModel {
         walkSpeedEstimate: WalkSpeedEstimate,
         mileMode: MileMode,
         now: Date
-    ) -> ResolvedSpec? {
-        guard prefs.includeIntercampus, let direction = prefs.pinnedIntercampusDirection else { return nil }
+    ) -> [ResolvedSpec] {
+        // Planned-trip Intercampus legs first, then the daily pinned
+        // intercampus direction (gated on `includeIntercampus`).
+        var attempts: [(direction: IntercampusDirection, stopId: String?)] = []
+        for leg in prefs.plannedTripPin?.intercampusLegs ?? [] {
+            attempts.append((leg.direction, leg.stopId))
+        }
+        if prefs.includeIntercampus, let direction = prefs.pinnedIntercampusDirection {
+            attempts.append((direction, prefs.pinnedIntercampusStopId))
+        }
+        guard !attempts.isEmpty else { return [] }
+
         let resolver = intercampusResolver(mileMode)
-        let boardingStop: IntercampusStop? = {
-            if let id = prefs.pinnedIntercampusStopId, let s = IntercampusCatalog.stop(id: id) { return s }
-            return resolver.closestStops(direction: direction, to: origin, limit: 1).first?.stop
-        }()
-        guard let boarding = boardingStop else { return nil }
-        let oppositeDirection: IntercampusDirection = direction == .northbound ? .southbound : .northbound
-        _ = oppositeDirection
-        guard let alighting = resolver.closestStops(direction: direction, to: destination, limit: 1).first?.stop,
-              alighting.id != boarding.id else { return nil }
+        var seen: Set<String> = []
+        var out: [ResolvedSpec] = []
 
-        let walkSeconds = boardingLegSeconds(
-            from: origin,
-            to: (boarding.latitude, boarding.longitude),
-            cachedWalkSeconds: nil,
-            walkSpeedEstimate: walkSpeedEstimate,
-            mode: mileMode
-        )
-        let finalMile = finalMileSeconds(
-            from: (alighting.latitude, alighting.longitude),
-            to: destination,
-            walkSpeedEstimate: walkSpeedEstimate,
-            mode: mileMode
-        )
-        let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
-        let scheduledInVehicle = IntercampusCatalog.scheduledTravelSeconds(
-            direction: direction,
-            from: boarding.id,
-            to: alighting.id,
-            after: now
-        )
-        let inVehicle = scheduledInVehicle ?? stationToStationSeconds(meters: dist, modeSpeedMps: 14, stopPenaltyPerKm: 6)
-        let inVehicleSigma = scheduledInVehicle == nil
-            ? max(60, inVehicle * 0.20)
-            : max(90, inVehicle * 0.12)
+        for attempt in attempts {
+            let boardingStop: IntercampusStop? = {
+                if let id = attempt.stopId, let s = IntercampusCatalog.stop(id: id) { return s }
+                return resolver.closestStops(direction: attempt.direction, to: origin, limit: 1).first?.stop
+            }()
+            guard let boarding = boardingStop else { continue }
+            guard let alighting = resolver.closestStops(direction: attempt.direction, to: destination, limit: 1).first?.stop,
+                  alighting.id != boarding.id else { continue }
 
-        let live = adapter.liveIntercampusDepartures(from: snapshot, stopId: boarding.id, direction: direction, now: now)
-        let feed = adapter.feedState(fetchedAt: snapshot.intercampusFetchedAt, now: now, freshnessTtlSeconds: 180)
+            let key = "intercampus-\(attempt.direction.rawValue)-\(boarding.id)"
+            if !seen.insert(key).inserted { continue }
 
-        return ResolvedSpec(
-            modeLabel: "Intercampus",
-            candidate: LadderCandidateSpec(
-                title: "Intercampus \(direction.label) — \(boarding.name)",
-                mode: .intercampus,
-                routeIdentifier: "intercampus-\(direction.rawValue)",
-                direction: direction.label,
-                boardingPoint: .stop(systemRef: "Intercampus:\(boarding.id)", name: boarding.name, latitude: boarding.latitude, longitude: boarding.longitude),
-                alightingPoint: .stop(systemRef: "Intercampus:\(alighting.id)", name: alighting.name, latitude: alighting.latitude, longitude: alighting.longitude),
-                inVehicleSeconds: inVehicle,
-                inVehicleSigmaSeconds: inVehicleSigma,
-                boardingMode: mileMode.legMode,
-                finalMileSeconds: finalMile,
-                finalMileSigmaSeconds: max(30, finalMile * 0.12),
-                finalMileMode: mileMode.legMode,
-                scheduleHeadwaySeconds: 1200,
-                liveDepartures: live,
-                feedState: feed
-            ),
-            walkSeconds: walkSeconds
-        )
+            let walkSeconds = boardingLegSeconds(
+                from: origin,
+                to: (boarding.latitude, boarding.longitude),
+                cachedWalkSeconds: nil,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: mileMode
+            )
+            let finalMile = finalMileSeconds(
+                from: (alighting.latitude, alighting.longitude),
+                to: destination,
+                walkSpeedEstimate: walkSpeedEstimate,
+                mode: mileMode
+            )
+            let dist = haversineMeters(from: (boarding.latitude, boarding.longitude), to: (alighting.latitude, alighting.longitude))
+            let scheduledInVehicle = IntercampusCatalog.scheduledTravelSeconds(
+                direction: attempt.direction,
+                from: boarding.id,
+                to: alighting.id,
+                after: now
+            )
+            let inVehicle = scheduledInVehicle ?? stationToStationSeconds(meters: dist, modeSpeedMps: 14, stopPenaltyPerKm: 6)
+            let inVehicleSigma = scheduledInVehicle == nil
+                ? max(60, inVehicle * 0.20)
+                : max(90, inVehicle * 0.12)
+
+            let live = adapter.liveIntercampusDepartures(from: snapshot, stopId: boarding.id, direction: attempt.direction, now: now)
+            let feed = adapter.feedState(fetchedAt: snapshot.intercampusFetchedAt, now: now, freshnessTtlSeconds: 180)
+
+            out.append(ResolvedSpec(
+                modeLabel: "Intercampus",
+                candidate: LadderCandidateSpec(
+                    title: "Intercampus \(attempt.direction.label) — \(boarding.name)",
+                    mode: .intercampus,
+                    routeIdentifier: "intercampus-\(attempt.direction.rawValue)",
+                    direction: attempt.direction.label,
+                    boardingPoint: .stop(systemRef: "Intercampus:\(boarding.id)", name: boarding.name, latitude: boarding.latitude, longitude: boarding.longitude),
+                    alightingPoint: .stop(systemRef: "Intercampus:\(alighting.id)", name: alighting.name, latitude: alighting.latitude, longitude: alighting.longitude),
+                    inVehicleSeconds: inVehicle,
+                    inVehicleSigmaSeconds: inVehicleSigma,
+                    boardingMode: mileMode.legMode,
+                    finalMileSeconds: finalMile,
+                    finalMileSigmaSeconds: max(30, finalMile * 0.12),
+                    finalMileMode: mileMode.legMode,
+                    scheduleHeadwaySeconds: 1200,
+                    liveDepartures: live,
+                    feedState: feed
+                ),
+                walkSeconds: walkSeconds
+            ))
+        }
+        return out
     }
 
     // MARK: - Full Divvy ride
