@@ -612,12 +612,15 @@ final class RefreshCoordinator {
                             result = try await client.fetchArrivals(stopId: stopId, max: 4)
                         } else {
                             // mapId queries return every line at that station
-                            // in both directions sorted by time — needs enough
-                            // headroom that each (line × direction) pair gets
-                            // a couple of arrivals. At Belmont's 3 lines × 2
-                            // directions = 6 pairs, 12 keeps both directions
-                            // visible.
-                            result = try await client.fetchArrivals(mapId: mapId, max: 12)
+                            // in both directions sorted by time — scale by
+                            // served lines so busy multi-line stations like
+                            // Clark/Lake don't starve the lower-frequency
+                            // routes (Blue subway vs 5 elevated lines).
+                            let lineCount = LStationCatalog.byId[mapId]?.servedLines.count ?? 1
+                            result = try await client.fetchArrivals(
+                                mapId: mapId,
+                                max: TrainArrivalFetchPolicy.maxArrivals(servedLineCount: lineCount)
+                            )
                         }
                         return .succeeded(mapId: mapId, arrivals: result)
                     } catch {
