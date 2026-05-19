@@ -615,6 +615,14 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
     /// modes — the storage key is bus-named for backwards compat with
     /// preferences blobs from before train reliability landed.
     public var showBusReliabilityDebug: Bool
+    /// CTA bus routes the user has manually pinned in the past, newest
+    /// first. Surfaced at the top of the bus route picker so frequent
+    /// choices stay one tap away. Capped at `Self.recentlyPinnedLimit`.
+    public var recentlyPinnedBusRoutes: [String]
+    /// Amtrak route ids the user has manually pinned in the past, newest
+    /// first. Same role as `recentlyPinnedBusRoutes` for the Amtrak picker.
+    /// Capped at `Self.recentlyPinnedLimit`.
+    public var recentlyPinnedAmtrakRoutes: [String]
     /// Aggressiveness of the train-arrival reliability filter. See
     /// `TrainPredictionFilterLevel` and `TrainPredictionFilter`.
     /// Defaults to `.inclusive` — the behavior shipped before this
@@ -663,7 +671,9 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         portfolios: [RoutePortfolio] = [],
         busPredictionFilterLevel: BusPredictionFilterLevel = .default,
         showBusReliabilityDebug: Bool = false,
-        trainPredictionFilterLevel: TrainPredictionFilterLevel = .default
+        trainPredictionFilterLevel: TrainPredictionFilterLevel = .default,
+        recentlyPinnedBusRoutes: [String] = [],
+        recentlyPinnedAmtrakRoutes: [String] = []
     ) {
         self.trains = trains
         self.buses = buses
@@ -707,6 +717,8 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.busPredictionFilterLevel = busPredictionFilterLevel
         self.showBusReliabilityDebug = showBusReliabilityDebug
         self.trainPredictionFilterLevel = trainPredictionFilterLevel
+        self.recentlyPinnedBusRoutes = recentlyPinnedBusRoutes
+        self.recentlyPinnedAmtrakRoutes = recentlyPinnedAmtrakRoutes
     }
 
     // Custom decoder so adding new fields stays backwards-compatible with
@@ -779,6 +791,10 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         self.trainPredictionFilterLevel =
             (try? c.decode(TrainPredictionFilterLevel.self, forKey: .trainPredictionFilterLevel))
             ?? .default
+        self.recentlyPinnedBusRoutes =
+            (try? c.decode([String].self, forKey: .recentlyPinnedBusRoutes)) ?? []
+        self.recentlyPinnedAmtrakRoutes =
+            (try? c.decode([String].self, forKey: .recentlyPinnedAmtrakRoutes)) ?? []
     }
 
     public static let empty = UserRoutePreferences()
@@ -823,5 +839,42 @@ public struct UserRoutePreferences: Codable, Sendable, Hashable {
         guard let plannedTripPin, plannedTripPin.isExpired(now: now) else { return false }
         self.plannedTripPin = nil
         return true
+    }
+
+    /// Max length for the recently-pinned route arrays. Picked to comfortably
+    /// fit the full set of routes through a single Amtrak hub (Chicago Union
+    /// Station serves ~20) without growing unbounded over time.
+    public static let recentlyPinnedLimit = 12
+
+    /// Move `route` to the front of `recentlyPinnedBusRoutes`, deduplicating
+    /// prior occurrences and capping the list. Call when the user manually
+    /// pins a bus route from the picker; auto-pin paths should not record
+    /// here so the recents reflect the user's intent, not system guesses.
+    public mutating func recordPinnedBusRoute(_ route: String) {
+        recentlyPinnedBusRoutes = Self.promoting(
+            route,
+            in: recentlyPinnedBusRoutes,
+            limit: Self.recentlyPinnedLimit
+        )
+    }
+
+    /// Counterpart to `recordPinnedBusRoute` for Amtrak.
+    public mutating func recordPinnedAmtrakRoute(_ routeId: String) {
+        recentlyPinnedAmtrakRoutes = Self.promoting(
+            routeId,
+            in: recentlyPinnedAmtrakRoutes,
+            limit: Self.recentlyPinnedLimit
+        )
+    }
+
+    private static func promoting(
+        _ value: String,
+        in list: [String],
+        limit: Int
+    ) -> [String] {
+        var out = list
+        out.removeAll { $0 == value }
+        out.insert(value, at: 0)
+        return Array(out.prefix(limit))
     }
 }
