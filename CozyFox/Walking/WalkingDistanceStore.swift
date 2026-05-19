@@ -257,6 +257,10 @@ final class WalkingDistanceStore {
         "intercampus-\(stopId)"
     }
 
+    nonisolated static func divvyStationDestinationKey(stationId: String) -> String {
+        "divvy-\(stationId)"
+    }
+
     nonisolated static func bucketKey(origin: (lat: Double, lon: Double), stationId: Int) -> String {
         bucketKey(origin: origin, destinationKey: stationDestinationKey(stationId: stationId))
     }

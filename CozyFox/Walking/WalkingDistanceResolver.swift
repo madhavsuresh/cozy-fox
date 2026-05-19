@@ -193,6 +193,39 @@ final class WalkingDistanceResolver {
         }
     }
 
+    /// Walk to (or cycle to/from) a Divvy station. Used by the departure
+    /// ladder's bike-ride candidate: walking from the home anchor to the
+    /// boarding dock, and cycling from the boarding dock to the alighting
+    /// dock. The origin coord doubles as the cache bucket — passing a station
+    /// coord as `origin` works because the H3-res10 cell is stable.
+    func ensureFresh(
+        origin: (lat: Double, lon: Double),
+        divvyStation station: BikeStation,
+        modes: [AccessTravelMode] = [.walking]
+    ) {
+        ensureFresh(
+            origin: origin,
+            destination: AccessRouteDestination(
+                key: WalkingDistanceStore.divvyStationDestinationKey(stationId: station.id),
+                latitude: station.latitude,
+                longitude: station.longitude
+            ),
+            modes: modes
+        )
+    }
+
+    func cached(
+        origin: (lat: Double, lon: Double),
+        divvyStationId: String,
+        mode: AccessTravelMode
+    ) -> WalkingDistance? {
+        cached(
+            origin: origin,
+            destinationKey: WalkingDistanceStore.divvyStationDestinationKey(stationId: divvyStationId),
+            mode: mode
+        )
+    }
+
     func ensureFresh(origin: (lat: Double, lon: Double), intercampusStop: IntercampusStop) {
         ensureFresh(
             origin: origin,

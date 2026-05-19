@@ -496,6 +496,8 @@ public struct DepartureLadderBuilder: Sendable {
         case .ctaBus: "Bus \(route)"
         case .metra: "Metra \(route)"
         case .intercampus: "Intercampus shuttle"
+        case .divvyClassic: "Ride Divvy"
+        case .divvyEBike: "Ride Divvy e-bike"
         default: "Ride \(route)"
         }
     }
@@ -506,6 +508,7 @@ public struct DepartureLadderBuilder: Sendable {
         if risk == .feedUnreliable { return "feed unreliable" }
         if risk == .riskyWait { return "tight" }
         if spec.transfer != nil { return "transfer" }
+        if isBikeMode(spec.mode) { return "bike" }
         return spec.title.lowercased().contains("bus") ? "bus" : nil
     }
 
