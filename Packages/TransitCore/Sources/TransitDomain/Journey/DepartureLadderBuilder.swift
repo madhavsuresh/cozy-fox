@@ -264,6 +264,7 @@ public struct DepartureLadderBuilder: Sendable {
                 rowsAccumulator.append(
                     DepartureLadderRow(
                         leaveByAt: leaveBy,
+                        boardingAt: departure.arrivalAt,
                         totalDuration: totalDuration,
                         arrivalAt: DepartureLadderRow.ArrivalWindow(low: arriveLow, high: arriveHigh),
                         primaryLabel: option.title,
@@ -542,6 +543,7 @@ public struct DepartureLadderBuilder: Sendable {
                 DepartureLadderRow(
                     id: row.id,
                     leaveByAt: row.leaveByAt,
+                    boardingAt: row.boardingAt,
                     totalDuration: row.totalDuration,
                     arrivalAt: row.arrivalAt,
                     primaryLabel: row.primaryLabel,

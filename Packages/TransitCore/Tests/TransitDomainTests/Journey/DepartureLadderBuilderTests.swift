@@ -236,6 +236,27 @@ struct DepartureLadderBuilderTests {
         }
     }
 
+    @Test func rowCarriesBoardingTimeMatchingLiveDeparture() {
+        // The card surfaces "Board HH:MM" so the rider can sanity-check the
+        // row against the live-departures board on the platform. Pin the
+        // contract: a row's boardingAt is the same wall-clock time that
+        // showed up in the live departures feed.
+        let builder = DepartureLadderBuilder()
+        let departures = liveDepartures([7, 15, 23])
+        let ladder = builder.build(
+            destinationTitle: "Work",
+            origin: .anchor(.home),
+            destinationPoint: .anchor(.work),
+            snapshot: .empty,
+            candidates: [candidate(liveDepartures: departures)],
+            walkSpeedEstimate: .empty,
+            walkingTimeFetcher: walkingFetcher,
+            clock: clock
+        )
+        let boardingTimes = ladder.rows.compactMap(\.boardingAt)
+        #expect(boardingTimes == departures.map(\.arrivalAt))
+    }
+
     @Test func bikeBoardingShortensLeaveByVsWalk() {
         // Spec is single-leg + same departure schedule. The only difference is
         // the boarding leg: walking baseline at 240s vs biking at 90s. The

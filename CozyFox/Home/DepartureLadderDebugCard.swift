@@ -91,6 +91,12 @@ struct DepartureLadderDebugCard: View {
                     Text("Leave by \(timeOfDay(row.leaveByAt))")
                         .font(ChicagoTypography.body(.bold, relativeTo: .body))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
+                    if let boardingAt = row.boardingAt {
+                        Text("Board \(timeOfDay(boardingAt))")
+                            .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
+                            .foregroundStyle(ChicagoPalette.Gray.dark)
+                            .monospacedDigit()
+                    }
                     Text("Arrive \(timeOfDay(row.arrivalAt.low))–\(timeOfDay(row.arrivalAt.high))")
                         .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
