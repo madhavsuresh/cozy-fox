@@ -4542,10 +4542,14 @@ struct DashboardScreen: View {
 
     private var nearbyAmtrakRoutesForPicker: [PinnedAmtrakPickerNearbyEntry] {
         guard let origin else { return [] }
+        // A single Amtrak hub (e.g. Chicago Union Station) can serve 20+ routes,
+        // all tied at the same distance. Use a limit that comfortably covers the
+        // largest hubs so no nearby route is silently dropped, and break ties on
+        // display name so the order is stable across launches.
         return NearestAmtrakStationResolver(maxDistanceMeters: 30_000)
             .nearestPerRoute(
                 to: origin,
-                limit: 8,
+                limit: 40,
                 catalog: AmtrakStationCatalog.all
             )
             .filter { isAmtrakRouteDiscoverable($0.routeId) }
@@ -4555,6 +4559,12 @@ struct DashboardScreen: View {
                     displayName: AmtrakStationCatalog.route(id: entry.routeId)?.displayName ?? entry.routeId,
                     distanceMeters: entry.distance
                 )
+            }
+            .sorted { lhs, rhs in
+                if lhs.distanceMeters != rhs.distanceMeters {
+                    return lhs.distanceMeters < rhs.distanceMeters
+                }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
             }
     }
 
