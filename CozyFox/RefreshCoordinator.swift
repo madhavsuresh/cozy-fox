@@ -209,7 +209,6 @@ final class RefreshCoordinator {
     func refreshAll() async -> Bool {
         defer { clearActiveFetchTargets() }
 
-        let expiredTripChanged = clearExpiredPlannedTripPinIfNeeded()
         let autopinChanged = await applyAutopinIfNeeded()
         let prefs = preferences.loadRoutePreferences()
         let lastLocation = preferences.loadLastKnownLocation()
@@ -300,7 +299,7 @@ final class RefreshCoordinator {
         )
 
         WidgetCenter.shared.reloadAllTimelines()
-        return expiredTripChanged || autopinChanged
+        return autopinChanged
     }
 
     /// Called whenever the location coordinator detects a region transition.
@@ -453,13 +452,6 @@ final class RefreshCoordinator {
             preferences.saveRoutePreferences(result.preferences)
         }
         return result.changed
-    }
-
-    private func clearExpiredPlannedTripPinIfNeeded() -> Bool {
-        var prefs = preferences.loadRoutePreferences()
-        guard prefs.clearExpiredPlannedTripPin() else { return false }
-        preferences.saveRoutePreferences(prefs)
-        return true
     }
 
     /// Phase 6 consumer. When the next-context predictor is confident

@@ -15,6 +15,7 @@ struct DepartureLadderDebugCard: View {
             accent: ChicagoPalette.flagBlue
         ) {
             VStack(alignment: .leading, spacing: ChicagoSpacing.sm) {
+                destinationRow
                 mileModeToggle
                 if let ladder = viewModel.ladder {
                     if let headline = ladder.headline {
@@ -58,6 +59,50 @@ struct DepartureLadderDebugCard: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+        }
+    }
+
+    /// "Going to {destination}" with a tag for how the destination was picked
+    /// and an Unpin affordance when the user pinned it themselves. The label
+    /// also surfaces during loading/error states so the user can still see
+    /// (and clear) the active target when no candidates resolve.
+    @ViewBuilder
+    private var destinationRow: some View {
+        if let title = destinationTitle {
+            HStack(alignment: .firstTextBaseline, spacing: ChicagoSpacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Going to \(title)")
+                        .font(ChicagoTypography.body(.bold, relativeTo: .footnote))
+                        .foregroundStyle(ChicagoPalette.Gray.darkest)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(sourceTag)
+                        .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
+                        .foregroundStyle(ChicagoPalette.Gray.medium)
+                }
+                Spacer(minLength: 0)
+                if viewModel.destinationSource == .plannedTrip {
+                    Button(role: .destructive) {
+                        model.clearPlannedTripPin()
+                    } label: {
+                        Label("Unpin", systemImage: "pin.slash")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private var destinationTitle: String? {
+        viewModel.ladder?.destinationTitle ?? viewModel.resolvedDestinationTitle
+    }
+
+    private var sourceTag: String {
+        switch viewModel.destinationSource {
+        case .plannedTrip: "Pinned trip"
+        case .autopin: "Auto (current commute)"
+        case .defaultHomeWork: "Default"
         }
     }
 

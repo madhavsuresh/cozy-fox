@@ -54,8 +54,6 @@ struct DashboardProvider: AppIntentTimelineProvider {
     }
 
     private func loadPreferences() -> UserRoutePreferences {
-        var prefs = PreferencesStore().loadRoutePreferences()
-        _ = prefs.clearExpiredPlannedTripPin()
-        return prefs
+        PreferencesStore().loadRoutePreferences()
     }
 }
