@@ -1,4 +1,5 @@
 import Foundation
+import os
 import TransitAPI
 import TransitCache
 import TransitDomain
@@ -6,6 +7,11 @@ import TransitLocation
 import TransitModels
 import ActivityKit
 import WidgetKit
+
+private let trainFetchLogger = Logger(
+    subsystem: "net.thoughtbison.cozyfox",
+    category: "TrainFetch"
+)
 
 /// The orchestrator that ties API clients, cache, and the live activity together.
 /// Lives on the app side (the widget never imports this).
@@ -584,6 +590,11 @@ final class RefreshCoordinator {
             }
         }
 
+        let targetSummary = targets.map { t in
+            "\(t.mapId)\(t.stopId.map { "/\($0)" } ?? "")"
+        }.joined(separator: ",")
+        trainFetchLogger.info("targets=[\(targetSummary, privacy: .public)]")
+
         guard !targets.isEmpty else {
             // Nothing pinned/nearby to fetch. Treat as a definitive "fresh
             // empty" so the empty-state UI doesn't sit on "Fetching…".
@@ -628,8 +639,20 @@ final class RefreshCoordinator {
                                 max: TrainArrivalFetchPolicy.maxArrivals(servedLineCount: lineCount)
                             )
                         }
+                        let lines = Set(result.map(\.line.rawValue)).sorted().joined(separator: ",")
+                        trainFetchLogger.info("""
+                        ok mapId=\(mapId, privacy: .public) \
+                        stopId=\(stopId ?? -1, privacy: .public) \
+                        count=\(result.count, privacy: .public) \
+                        lines=[\(lines, privacy: .public)]
+                        """)
                         return .succeeded(mapId: mapId, arrivals: result)
                     } catch {
+                        trainFetchLogger.error("""
+                        fail mapId=\(mapId, privacy: .public) \
+                        stopId=\(stopId ?? -1, privacy: .public) \
+                        error=\(String(describing: error), privacy: .public)
+                        """)
                         return .failed(mapId: mapId)
                     }
                 }
