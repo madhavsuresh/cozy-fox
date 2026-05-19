@@ -91,12 +91,6 @@ struct DepartureLadderDebugCard: View {
                     Text("Leave by \(timeOfDay(row.leaveByAt))")
                         .font(ChicagoTypography.body(.bold, relativeTo: .body))
                         .foregroundStyle(ChicagoPalette.Gray.darkest)
-                    if let boardingAt = row.boardingAt {
-                        Text("Board \(timeOfDay(boardingAt))")
-                            .font(ChicagoTypography.body(.medium, relativeTo: .footnote))
-                            .foregroundStyle(ChicagoPalette.Gray.dark)
-                            .monospacedDigit()
-                    }
                     Text("Arrive \(timeOfDay(row.arrivalAt.low))–\(timeOfDay(row.arrivalAt.high))")
                         .font(ChicagoTypography.body(.regular, relativeTo: .footnote))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
@@ -136,7 +130,7 @@ struct DepartureLadderDebugCard: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
-                    Text("\(timeOfDay(leg.arrivalMean)) · \(minutesString(leg.meanSeconds))")
+                    Text(legTimingText(leg))
                         .font(ChicagoTypography.body(.regular, relativeTo: .caption2))
                         .foregroundStyle(ChicagoPalette.Gray.medium)
                         .monospacedDigit()
@@ -144,6 +138,26 @@ struct DepartureLadderDebugCard: View {
             }
         }
         .padding(.leading, ChicagoSpacing.xs)
+    }
+
+    /// Transit (ride) legs render like a station sign — `depart → arrive · N min`
+    /// — so the rider can match the boarding time against the platform's
+    /// countdown without looking it up elsewhere. Access legs (walk/bike to or
+    /// from a stop) stay `arrive · N min`: those times are about the rider's
+    /// own clock, not a vehicle.
+    private func legTimingText(_ leg: DepartureLadderLeg) -> String {
+        let arrive = timeOfDay(leg.arrivalMean)
+        let duration = minutesString(leg.meanSeconds)
+        guard isTransitRide(leg.mode) else { return "\(arrive) · \(duration)" }
+        let depart = timeOfDay(leg.arrivalMean.addingTimeInterval(-leg.meanSeconds))
+        return "\(depart) → \(arrive) · \(duration)"
+    }
+
+    private func isTransitRide(_ mode: LegMode) -> Bool {
+        switch mode {
+        case .ctaTrain, .ctaBus, .metra, .intercampus: true
+        default: false
+        }
     }
 
     private func modeSymbol(_ mode: LegMode) -> String {
