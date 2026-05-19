@@ -261,7 +261,13 @@ final class RefreshCoordinator {
                     await self.store.replaceNearbyBikePicks([])
                 }
             }
-            group.addTask { await self.refreshPositions(prefs: prefs) }
+            group.addTask {
+                await self.refreshPositions(
+                    prefs: prefs,
+                    lastLocation: lastLocation,
+                    closedStations: closedStations
+                )
+            }
             group.addTask { await self.refreshDetoursIfNeeded(prefs: prefs) }
             group.addTask { await self.refreshPatternsIfNeeded(prefs: prefs) }
         }
@@ -612,12 +618,15 @@ final class RefreshCoordinator {
                             result = try await client.fetchArrivals(stopId: stopId, max: 4)
                         } else {
                             // mapId queries return every line at that station
-                            // in both directions sorted by time — needs enough
-                            // headroom that each (line × direction) pair gets
-                            // a couple of arrivals. At Belmont's 3 lines × 2
-                            // directions = 6 pairs, 12 keeps both directions
-                            // visible.
-                            result = try await client.fetchArrivals(mapId: mapId, max: 12)
+                            // in both directions sorted by time — scale by
+                            // served lines so busy multi-line stations like
+                            // Clark/Lake don't starve the lower-frequency
+                            // routes (Blue subway vs 5 elevated lines).
+                            let lineCount = LStationCatalog.byId[mapId]?.servedLines.count ?? 1
+                            result = try await client.fetchArrivals(
+                                mapId: mapId,
+                                max: TrainArrivalFetchPolicy.maxArrivals(servedLineCount: lineCount)
+                            )
                         }
                         return .succeeded(mapId: mapId, arrivals: result)
                     } catch {
@@ -1171,13 +1180,37 @@ final class RefreshCoordinator {
 
 
     /// Fetches live vehicle positions for whichever line + bus route the user
-    /// has pinned, so the dashboard's "where's my train/bus" strip can show
-    /// where the next vehicle actually is on the ground. Only fires when a
-    /// pin is active to avoid burning rate-limit budget on unused data.
-    private func refreshPositions(prefs: UserRoutePreferences) async {
+    /// has pinned OR nearby-discovery is surfacing, so the dashboard's
+    /// "where's my train/bus" strip and the reliability scorer have vehicle
+    /// data backing every visible tile — not just the pinned one.
+    /// `fetchPositions` is a single request per call regardless of line count,
+    /// so adding nearby lines doesn't cost rate-limit budget.
+    private func refreshPositions(
+        prefs: UserRoutePreferences,
+        lastLocation: LastKnownLocation?,
+        closedStations: Set<Int>
+    ) async {
         var collected: [VehiclePosition] = []
         var trainLines = Set(prefs.plannedTripPin?.trainLegs.map(\.line) ?? [])
         if let line = prefs.pinnedLine { trainLines.insert(line) }
+        // Mirror the nearby-discovery candidate set used by `refreshTrains`
+        // so reliability scoring for surfaced-but-not-pinned tiles has the
+        // same vehicle corroboration the pinned line gets.
+        if prefs.isModeVisible(.trains),
+           prefs.nearbyDiscoveryEnabled,
+           let lastLocation
+        {
+            let nearby = corridorResolver.nearbyTrainCandidates(
+                to: (lastLocation.latitude, lastLocation.longitude),
+                radiusMeters: 2_000,
+                limitPerCorridor: 1,
+                catalog: LStationCatalog.all.filter { station in
+                    station.servedLines.contains(where: prefs.isTrainLineVisible)
+                },
+                excludingStationIds: closedStations
+            )
+            trainLines.formUnion(nearby.map(\.line))
+        }
         if !trainLines.isEmpty {
             if let trains = try? await trainClient.fetchPositions(lines: Array(trainLines)) {
                 collected.append(contentsOf: trains)
