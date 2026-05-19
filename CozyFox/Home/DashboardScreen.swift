@@ -4483,8 +4483,24 @@ struct DashboardScreen: View {
                         Button("Unpin", role: .destructive) { setPinnedAmtrak(nil) }
                         Divider()
                     }
-                    ForEach(amtrakPickerRoutes, id: \.id) { route in
-                        Button(route.displayName) { setPinnedAmtrak(route.id) }
+                    let nearby = nearbyAmtrakRoutesForPicker
+                    if !nearby.isEmpty {
+                        Section("Nearby") {
+                            ForEach(nearby) { entry in
+                                Button("\(entry.displayName) — \(DistanceFormatter.short(entry.distanceMeters))") {
+                                    setPinnedAmtrak(entry.routeId)
+                                }
+                            }
+                        }
+                        Section("All routes") {
+                            ForEach(amtrakPickerRoutes, id: \.id) { route in
+                                Button(route.displayName) { setPinnedAmtrak(route.id) }
+                            }
+                        }
+                    } else {
+                        ForEach(amtrakPickerRoutes, id: \.id) { route in
+                            Button(route.displayName) { setPinnedAmtrak(route.id) }
+                        }
                     }
                 } label: {
                     HStack(spacing: ChicagoSpacing.xs) {
@@ -4515,6 +4531,31 @@ struct DashboardScreen: View {
 
     private var amtrakPickerRoutes: [AmtrakRoute] {
         AmtrakStationCatalog.routes.filter { isAmtrakRouteDiscoverable($0.id) }
+    }
+
+    private struct PinnedAmtrakPickerNearbyEntry: Identifiable {
+        let routeId: String
+        let displayName: String
+        let distanceMeters: Double
+        var id: String { routeId }
+    }
+
+    private var nearbyAmtrakRoutesForPicker: [PinnedAmtrakPickerNearbyEntry] {
+        guard let origin else { return [] }
+        return NearestAmtrakStationResolver(maxDistanceMeters: 30_000)
+            .nearestPerRoute(
+                to: origin,
+                limit: 8,
+                catalog: AmtrakStationCatalog.all
+            )
+            .filter { isAmtrakRouteDiscoverable($0.routeId) }
+            .map { entry in
+                PinnedAmtrakPickerNearbyEntry(
+                    routeId: entry.routeId,
+                    displayName: AmtrakStationCatalog.route(id: entry.routeId)?.displayName ?? entry.routeId,
+                    distanceMeters: entry.distance
+                )
+            }
     }
 
     private func pinnedAmtrakCard(route: String) -> some View {
